@@ -33,7 +33,7 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 4. **Environment Variables for credentials**
      ```
      export NET_USER=<username>
-     export export NET_PASSWORD=<your password>
+     export NET_PASSWORD=<your password>
      ```
      
 ## Configuration
