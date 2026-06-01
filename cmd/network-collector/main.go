@@ -94,6 +94,10 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 
 func init() {
 	viper.AutomaticEnv()
+	if err := viper.BindEnv("fail_on_fail", "FAIL_ON_FAIL"); err != nil {
+		slog.Error("error binding environment variable", "key", "fail_on_fail", "env", "FAIL_ON_FAIL", "error", err)
+		os.Exit(1)
+	}
 }
 
 func loadConfig(configFile string) {
@@ -106,14 +110,20 @@ func loadConfig(configFile string) {
 func main() {
 	// CLI flags
 	var jsonOut bool
-	var failOnFail bool
+	var cliFailOnFail bool
 	var configFile string
 	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
-	flag.BoolVar(&failOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
+	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.Parse()
 
 	loadConfig(configFile)
+	failOnFail := viper.GetBool("fail_on_fail")
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "fail-on-fail" {
+			failOnFail = cliFailOnFail
+		}
+	})
 
 	username := strings.TrimSpace(viper.GetString("NET_USER"))
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))

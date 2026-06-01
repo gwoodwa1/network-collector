@@ -106,6 +106,8 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--json`: emit consolidated machine-readable JSON for all validation results (suppresses raw command output)
 - `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`
 
+`fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
+
 Example: run validations and emit only JSON
 
 ```bash
@@ -122,6 +124,8 @@ Example: run validations and exit non-zero if any check fails
 
 The configuration is done through a `config.yaml` file Here’s an example of the `config.yaml`:
 ```
+fail_on_fail: false
+
 restconf:
   - hostname: device-eos-02
     ip: 192.168.15.7
@@ -248,5 +252,4 @@ Example equality checks added in `config.yaml`:
 
 - String equality (exact match): `condition: eq`, `expected: "RUNNING"`, `expected_type: string`
 - Integer equality: `condition: eq`, `expected: 100`, `expected_type: int`
-
 
