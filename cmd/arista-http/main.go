@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func init() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("warning: unable to read config file: %v", err)
+		slog.Warn("unable to read config file", "error", err)
 	}
 }
 
@@ -37,12 +38,14 @@ func main() {
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
 
 	if username == "" || password == "" {
-		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		os.Exit(1)
 	}
 
 	var config HTTPConfigSet
 	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("error reading config: %v", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
 	for _, device := range config.HTTP {
@@ -51,7 +54,7 @@ func main() {
 		command := strings.TrimSpace(device.Command)
 
 		if hostname == "" || ip == "" || command == "" {
-			log.Printf("skipping invalid HTTP entry: hostname=%q ip=%q command=%q", hostname, ip, command)
+			slog.Warn("skipping invalid HTTP entry", "hostname", hostname, "ip", ip, "command", command)
 			continue
 		}
 
@@ -65,18 +68,18 @@ func main() {
 
 		client := aristahttp.AristaHTTP{}
 		if err := client.Connect(ip, username, password, opts...); err != nil {
-			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			slog.Error("error connecting to HTTP device", "hostname", hostname, "ip", ip, "error", err)
 			continue
 		}
 		defer func(c *aristahttp.AristaHTTP, h, i string) {
 			if err := c.Close(); err != nil {
-				log.Printf("error closing HTTP client for %s (%s): %v", h, i, err)
+				slog.Error("error closing HTTP client", "hostname", h, "ip", i, "error", err)
 			}
 		}(&client, hostname, ip)
 
 		output, err := client.Execute(command)
 		if err != nil {
-			log.Printf("error executing command on %s (%s): %v", hostname, ip, err)
+			slog.Error("error executing command", "hostname", hostname, "ip", ip, "error", err)
 		} else {
 			fmt.Printf("output for %s (%s):\n%s\n", hostname, ip, output)
 		}

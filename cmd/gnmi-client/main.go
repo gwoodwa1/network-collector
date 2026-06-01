@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func init() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("warning: unable to read config file: %v", err)
+		slog.Warn("unable to read config file", "error", err)
 	}
 }
 
@@ -37,12 +38,14 @@ func main() {
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
 
 	if username == "" || password == "" {
-		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		os.Exit(1)
 	}
 
 	var config GNMIConfigSet
 	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("error reading config: %v", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
 	for _, device := range config.GNMI {
@@ -51,7 +54,7 @@ func main() {
 		gnmiPath := strings.TrimSpace(device.Path)
 
 		if hostname == "" || ip == "" || gnmiPath == "" {
-			log.Printf("skipping invalid gNMI entry: hostname=%q ip=%q path=%q", hostname, ip, gnmiPath)
+			slog.Warn("skipping invalid gNMI entry", "hostname", hostname, "ip", ip, "path", gnmiPath)
 			continue
 		}
 
@@ -65,22 +68,23 @@ func main() {
 
 		client := &gnmi.GNMIClient{}
 		if err := client.Connect(ip, username, password, opts...); err != nil {
-			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			slog.Error("error connecting to gNMI device", "hostname", hostname, "ip", ip, "error", err)
 			continue
-		}		defer func(c *gnmi.GNMIClient, h, i string) {
+		}
+		defer func(c *gnmi.GNMIClient, h, i string) {
 			if err := c.Close(); err != nil {
-				log.Printf("error closing gNMI client for %s (%s): %v", h, i, err)
+				slog.Error("error closing gNMI client", "hostname", h, "ip", i, "error", err)
 			}
-		}(&client, hostname, ip)
+		}(client, hostname, ip)
 		output, err := client.Execute(gnmiPath)
 		if err != nil {
-			log.Printf("error executing gNMI path on %s (%s): %v", hostname, ip, err)
+			slog.Error("error executing gNMI path", "hostname", hostname, "ip", ip, "error", err)
 		} else {
 			fmt.Printf("output for %s (%s):\n%s\n", hostname, ip, output)
 		}
 
 		if err := client.Close(); err != nil {
-			log.Printf("error closing gNMI client for %s (%s): %v", hostname, ip, err)
+			slog.Error("error closing gNMI client", "hostname", hostname, "ip", ip, "error", err)
 		}
 	}
 }

@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func init() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("warning: unable to read config file: %v", err)
+		slog.Warn("unable to read config file", "error", err)
 	}
 }
 
@@ -39,12 +40,14 @@ func main() {
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
 
 	if username == "" || password == "" {
-		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		os.Exit(1)
 	}
 
 	var config RESTCONFConfigSet
 	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("error reading config: %v", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
 	for _, device := range config.RESTCONF {
@@ -54,7 +57,7 @@ func main() {
 		endpoint := strings.TrimSpace(device.Endpoint)
 
 		if hostname == "" || ip == "" || method == "" || endpoint == "" || device.Port <= 0 {
-			log.Printf("skipping invalid RESTCONF entry: hostname=%q ip=%q port=%d method=%q endpoint=%q", hostname, ip, device.Port, method, endpoint)
+			slog.Warn("skipping invalid RESTCONF entry", "hostname", hostname, "ip", ip, "port", device.Port, "method", method, "endpoint", endpoint)
 			continue
 		}
 
@@ -69,16 +72,17 @@ func main() {
 		baseURL := fmt.Sprintf("https://%s:%d/restconf", ip, device.Port)
 		client := &restconf.RESTCONFClient{}
 		if err := client.Connect(baseURL, username, password, opts...); err != nil {
-			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			slog.Error("error connecting to RESTCONF device", "hostname", hostname, "ip", ip, "error", err)
 			continue
-		}		defer func(c *restconf.RESTCONFClient, h, i string) {
+		}
+		defer func(c *restconf.RESTCONFClient, h, i string) {
 			if err := c.Close(); err != nil {
-				log.Printf("error closing RESTCONF client for %s (%s): %v", h, i, err)
+				slog.Error("error closing RESTCONF client", "hostname", h, "ip", i, "error", err)
 			}
-		}(&client, hostname, ip)
+		}(client, hostname, ip)
 		output, err := client.Execute(method, endpoint)
 		if err != nil {
-			log.Printf("error executing RESTCONF request on %s (%s): %v", hostname, ip, err)
+			slog.Error("error executing RESTCONF request", "hostname", hostname, "ip", ip, "error", err)
 		} else {
 			fmt.Printf("RESTCONF output for %s (%s):\n%s\n", hostname, ip, output)
 		}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -99,7 +99,7 @@ func init() {
 func loadConfig(configFile string) {
 	viper.SetConfigFile(configFile)
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("warning: unable to read config file: %v", err)
+		slog.Warn("unable to read config file", "config_file", configFile, "error", err)
 	}
 }
 
@@ -119,12 +119,14 @@ func main() {
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
 
 	if username == "" || password == "" {
-		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		os.Exit(1)
 	}
 
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("error reading config: %v", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
 	type deviceValidation struct {
@@ -141,7 +143,7 @@ func main() {
 		deviceType := strings.TrimSpace(device.Type)
 
 		if hostname == "" || ip == "" || deviceType == "" {
-			log.Printf("skipping invalid SSH entry: hostname=%q ip=%q type=%q", hostname, ip, deviceType)
+			slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
 			continue
 		}
 
@@ -155,7 +157,7 @@ func main() {
 		}
 
 		if len(steps) == 0 {
-			log.Printf("skipping SSH device %s (%s): no steps or command provided", hostname, ip)
+			slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
 			continue
 		}
 
@@ -166,12 +168,12 @@ func main() {
 
 		client := ssh.NewClient(opts...)
 		if err := client.Connect(ip, username, password, deviceType); err != nil {
-			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
 			continue
 		}
 		defer func(c *ssh.Client, h, i string) {
 			if err := c.Close(); err != nil {
-				log.Printf("error closing SSH connection for %s (%s): %v", h, i, err)
+				slog.Error("error closing SSH connection", "hostname", h, "ip", i, "error", err)
 			}
 		}(client, hostname, ip)
 
@@ -184,11 +186,11 @@ func main() {
 
 			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
 			if err != nil {
-				log.Printf("error rendering command for step %q on %s (%s): %v", stepName, hostname, ip, err)
+				slog.Error("error rendering command", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
 				continue
 			}
 			if cmd == "" {
-				log.Printf("skipping empty step %q on %s (%s)", stepName, hostname, ip)
+				slog.Warn("skipping empty step", "hostname", hostname, "ip", ip, "step", stepName)
 				continue
 			}
 
@@ -199,7 +201,7 @@ func main() {
 
 				output, err := client.Execute(cmd)
 				if err != nil {
-					log.Printf("error executing step %q on %s (%s): %v", stepName, hostname, ip, err)
+					slog.Error("error executing step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
 					break
 				}
 
@@ -213,19 +215,19 @@ func main() {
 
 				pattern, err := renderTemplate(step.Validation.Pattern, variables)
 				if err != nil {
-					log.Printf("error rendering validation pattern for %s step=%s: %v", hostname, stepName, err)
+					slog.Error("error rendering validation pattern", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
 
 				jsonPath, err := renderTemplate(step.Validation.JSONPath, variables)
 				if err != nil {
-					log.Printf("error rendering validation json_path for %s step=%s: %v", hostname, stepName, err)
+					slog.Error("error rendering validation json_path", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
 
 				expected, err := renderExpectedValue(step.Validation.Expected, variables)
 				if err != nil {
-					log.Printf("error rendering validation expected value for %s step=%s: %v", hostname, stepName, err)
+					slog.Error("error rendering validation expected value", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
 
@@ -240,7 +242,7 @@ func main() {
 
 				vres, verr := validation.ValidateOutput(output, rule)
 				if verr != nil {
-					log.Printf("validation error for %s step=%s: %v", hostname, stepName, verr)
+					slog.Error("validation error", "hostname", hostname, "step", stepName, "error", verr)
 				}
 
 				finalResult = vres
@@ -252,13 +254,13 @@ func main() {
 
 				if step.Register != "" && vres.RawExtract != "" {
 					variables[step.Register] = vres.RawExtract
-					log.Printf("registered variable %s=%q for %s step=%s", step.Register, vres.RawExtract, hostname, stepName)
+					slog.Info("registered variable", "hostname", hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
 				}
 
 				retryCfg := step.Retry
 				if retryCfg != nil && retryCfg.UntilPass && finalResult.Status == "fail" {
 					if retryCfg.MaxAttempts > 0 && attempt >= retryCfg.MaxAttempts {
-						log.Printf("step %q on %s (%s) reached max attempts %d", stepName, hostname, ip, retryCfg.MaxAttempts)
+						slog.Warn("step reached max attempts", "hostname", hostname, "ip", ip, "step", stepName, "max_attempts", retryCfg.MaxAttempts)
 						break
 					}
 
@@ -266,7 +268,7 @@ func main() {
 					if interval <= 0 {
 						interval = 60 * time.Second
 					}
-					log.Printf("retrying step %q on %s (%s) in %s (attempt %d)", stepName, hostname, ip, interval, attempt+1)
+					slog.Info("retrying step", "hostname", hostname, "ip", ip, "step", stepName, "interval", interval, "attempt", attempt+1)
 					time.Sleep(interval)
 					continue
 				}

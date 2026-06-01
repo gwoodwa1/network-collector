@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ func init() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("warning: unable to read config file: %v", err)
+		slog.Warn("unable to read config file", "error", err)
 	}
 }
 
@@ -36,12 +37,14 @@ func main() {
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
 
 	if username == "" || password == "" {
-		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		os.Exit(1)
 	}
 
 	var config NetconfConfigSet
 	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("error reading config: %v", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
 	for _, device := range config.Netconf {
@@ -50,7 +53,7 @@ func main() {
 		rpc := strings.TrimSpace(device.RPC)
 
 		if hostname == "" || ip == "" || rpc == "" {
-			log.Printf("skipping invalid NETCONF entry: hostname=%q ip=%q rpc=%q", hostname, ip, rpc)
+			slog.Warn("skipping invalid NETCONF entry", "hostname", hostname, "ip", ip, "rpc", rpc)
 			continue
 		}
 
@@ -61,19 +64,19 @@ func main() {
 
 		client := &netconf.ScrapligoNETCONF{}
 		if err := client.Connect(ip, username, password, opts...); err != nil {
-			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			slog.Error("error connecting to NETCONF device", "hostname", hostname, "ip", ip, "error", err)
 			continue
 		}
 
 		output, err := client.Execute(rpc)
 		if err != nil {
-			log.Printf("error executing RPC on %s (%s): %v", hostname, ip, err)
+			slog.Error("error executing RPC", "hostname", hostname, "ip", ip, "error", err)
 		} else {
 			fmt.Printf("output for %s (%s):\n%s\n", hostname, ip, output)
 		}
 
 		if err := client.Close(); err != nil {
-			log.Printf("error closing NETCONF client for %s (%s): %v", hostname, ip, err)
+			slog.Error("error closing NETCONF client", "hostname", hostname, "ip", ip, "error", err)
 		}
 	}
 }
