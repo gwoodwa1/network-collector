@@ -12,8 +12,26 @@ import (
 )
 
 func TestDriverInterfaces(t *testing.T) {
-	var _ drivers.DeviceInterface = (*aristahttp.AristaHTTP)(nil)
-	var _ drivers.DeviceInterface = (*gnmi.GNMIClient)(nil)
+	type aristaDriver interface {
+		Connect(string, string, string, ...aristahttp.Option) error
+		Execute(string) (string, error)
+		Close() error
+	}
+	type gnmiDriver interface {
+		Connect(string, string, string, ...gnmi.Option) error
+		Execute(string) (string, error)
+		Close() error
+	}
+	type restconfDriver interface {
+		Connect(string, string, string, ...restconf.Option) error
+		Execute(string, string) (string, error)
+		Close() error
+	}
+
+	var _ aristaDriver = (*aristahttp.AristaHTTP)(nil)
+	var _ gnmiDriver = (*gnmi.GNMIClient)(nil)
+	var _ restconfDriver = (*restconf.RESTCONFClient)(nil)
+	var _ drivers.DeviceInterface = (*netconf.ScrapligoNETCONF)(nil)
 }
 
 func TestOptionHelpers(t *testing.T) {
