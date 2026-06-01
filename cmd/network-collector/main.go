@@ -164,6 +164,11 @@ func main() {
 			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
 			continue
 		}
+		defer func(c *ssh.Client, h, i string) {
+			if err := c.Close(); err != nil {
+				log.Printf("error closing SSH connection for %s (%s): %v", h, i, err)
+			}
+		}(client, hostname, ip)
 
 		variables := map[string]string{}
 		for _, step := range steps {
@@ -267,10 +272,6 @@ func main() {
 			if step.Validation != nil {
 				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
 			}
-		}
-
-		if err := client.Close(); err != nil {
-			log.Printf("error closing SSH connection for %s (%s): %v", hostname, ip, err)
 		}
 	}
 

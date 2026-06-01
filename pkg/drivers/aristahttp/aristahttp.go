@@ -14,7 +14,8 @@ import (
 	"github.com/kcajme/network-collector/pkg/drivers"
 )
 
-type Option = drivers.Option
+// Option is a type-safe option for configuring AristaHTTP
+type Option func(*AristaHTTP)
 
 type AristaHTTP struct {
 	host           string
@@ -26,20 +27,17 @@ type AristaHTTP struct {
 }
 
 func WithSkipTLS() Option {
-	return func(d interface{}) {
-		if device, ok := d.(*AristaHTTP); ok {
-			device.TLSConfig.SkipVerify = true
+	return func(a *AristaHTTP) {
+		if a != nil {
+			a.TLSConfig.SkipVerify = true
 		}
 	}
 }
 
 func WithRequestTimeout(timeout time.Duration) Option {
-	return func(d interface{}) {
-		if timeout <= 0 {
-			return
-		}
-		if device, ok := d.(*AristaHTTP); ok {
-			device.requestTimeout = timeout
+	return func(a *AristaHTTP) {
+		if a != nil && timeout > 0 {
+			a.requestTimeout = timeout
 		}
 	}
 }

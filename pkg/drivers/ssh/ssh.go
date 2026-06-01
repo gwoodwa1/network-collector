@@ -21,6 +21,7 @@ type Client struct {
 	opsTimeout    time.Duration
 }
 
+// Option is a type-safe option for configuring Client
 type Option func(*Client)
 
 func NewClient(opts ...Option) *Client {

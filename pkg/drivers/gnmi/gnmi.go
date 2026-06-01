@@ -15,7 +15,8 @@ import (
 	"github.com/openconfig/gnmic/pkg/formatters"
 )
 
-type Option = drivers.Option
+// Option is a type-safe option for configuring GNMIClient
+type Option func(*GNMIClient)
 
 type GNMIClient struct {
 	target  *target.Target
@@ -24,10 +25,10 @@ type GNMIClient struct {
 }
 
 func WithSkipTLS() Option {
-	return func(d interface{}) {
-		if device, ok := d.(*GNMIClient); ok {
-			device.TLSConfig.SkipVerify = true
-			device.TLSConfig.Insecure = true
+	return func(g *GNMIClient) {
+		if g != nil {
+			g.TLSConfig.SkipVerify = true
+			g.TLSConfig.Insecure = true
 		}
 	}
 }
@@ -37,12 +38,9 @@ func WithGNMITimeout(timeout time.Duration) Option {
 }
 
 func WithRequestTimeout(timeout time.Duration) Option {
-	return func(d interface{}) {
-		if timeout <= 0 {
-			return
-		}
-		if device, ok := d.(*GNMIClient); ok {
-			device.timeout = timeout
+	return func(g *GNMIClient) {
+		if g != nil && timeout > 0 {
+			g.timeout = timeout
 		}
 	}
 }

@@ -89,6 +89,32 @@ ssh:
           expected: '{{install_id}}'
           expected_type: string
 
+  - hostname: xr-router-1
+    ip: 10.0.0.1
+    type: cisco_xr
+    timeout: 30
+    steps:
+      - name: enter-config
+        cmd: configure terminal
+      - name: set-isis-overload
+        cmd: router isis 100
+      - name: set-overload-bit
+        cmd: ' address-family ipv4 unicast overload'
+      - name: commit
+        cmd: commit
+
+  - hostname: xr-router-1
+    ip: 10.0.0.1
+    type: cisco_xr
+    timeout: 30
+    cmd: "configure terminal\nrouter isis 100\n address-family ipv4 unicast overload\ncommit"
+    validation:
+      extractor: regex
+      pattern: 'address-family ipv4 unicast overload'
+      condition: contains
+      expected: overload
+      expected_type: string
+
 http:
   - hostname: device-eos-08
     ip: 192.168.16.8

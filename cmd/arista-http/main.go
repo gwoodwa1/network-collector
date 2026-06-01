@@ -68,16 +68,17 @@ func main() {
 			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
 			continue
 		}
+		defer func(c *aristahttp.AristaHTTP, h, i string) {
+			if err := c.Close(); err != nil {
+				log.Printf("error closing HTTP client for %s (%s): %v", h, i, err)
+			}
+		}(&client, hostname, ip)
 
 		output, err := client.Execute(command)
 		if err != nil {
 			log.Printf("error executing command on %s (%s): %v", hostname, ip, err)
 		} else {
 			fmt.Printf("output for %s (%s):\n%s\n", hostname, ip, output)
-		}
-
-		if err := client.Close(); err != nil {
-			log.Printf("error closing HTTP client for %s (%s): %v", hostname, ip, err)
 		}
 	}
 }

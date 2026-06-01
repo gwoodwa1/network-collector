@@ -71,17 +71,16 @@ func main() {
 		if err := client.Connect(baseURL, username, password, opts...); err != nil {
 			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
 			continue
-		}
-
+		}		defer func(c *restconf.RESTCONFClient, h, i string) {
+			if err := c.Close(); err != nil {
+				log.Printf("error closing RESTCONF client for %s (%s): %v", h, i, err)
+			}
+		}(&client, hostname, ip)
 		output, err := client.Execute(method, endpoint)
 		if err != nil {
 			log.Printf("error executing RESTCONF request on %s (%s): %v", hostname, ip, err)
 		} else {
 			fmt.Printf("RESTCONF output for %s (%s):\n%s\n", hostname, ip, output)
-		}
-
-		if err := client.Close(); err != nil {
-			log.Printf("error closing RESTCONF client for %s (%s): %v", hostname, ip, err)
 		}
 	}
 }

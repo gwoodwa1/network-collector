@@ -14,7 +14,8 @@ import (
 	"github.com/kcajme/network-collector/pkg/drivers"
 )
 
-type Option = drivers.Option
+// Option is a type-safe option for configuring RESTCONFClient
+type Option func(*RESTCONFClient)
 
 type RESTCONFClient struct {
 	BaseURL        string
@@ -26,21 +27,18 @@ type RESTCONFClient struct {
 }
 
 func WithSkipTLS() Option {
-	return func(d interface{}) {
-		if device, ok := d.(*RESTCONFClient); ok {
-			device.TLSConfig.SkipVerify = true
-			device.TLSConfig.Insecure = true
+	return func(r *RESTCONFClient) {
+		if r != nil {
+			r.TLSConfig.SkipVerify = true
+			r.TLSConfig.Insecure = true
 		}
 	}
 }
 
 func WithRequestTimeout(timeout time.Duration) Option {
-	return func(d interface{}) {
-		if timeout <= 0 {
-			return
-		}
-		if device, ok := d.(*RESTCONFClient); ok {
-			device.requestTimeout = timeout
+	return func(r *RESTCONFClient) {
+		if r != nil && timeout > 0 {
+			r.requestTimeout = timeout
 		}
 	}
 }

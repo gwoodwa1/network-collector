@@ -67,8 +67,11 @@ func main() {
 		if err := client.Connect(ip, username, password, opts...); err != nil {
 			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
 			continue
-		}
-
+		}		defer func(c *gnmi.GNMIClient, h, i string) {
+			if err := c.Close(); err != nil {
+				log.Printf("error closing gNMI client for %s (%s): %v", h, i, err)
+			}
+		}(&client, hostname, ip)
 		output, err := client.Execute(gnmiPath)
 		if err != nil {
 			log.Printf("error executing gNMI path on %s (%s): %v", hostname, ip, err)

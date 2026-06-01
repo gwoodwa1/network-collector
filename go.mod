@@ -9,6 +9,7 @@ require (
 	github.com/scrapli/scrapligo v1.3.1
 	github.com/spf13/viper v1.18.2
 	github.com/tidwall/gjson v1.19.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -47,5 +48,4 @@ require (
 	google.golang.org/protobuf v1.33.1-0.20240408130810-98873a205002 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
