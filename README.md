@@ -243,12 +243,14 @@ You can also register a value from a step using `register: <name>` and reuse it 
 
 Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads (gNMI/RESTCONF responses).
 
-- `pattern` / `json_path`: the extraction pattern or JSON path
-- `condition`: `eq`, `contains`, `gt`, `lt`, etc.
+- `pattern` / `json_path`: the extraction pattern or JSON path. Regex extraction uses the first capture group when present; otherwise it uses the whole regex match.
+- `condition`: `eq`, `neq`, `contains`, `not_contains`, `matches`, `gt`, `gte`, `lt`, or `lte`.
 - `expected`: the expected value to compare against
-- `expected_type` (optional): `string` or `int` — when provided the extracted value will be coerced to that type before comparison. This prevents accidental string vs numeric mismatches (for example, the string "100" is distinct from the integer 100 when `expected_type` is `int`).
+- `expected_type` (optional): `string`, `int`, or `length` — when provided the extracted value will be coerced to that type before comparison. This prevents accidental string vs numeric mismatches (for example, the string "100" is distinct from the integer 100 when `expected_type` is `int`). With `length`, regex values use string length and GJSON arrays/objects use item count.
 
 Example equality checks added in `config.yaml`:
 
 - String equality (exact match): `condition: eq`, `expected: "RUNNING"`, `expected_type: string`
 - Integer equality: `condition: eq`, `expected: 100`, `expected_type: int`
+- Regex match against an extracted value: `condition: matches`, `expected: '^\d+\.\d+\.\d+$'`
+- Length check: `condition: gte`, `expected: 3`, `expected_type: length`
