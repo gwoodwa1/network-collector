@@ -15,7 +15,7 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 1. **Clone the repository:**
 
     ```bash
-    git clone https://github.com/kcajme/network-collector.git
+    git clone https://github.com/gwoodwa1/network-collector.git
     cd network-collector
     ```
 
@@ -47,31 +47,31 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 Import the SSH module into your Go program:
 
 ```go
-import "github.com/kcajme/network-collector/pkg/drivers/ssh"
+import "github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 ```
 
 Import the Arista HTTP driver:
 
 ```go
-import "github.com/kcajme/network-collector/pkg/drivers/aristahttp"
+import "github.com/gwoodwa1/network-collector/pkg/drivers/aristahttp"
 ```
 
 Import the NETCONF driver:
 
 ```go
-import "github.com/kcajme/network-collector/pkg/drivers/netconf"
+import "github.com/gwoodwa1/network-collector/pkg/drivers/netconf"
 ```
 
 Import the gNMI driver:
 
 ```go
-import "github.com/kcajme/network-collector/pkg/drivers/gnmi"
+import "github.com/gwoodwa1/network-collector/pkg/drivers/gnmi"
 ```
 
 Import the RESTCONF driver:
 
 ```go
-import "github.com/kcajme/network-collector/pkg/drivers/restconf"
+import "github.com/gwoodwa1/network-collector/pkg/drivers/restconf"
 ```
 
 Example usage for SSH:
