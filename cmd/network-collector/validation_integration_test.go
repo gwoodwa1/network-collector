@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/ioutil"
+	"strings"
 	"testing"
 
 	"github.com/kcajme/network-collector/pkg/validation"
@@ -70,6 +71,67 @@ func TestValidationIntegration(t *testing.T) {
 		if !res.Pass {
 			t.Fatalf("expected validation pass for %s, got: %+v", d.Hostname, res)
 		}
+	}
+}
+
+func TestStepVariableRegistrationAndInterpolation(t *testing.T) {
+	vars := map[string]string{}
+
+	output := "Install ID: 14"
+	rule := validation.ValidationRule{
+		Extractor:    "regex",
+		Pattern:      `Install ID:\s+(\d+)`,
+		Condition:    "eq",
+		Expected:     14,
+		ExpectedType: "int",
+	}
+
+	res, err := validation.ValidateOutput(output, rule)
+	if err != nil {
+		t.Fatalf("validation execution error: %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("expected validation pass, got: %+v", res)
+	}
+	if res.RawExtract != "14" {
+		t.Fatalf("expected RawExtract 14, got %q", res.RawExtract)
+	}
+
+	vars["install_id"] = res.RawExtract
+
+	cmd, err := renderTemplate("show install active {{install_id}}", vars)
+	if err != nil {
+		t.Fatalf("renderTemplate failed: %v", err)
+	}
+	if cmd != "show install active 14" {
+		t.Fatalf("unexpected rendered command: %q", cmd)
+	}
+
+	expected, err := renderExpectedValue("{{install_id}}", vars)
+	if err != nil {
+		t.Fatalf("renderExpectedValue failed: %v", err)
+	}
+	if expected != "14" {
+		t.Fatalf("unexpected rendered expected value: %#v", expected)
+	}
+
+	pattern, err := renderTemplate(`Package ID:\s+{{install_id}}`, vars)
+	if err != nil {
+		t.Fatalf("renderTemplate failed for pattern: %v", err)
+	}
+	if pattern != `Package ID:\s+14` {
+		t.Fatalf("unexpected rendered pattern: %q", pattern)
+	}
+}
+
+func TestTemplateMissingVariableReturnsError(t *testing.T) {
+	vars := map[string]string{}
+	_, err := renderTemplate("show install active {{install_id}}", vars)
+	if err == nil {
+		t.Fatal("expected error for missing variable, got nil")
+	}
+	if !strings.Contains(err.Error(), "undefined variables") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 

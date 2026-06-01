@@ -207,21 +207,33 @@ ssh:
           expected: flash
           expected_type: string
 
-      - name: check-route-count
-        cmd: show ip route
+      - name: capture-install-id
+        cmd: 'show install active | include "Install ID"'
+        validation:
+          extractor: regex
+          pattern: 'Install ID:\s+(\\d+)'
+          condition: eq
+          expected: 14
+          expected_type: int
+        register: install_id
+
+      - name: show-install-by-id
+        cmd: 'show install active {{install_id}}'
         retry:
           until_pass: true
           interval_seconds: 60
           max_attempts: 5
         validation:
           extractor: regex
-          pattern: "Total routes:\\s+(\\d+)"
-          condition: gt
-          expected: 100
-          expected_type: int
+          pattern: 'Package ID:\s+{{install_id}}'
+          condition: contains
+          expected: '{{install_id}}'
+          expected_type: string
 ```
 
 The retry step keeps rerunning the command until validation passes, with the configured interval and attempt limit.
+
+You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
 
 ### Validation semantics
 

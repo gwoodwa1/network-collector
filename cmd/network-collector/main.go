@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type StepConfig struct {
 	Command    string            `mapstructure:"cmd"`
 	Validation *ValidationConfig `mapstructure:"validation"`
 	Retry      *RetryConfig      `mapstructure:"retry"`
+	Register   string            `mapstructure:"register"`
 }
 
 type DeviceConfig struct {
@@ -48,6 +50,46 @@ type ValidationConfig struct {
 
 type Config struct {
 	SSH []DeviceConfig `mapstructure:"ssh"`
+}
+
+func renderTemplate(input string, vars map[string]string) (string, error) {
+	re := regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
+	missing := map[string]bool{}
+
+	output := re.ReplaceAllStringFunc(input, func(match string) string {
+		parts := re.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match
+		}
+		name := parts[1]
+		value, ok := vars[name]
+		if !ok {
+			missing[name] = true
+			return match
+		}
+		return value
+	})
+
+	if len(missing) > 0 {
+		keys := make([]string, 0, len(missing))
+		for key := range missing {
+			keys = append(keys, key)
+		}
+		return output, fmt.Errorf("undefined variables: %s", strings.Join(keys, ", "))
+	}
+
+	return output, nil
+}
+
+func renderExpectedValue(expected interface{}, vars map[string]string) (interface{}, error) {
+	if s, ok := expected.(string); ok && strings.Contains(s, "{{") {
+		rendered, err := renderTemplate(s, vars)
+		if err != nil {
+			return nil, err
+		}
+		return rendered, nil
+	}
+	return expected, nil
 }
 
 func init() {
@@ -123,12 +165,18 @@ func main() {
 			continue
 		}
 
+		variables := map[string]string{}
 		for _, step := range steps {
 			stepName := strings.TrimSpace(step.Name)
 			if stepName == "" {
 				stepName = "unnamed"
 			}
-			cmd := strings.TrimSpace(step.Command)
+
+			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
+			if err != nil {
+				log.Printf("error rendering command for step %q on %s (%s): %v", stepName, hostname, ip, err)
+				continue
+			}
 			if cmd == "" {
 				log.Printf("skipping empty step %q on %s (%s)", stepName, hostname, ip)
 				continue
@@ -153,12 +201,30 @@ func main() {
 					break
 				}
 
+				pattern, err := renderTemplate(step.Validation.Pattern, variables)
+				if err != nil {
+					log.Printf("error rendering validation pattern for %s step=%s: %v", hostname, stepName, err)
+					break
+				}
+
+				jsonPath, err := renderTemplate(step.Validation.JSONPath, variables)
+				if err != nil {
+					log.Printf("error rendering validation json_path for %s step=%s: %v", hostname, stepName, err)
+					break
+				}
+
+				expected, err := renderExpectedValue(step.Validation.Expected, variables)
+				if err != nil {
+					log.Printf("error rendering validation expected value for %s step=%s: %v", hostname, stepName, err)
+					break
+				}
+
 				rule := validation.ValidationRule{
 					Extractor:    step.Validation.Extractor,
-					Pattern:      step.Validation.Pattern,
-					JSONPath:     step.Validation.JSONPath,
+					Pattern:      pattern,
+					JSONPath:     jsonPath,
 					Condition:    step.Validation.Condition,
-					Expected:     step.Validation.Expected,
+					Expected:     expected,
 					ExpectedType: step.Validation.ExpectedType,
 				}
 
@@ -172,6 +238,11 @@ func main() {
 				if !jsonOut {
 					jb, _ := json.MarshalIndent(vres, "", "  ")
 					fmt.Printf("validation result for %s step=%s:\n%s\n", hostname, stepName, string(jb))
+				}
+
+				if step.Register != "" && vres.RawExtract != "" {
+					variables[step.Register] = vres.RawExtract
+					log.Printf("registered variable %s=%q for %s step=%s", step.Register, vres.RawExtract, hostname, stepName)
 				}
 
 				retryCfg := step.Retry
