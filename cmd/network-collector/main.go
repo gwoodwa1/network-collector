@@ -1,0 +1,220 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/kcajme/network-collector/pkg/drivers/ssh"
+	"github.com/kcajme/network-collector/pkg/validation"
+	"github.com/spf13/viper"
+)
+
+type RetryConfig struct {
+	IntervalSeconds int  `mapstructure:"interval_seconds"`
+	MaxAttempts     int  `mapstructure:"max_attempts"`
+	UntilPass       bool `mapstructure:"until_pass"`
+}
+
+type StepConfig struct {
+	Name       string            `mapstructure:"name"`
+	Command    string            `mapstructure:"cmd"`
+	Validation *ValidationConfig `mapstructure:"validation"`
+	Retry      *RetryConfig      `mapstructure:"retry"`
+}
+
+type DeviceConfig struct {
+	Hostname   string            `mapstructure:"hostname"`
+	IP         string            `mapstructure:"ip"`
+	Type       string            `mapstructure:"type"`
+	Timeout    int               `mapstructure:"timeout"`
+	Steps      []StepConfig      `mapstructure:"steps"`
+	Command    string            `mapstructure:"cmd"`
+	Validation *ValidationConfig `mapstructure:"validation"`
+}
+
+type ValidationConfig struct {
+	Extractor    string      `mapstructure:"extractor"`
+	Pattern      string      `mapstructure:"pattern"`
+	JSONPath     string      `mapstructure:"json_path"`
+	Condition    string      `mapstructure:"condition"`
+	Expected     interface{} `mapstructure:"expected"`
+	ExpectedType string      `mapstructure:"expected_type"`
+}
+
+type Config struct {
+	SSH []DeviceConfig `mapstructure:"ssh"`
+}
+
+func init() {
+	viper.SetConfigName("config")
+	viper.AddConfigPath("./")
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Printf("warning: unable to read config file: %v", err)
+	}
+}
+
+func main() {
+	// CLI flags
+	var jsonOut bool
+	var failOnFail bool
+	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
+	flag.BoolVar(&failOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
+	flag.Parse()
+
+	username := strings.TrimSpace(viper.GetString("NET_USER"))
+	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
+
+	if username == "" || password == "" {
+		log.Fatal("NET_USER and NET_PASSWORD must be set in the environment")
+	}
+
+	var config Config
+	if err := viper.Unmarshal(&config); err != nil {
+		log.Fatalf("error reading config: %v", err)
+	}
+
+	type deviceValidation struct {
+		Hostname string                      `json:"hostname"`
+		IP       string                      `json:"ip"`
+		Result   validation.ValidationResult `json:"result"`
+	}
+
+	var aggregated []deviceValidation
+
+	for _, device := range config.SSH {
+		hostname := strings.TrimSpace(device.Hostname)
+		ip := strings.TrimSpace(device.IP)
+		deviceType := strings.TrimSpace(device.Type)
+
+		if hostname == "" || ip == "" || deviceType == "" {
+			log.Printf("skipping invalid SSH entry: hostname=%q ip=%q type=%q", hostname, ip, deviceType)
+			continue
+		}
+
+		steps := device.Steps
+		if len(steps) == 0 && strings.TrimSpace(device.Command) != "" {
+			steps = []StepConfig{{
+				Name:       "default",
+				Command:    strings.TrimSpace(device.Command),
+				Validation: device.Validation,
+			}}
+		}
+
+		if len(steps) == 0 {
+			log.Printf("skipping SSH device %s (%s): no steps or command provided", hostname, ip)
+			continue
+		}
+
+		opts := []ssh.Option{}
+		if device.Timeout > 0 {
+			opts = append(opts, ssh.WithConnectionTimeout(time.Duration(device.Timeout)*time.Second))
+		}
+
+		client := ssh.NewClient(opts...)
+		if err := client.Connect(ip, username, password, deviceType); err != nil {
+			log.Printf("error connecting to %s (%s): %v", hostname, ip, err)
+			continue
+		}
+
+		for _, step := range steps {
+			stepName := strings.TrimSpace(step.Name)
+			if stepName == "" {
+				stepName = "unnamed"
+			}
+			cmd := strings.TrimSpace(step.Command)
+			if cmd == "" {
+				log.Printf("skipping empty step %q on %s (%s)", stepName, hostname, ip)
+				continue
+			}
+
+			var finalResult validation.ValidationResult
+			attempt := 0
+			for {
+				attempt++
+
+				output, err := client.Execute(cmd)
+				if err != nil {
+					log.Printf("error executing step %q on %s (%s): %v", stepName, hostname, ip, err)
+					break
+				}
+
+				if !jsonOut {
+					fmt.Printf("device=%s step=%s command=%q\n%s\n", hostname, stepName, cmd, output)
+				}
+
+				if step.Validation == nil {
+					break
+				}
+
+				rule := validation.ValidationRule{
+					Extractor:    step.Validation.Extractor,
+					Pattern:      step.Validation.Pattern,
+					JSONPath:     step.Validation.JSONPath,
+					Condition:    step.Validation.Condition,
+					Expected:     step.Validation.Expected,
+					ExpectedType: step.Validation.ExpectedType,
+				}
+
+				vres, verr := validation.ValidateOutput(output, rule)
+				if verr != nil {
+					log.Printf("validation error for %s step=%s: %v", hostname, stepName, verr)
+				}
+
+				finalResult = vres
+
+				if !jsonOut {
+					jb, _ := json.MarshalIndent(vres, "", "  ")
+					fmt.Printf("validation result for %s step=%s:\n%s\n", hostname, stepName, string(jb))
+				}
+
+				retryCfg := step.Retry
+				if retryCfg != nil && retryCfg.UntilPass && finalResult.Status == "fail" {
+					if retryCfg.MaxAttempts > 0 && attempt >= retryCfg.MaxAttempts {
+						log.Printf("step %q on %s (%s) reached max attempts %d", stepName, hostname, ip, retryCfg.MaxAttempts)
+						break
+					}
+
+					interval := time.Duration(retryCfg.IntervalSeconds) * time.Second
+					if interval <= 0 {
+						interval = 60 * time.Second
+					}
+					log.Printf("retrying step %q on %s (%s) in %s (attempt %d)", stepName, hostname, ip, interval, attempt+1)
+					time.Sleep(interval)
+					continue
+				}
+
+				break
+			}
+
+			if step.Validation != nil {
+				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
+			}
+		}
+
+		if err := client.Close(); err != nil {
+			log.Printf("error closing SSH connection for %s (%s): %v", hostname, ip, err)
+		}
+	}
+
+	// Emit aggregated JSON if requested
+	if jsonOut {
+		out, _ := json.MarshalIndent(aggregated, "", "  ")
+		fmt.Println(string(out))
+	}
+
+	// Exit non-zero if any validation failed or errored and flag set
+	if failOnFail {
+		for _, dv := range aggregated {
+			if dv.Result.Status == "fail" || dv.Result.Status == "error" {
+				os.Exit(2)
+			}
+		}
+	}
+}
