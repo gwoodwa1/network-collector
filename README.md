@@ -104,7 +104,7 @@ if err := client.Close(); err != nil {
 The `cmd/network-collector` SSH example supports validation configured in `config.yaml` and two useful CLI flags:
 
 - `--json`: emit consolidated machine-readable JSON for all validation results (suppresses raw command output)
-- `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`
+- `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`, or if a device/step cannot run successfully
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
@@ -252,4 +252,3 @@ Example equality checks added in `config.yaml`:
 
 - String equality (exact match): `condition: eq`, `expected: "RUNNING"`, `expected_type: string`
 - Integer equality: `condition: eq`, `expected: 100`, `expected_type: int`
-

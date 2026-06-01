@@ -146,6 +146,7 @@ func main() {
 	}
 
 	var aggregated []deviceValidation
+	runFailed := false
 
 	for _, device := range config.SSH {
 		hostname := strings.TrimSpace(device.Hostname)
@@ -153,6 +154,7 @@ func main() {
 		deviceType := strings.TrimSpace(device.Type)
 
 		if hostname == "" || ip == "" || deviceType == "" {
+			runFailed = true
 			slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
 			continue
 		}
@@ -167,6 +169,7 @@ func main() {
 		}
 
 		if len(steps) == 0 {
+			runFailed = true
 			slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
 			continue
 		}
@@ -178,14 +181,10 @@ func main() {
 
 		client := ssh.NewClient(opts...)
 		if err := client.Connect(ip, username, password, deviceType); err != nil {
+			runFailed = true
 			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
 			continue
 		}
-		defer func(c *ssh.Client, h, i string) {
-			if err := c.Close(); err != nil {
-				slog.Error("error closing SSH connection", "hostname", h, "ip", i, "error", err)
-			}
-		}(client, hostname, ip)
 
 		variables := map[string]string{}
 		for _, step := range steps {
@@ -196,10 +195,12 @@ func main() {
 
 			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
 			if err != nil {
+				runFailed = true
 				slog.Error("error rendering command", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
 				continue
 			}
 			if cmd == "" {
+				runFailed = true
 				slog.Warn("skipping empty step", "hostname", hostname, "ip", ip, "step", stepName)
 				continue
 			}
@@ -211,6 +212,7 @@ func main() {
 
 				output, err := client.Execute(cmd)
 				if err != nil {
+					runFailed = true
 					slog.Error("error executing step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
 					break
 				}
@@ -225,18 +227,21 @@ func main() {
 
 				pattern, err := renderTemplate(step.Validation.Pattern, variables)
 				if err != nil {
+					runFailed = true
 					slog.Error("error rendering validation pattern", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
 
 				jsonPath, err := renderTemplate(step.Validation.JSONPath, variables)
 				if err != nil {
+					runFailed = true
 					slog.Error("error rendering validation json_path", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
 
 				expected, err := renderExpectedValue(step.Validation.Expected, variables)
 				if err != nil {
+					runFailed = true
 					slog.Error("error rendering validation expected value", "hostname", hostname, "step", stepName, "error", err)
 					break
 				}
@@ -252,6 +257,7 @@ func main() {
 
 				vres, verr := validation.ValidateOutput(output, rule)
 				if verr != nil {
+					runFailed = true
 					slog.Error("validation error", "hostname", hostname, "step", stepName, "error", verr)
 				}
 
@@ -290,6 +296,11 @@ func main() {
 				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
 			}
 		}
+
+		if err := client.Close(); err != nil {
+			runFailed = true
+			slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
+		}
 	}
 
 	// Emit aggregated JSON if requested
@@ -300,6 +311,9 @@ func main() {
 
 	// Exit non-zero if any validation failed or errored and flag set
 	if failOnFail {
+		if runFailed {
+			os.Exit(2)
+		}
 		for _, dv := range aggregated {
 			if dv.Result.Status == "fail" || dv.Result.Status == "error" {
 				os.Exit(2)
