@@ -185,6 +185,44 @@ netconf:
       </get>
 ```
 
+### SSH step-based commands with retry
+
+The `cmd/network-collector` example supports `ssh.steps`, which lets you run multiple commands over the same SSH connection for a single device. Each step can include `validation` and optional retry behavior.
+
+Example:
+
+```yaml
+ssh:
+  - hostname: device-ios-03
+    ip: 192.168.16.13
+    type: cisco_ios
+    timeout: 20
+    steps:
+      - name: show-version
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: "System image file is \"(.+)\""
+          condition: contains
+          expected: flash
+          expected_type: string
+
+      - name: check-route-count
+        cmd: show ip route
+        retry:
+          until_pass: true
+          interval_seconds: 60
+          max_attempts: 5
+        validation:
+          extractor: regex
+          pattern: "Total routes:\\s+(\\d+)"
+          condition: gt
+          expected: 100
+          expected_type: int
+```
+
+The retry step keeps rerunning the command until validation passes, with the configured interval and attempt limit.
+
 ### Validation semantics
 
 Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads (gNMI/RESTCONF responses).

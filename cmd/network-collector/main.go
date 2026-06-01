@@ -14,12 +14,26 @@ import (
 	"github.com/spf13/viper"
 )
 
+type RetryConfig struct {
+	IntervalSeconds int  `mapstructure:"interval_seconds"`
+	MaxAttempts     int  `mapstructure:"max_attempts"`
+	UntilPass       bool `mapstructure:"until_pass"`
+}
+
+type StepConfig struct {
+	Name       string            `mapstructure:"name"`
+	Command    string            `mapstructure:"cmd"`
+	Validation *ValidationConfig `mapstructure:"validation"`
+	Retry      *RetryConfig      `mapstructure:"retry"`
+}
+
 type DeviceConfig struct {
 	Hostname   string            `mapstructure:"hostname"`
 	IP         string            `mapstructure:"ip"`
 	Type       string            `mapstructure:"type"`
-	Command    string            `mapstructure:"cmd"`
 	Timeout    int               `mapstructure:"timeout"`
+	Steps      []StepConfig      `mapstructure:"steps"`
+	Command    string            `mapstructure:"cmd"`
 	Validation *ValidationConfig `mapstructure:"validation"`
 }
 
@@ -74,24 +88,33 @@ func main() {
 
 	var aggregated []deviceValidation
 
-	for _, sshConfig := range config.SSH {
-		hostname := strings.TrimSpace(sshConfig.Hostname)
-		ip := strings.TrimSpace(sshConfig.IP)
-		deviceType := strings.TrimSpace(sshConfig.Type)
-		command := strings.TrimSpace(sshConfig.Command)
+	for _, device := range config.SSH {
+		hostname := strings.TrimSpace(device.Hostname)
+		ip := strings.TrimSpace(device.IP)
+		deviceType := strings.TrimSpace(device.Type)
 
 		if hostname == "" || ip == "" || deviceType == "" {
 			log.Printf("skipping invalid SSH entry: hostname=%q ip=%q type=%q", hostname, ip, deviceType)
 			continue
 		}
-		if command == "" {
-			log.Printf("skipping SSH device %s (%s): no command provided", hostname, ip)
+
+		steps := device.Steps
+		if len(steps) == 0 && strings.TrimSpace(device.Command) != "" {
+			steps = []StepConfig{{
+				Name:       "default",
+				Command:    strings.TrimSpace(device.Command),
+				Validation: device.Validation,
+			}}
+		}
+
+		if len(steps) == 0 {
+			log.Printf("skipping SSH device %s (%s): no steps or command provided", hostname, ip)
 			continue
 		}
 
 		opts := []ssh.Option{}
-		if sshConfig.Timeout > 0 {
-			opts = append(opts, ssh.WithConnectionTimeout(time.Duration(sshConfig.Timeout)*time.Second))
+		if device.Timeout > 0 {
+			opts = append(opts, ssh.WithConnectionTimeout(time.Duration(device.Timeout)*time.Second))
 		}
 
 		client := ssh.NewClient(opts...)
@@ -100,41 +123,83 @@ func main() {
 			continue
 		}
 
-		output, err := client.Execute(command)
-		if err != nil {
-			log.Printf("error executing command on %s (%s): %v", hostname, ip, err)
-		} else if !jsonOut {
-			fmt.Printf("output for %s (%s):\n%s\n", hostname, ip, output)
+		for _, step := range steps {
+			stepName := strings.TrimSpace(step.Name)
+			if stepName == "" {
+				stepName = "unnamed"
+			}
+			cmd := strings.TrimSpace(step.Command)
+			if cmd == "" {
+				log.Printf("skipping empty step %q on %s (%s)", stepName, hostname, ip)
+				continue
+			}
+
+			var finalResult validation.ValidationResult
+			attempt := 0
+			for {
+				attempt++
+
+				output, err := client.Execute(cmd)
+				if err != nil {
+					log.Printf("error executing step %q on %s (%s): %v", stepName, hostname, ip, err)
+					break
+				}
+
+				if !jsonOut {
+					fmt.Printf("device=%s step=%s command=%q\n%s\n", hostname, stepName, cmd, output)
+				}
+
+				if step.Validation == nil {
+					break
+				}
+
+				rule := validation.ValidationRule{
+					Extractor:    step.Validation.Extractor,
+					Pattern:      step.Validation.Pattern,
+					JSONPath:     step.Validation.JSONPath,
+					Condition:    step.Validation.Condition,
+					Expected:     step.Validation.Expected,
+					ExpectedType: step.Validation.ExpectedType,
+				}
+
+				vres, verr := validation.ValidateOutput(output, rule)
+				if verr != nil {
+					log.Printf("validation error for %s step=%s: %v", hostname, stepName, verr)
+				}
+
+				finalResult = vres
+
+				if !jsonOut {
+					jb, _ := json.MarshalIndent(vres, "", "  ")
+					fmt.Printf("validation result for %s step=%s:\n%s\n", hostname, stepName, string(jb))
+				}
+
+				retryCfg := step.Retry
+				if retryCfg != nil && retryCfg.UntilPass && finalResult.Status == "fail" {
+					if retryCfg.MaxAttempts > 0 && attempt >= retryCfg.MaxAttempts {
+						log.Printf("step %q on %s (%s) reached max attempts %d", stepName, hostname, ip, retryCfg.MaxAttempts)
+						break
+					}
+
+					interval := time.Duration(retryCfg.IntervalSeconds) * time.Second
+					if interval <= 0 {
+						interval = 60 * time.Second
+					}
+					log.Printf("retrying step %q on %s (%s) in %s (attempt %d)", stepName, hostname, ip, interval, attempt+1)
+					time.Sleep(interval)
+					continue
+				}
+
+				break
+			}
+
+			if step.Validation != nil {
+				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
+			}
 		}
 
 		if err := client.Close(); err != nil {
 			log.Printf("error closing SSH connection for %s (%s): %v", hostname, ip, err)
-		}
-
-		// Run validation if provided
-		if sshConfig.Validation != nil {
-			rule := validation.ValidationRule{
-				Extractor:    sshConfig.Validation.Extractor,
-				Pattern:      sshConfig.Validation.Pattern,
-				JSONPath:     sshConfig.Validation.JSONPath,
-				Condition:    sshConfig.Validation.Condition,
-				Expected:     sshConfig.Validation.Expected,
-				ExpectedType: sshConfig.Validation.ExpectedType,
-			}
-
-			vres, verr := validation.ValidateOutput(output, rule)
-			if verr != nil {
-				log.Printf("validation error for %s (%s): %v", hostname, ip, verr)
-			}
-
-			// collect aggregated result
-			aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: vres})
-
-			if !jsonOut {
-				// Print JSON result for machine-readable consumption
-				jb, _ := json.MarshalIndent(vres, "", "  ")
-				fmt.Printf("validation result for %s (%s):\n%s\n", hostname, ip, string(jb))
-			}
 		}
 	}
 

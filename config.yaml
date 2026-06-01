@@ -52,6 +52,33 @@ ssh:
       expected: 100
       expected_type: int
 
+  - hostname: device-ios-03
+    ip: 192.168.16.13
+    type: cisco_ios
+    timeout: 20
+    steps:
+      - name: show-version
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: "System image file is \"(.+)\""
+          condition: contains
+          expected: flash
+          expected_type: string
+
+      - name: check-route-count
+        cmd: show ip route
+        retry:
+          until_pass: true
+          interval_seconds: 60
+          max_attempts: 5
+        validation:
+          extractor: regex
+          pattern: "Total routes:\\s+(\\d+)"
+          condition: gt
+          expected: 100
+          expected_type: int
+
 http:
   - hostname: device-eos-08
     ip: 192.168.16.8
