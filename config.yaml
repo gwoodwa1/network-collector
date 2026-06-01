@@ -11,16 +11,46 @@ gnmi:
     ip: 192.168.16.10:6030
     skip_tls: true
     path: /interfaces/interface/subinterfaces/subinterface/state/description
+    validation:
+      extractor: gjson
+      json_path: "interfaces.0.interface.0.subinterfaces.0.subinterface.0.state.description"
+      condition: contains
+      expected: "up"
 
 ssh:
   - hostname: device-nxos-01
     ip: 192.168.16.1
     type: cisco_nxos
     cmd: show ip route
+    validation:
+      extractor: regex
+      pattern: "Total routes:\\s+(\\d+)"
+      condition: gt
+      expected: 100
   - hostname: device-qfx-01
     ip: 192.168.16.1
     type: juniper_junos
     cmd: show route
+  - hostname: device-ios-01
+    ip: 192.168.16.11
+    type: cisco_ios
+    cmd: show system status
+    validation:
+      extractor: regex
+      pattern: "System state:\\s+(\\w+)"
+      condition: eq
+      expected: "RUNNING"
+      expected_type: string
+  - hostname: device-ios-02
+    ip: 192.168.16.12
+    type: cisco_ios
+    cmd: show process memory
+    validation:
+      extractor: regex
+      pattern: "Total memory:\\s+(\\d+)MB"
+      condition: eq
+      expected: 100
+      expected_type: int
 
 http:
   - hostname: device-eos-08
