@@ -93,10 +93,11 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 }
 
 func init() {
-	viper.SetConfigName("config")
-	viper.AddConfigPath("./")
 	viper.AutomaticEnv()
+}
 
+func loadConfig(configFile string) {
+	viper.SetConfigFile(configFile)
 	if err := viper.ReadInConfig(); err != nil {
 		log.Printf("warning: unable to read config file: %v", err)
 	}
@@ -106,9 +107,13 @@ func main() {
 	// CLI flags
 	var jsonOut bool
 	var failOnFail bool
+	var configFile string
+	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&failOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.Parse()
+
+	loadConfig(configFile)
 
 	username := strings.TrimSpace(viper.GetString("NET_USER"))
 	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
