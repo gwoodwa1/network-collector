@@ -1,4 +1,5 @@
 fail_on_fail: false
+name_playbook: Software Upgrade on Cisco IOS
 
 restconf:
   - hostname: device-eos-02

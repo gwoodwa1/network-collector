@@ -196,11 +196,14 @@ The `cmd/network-collector` example supports `ssh.steps`, which lets you run mul
 Example:
 
 ```yaml
+name_playbook: Software Upgrade on Cisco IOS
+
 ssh:
   - hostname: device-ios-03
     ip: 192.168.16.13
     type: cisco_ios
     timeout: 20
+    operation_timeout: 120
     steps:
       - name: show-version
         cmd: show version
@@ -252,6 +255,10 @@ ssh:
 ```
 
 The retry step keeps rerunning the command until validation passes, with the configured interval and attempt limit.
+
+Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
+
+Use `operation_timeout` on an SSH device to increase the scrapligo operation timeout for long-running commands. The value is seconds; for example, `operation_timeout: 120` gives commands up to two minutes to return to the prompt.
 
 Use `wait_seconds` on a step to pause while keeping the SSH connection open. A wait-only step does not require `cmd`; if both `wait_seconds` and `cmd` are set, the collector waits first and then runs the command.
 

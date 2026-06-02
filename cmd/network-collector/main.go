@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -43,13 +44,14 @@ type StepConfig struct {
 }
 
 type DeviceConfig struct {
-	Hostname   string            `mapstructure:"hostname"`
-	IP         string            `mapstructure:"ip"`
-	Type       string            `mapstructure:"type"`
-	Timeout    int               `mapstructure:"timeout"`
-	Steps      []StepConfig      `mapstructure:"steps"`
-	Command    string            `mapstructure:"cmd"`
-	Validation *ValidationConfig `mapstructure:"validation"`
+	Hostname         string            `mapstructure:"hostname"`
+	IP               string            `mapstructure:"ip"`
+	Type             string            `mapstructure:"type"`
+	Timeout          int               `mapstructure:"timeout"`
+	OperationTimeout int               `mapstructure:"operation_timeout"`
+	Steps            []StepConfig      `mapstructure:"steps"`
+	Command          string            `mapstructure:"cmd"`
+	Validation       *ValidationConfig `mapstructure:"validation"`
 }
 
 type ValidationConfig struct {
@@ -62,7 +64,8 @@ type ValidationConfig struct {
 }
 
 type Config struct {
-	SSH []DeviceConfig `mapstructure:"ssh"`
+	NamePlaybook string         `mapstructure:"name_playbook"`
+	SSH          []DeviceConfig `mapstructure:"ssh"`
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -200,6 +203,99 @@ func closeSSHClient(client *ssh.Client) error {
 	return client.Close()
 }
 
+func sanitizeLogName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		isSafe := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.'
+		if isSafe {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	sanitized := strings.Trim(b.String(), "_")
+	if sanitized == "" {
+		return "unknown"
+	}
+	return sanitized
+}
+
+func formatSessionBanner(playbookName, hostname string, started time.Time) string {
+	title := strings.TrimSpace(playbookName)
+	if title == "" {
+		title = "Network Collector Session"
+	}
+
+	width := 78
+	line := strings.Repeat("=", width)
+	return fmt.Sprintf(
+		"%s\n%s\n%s\nHostname: %s\nStarted:  %s\n%s\n\n",
+		line,
+		centerASCII(title, width),
+		line,
+		strings.TrimSpace(hostname),
+		started.Format(time.RFC3339),
+		line,
+	)
+}
+
+func centerASCII(value string, width int) string {
+	if len(value) >= width {
+		return value
+	}
+	left := (width - len(value)) / 2
+	return strings.Repeat(" ", left) + value
+}
+
+func openSessionLog(hostname, playbookName string, started time.Time) (*os.File, string, error) {
+	if err := os.MkdirAll("session_logs", 0755); err != nil {
+		return nil, "", fmt.Errorf("failed to create session log directory: %w", err)
+	}
+
+	filename := fmt.Sprintf("%s_%s.log", sanitizeLogName(hostname), started.Format("20060102_150405"))
+	path := "session_logs/" + filename
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create session log file: %w", err)
+	}
+
+	if _, err := file.WriteString(formatSessionBanner(playbookName, hostname, started)); err != nil {
+		_ = file.Close()
+		return nil, "", fmt.Errorf("failed to write session log banner: %w", err)
+	}
+
+	return file, path, nil
+}
+
+func writeSessionf(writer io.Writer, format string, args ...interface{}) {
+	if writer == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(writer, format, args...)
+}
+
+func sshOptionsForDevice(device DeviceConfig) []ssh.Option {
+	opts := []ssh.Option{}
+	if device.Timeout > 0 {
+		opts = append(opts, ssh.WithConnectionTimeout(time.Duration(device.Timeout)*time.Second))
+	}
+	if device.OperationTimeout > 0 {
+		opts = append(opts, ssh.WithOperationTimeout(time.Duration(device.OperationTimeout)*time.Second))
+	}
+	return opts
+}
+
 func init() {
 	viper.AutomaticEnv()
 	if err := viper.BindEnv("fail_on_fail", "FAIL_ON_FAIL"); err != nil {
@@ -282,15 +378,28 @@ func main() {
 			continue
 		}
 
-		opts := []ssh.Option{}
-		if device.Timeout > 0 {
-			opts = append(opts, ssh.WithConnectionTimeout(time.Duration(device.Timeout)*time.Second))
+		started := time.Now()
+		sessionLog, sessionLogPath, err := openSessionLog(hostname, config.NamePlaybook, started)
+		if err != nil {
+			runFailed = true
+			slog.Error("error creating session log", "hostname", hostname, "ip", ip, "error", err)
+			continue
 		}
+		slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
+
+		opts := sshOptionsForDevice(device)
+		channelLog := io.Writer(sessionLog)
+		if !jsonOut {
+			channelLog = io.MultiWriter(os.Stdout, sessionLog)
+		}
+		opts = append(opts, ssh.WithChannelLog(channelLog))
 
 		client := ssh.NewClient(opts...)
 		if err := client.Connect(ip, username, password, deviceType); err != nil {
 			runFailed = true
 			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
+			writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
+			_ = sessionLog.Close()
 			continue
 		}
 
@@ -310,6 +419,7 @@ func main() {
 			}
 			if wait > 0 {
 				slog.Info("waiting before step", "hostname", hostname, "ip", ip, "step", stepName, "duration", wait)
+				writeSessionf(sessionLog, "\n[step:%s] waiting %s\n", stepName, wait)
 				time.Sleep(wait)
 			}
 
@@ -324,19 +434,24 @@ func main() {
 
 				if err := closeSSHClient(client); err != nil {
 					slog.Warn("error closing stale SSH connection before probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					writeSessionf(sessionLog, "[step:%s] warning: failed to close stale SSH connection before probe: %v\n", stepName, err)
 				}
 				client = nil
 
 				slog.Info("probing SSH port", "hostname", hostname, "ip", ip, "step", stepName)
+				writeSessionf(sessionLog, "\n[step:%s] probing SSH port on %s\n", stepName, ip)
 				if err := waitForSSHPort(ip, step.SSHProbe); err != nil {
 					runFailed = true
 					stopDeviceSteps = true
 					slog.Error("SSH probe failed", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					writeSessionf(sessionLog, "[step:%s] SSH probe failed: %v\n", stepName, err)
 					break
 				}
+				writeSessionf(sessionLog, "[step:%s] SSH probe succeeded\n", stepName)
 
 				if probe.PostWait > 0 {
 					slog.Info("waiting after successful SSH probe", "hostname", hostname, "ip", ip, "step", stepName, "duration", probe.PostWait)
+					writeSessionf(sessionLog, "[step:%s] waiting %s after successful SSH probe\n", stepName, probe.PostWait)
 					time.Sleep(probe.PostWait)
 				}
 
@@ -345,8 +460,10 @@ func main() {
 					runFailed = true
 					stopDeviceSteps = true
 					slog.Error("error reconnecting to SSH device after probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					writeSessionf(sessionLog, "[step:%s] failed to reconnect after SSH probe: %v\n", stepName, err)
 					break
 				}
+				writeSessionf(sessionLog, "[step:%s] SSH session re-established\n", stepName)
 			}
 
 			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
@@ -373,17 +490,21 @@ func main() {
 				if err != nil {
 					if !shouldReturnToPrompt(step.ReturnToPrompt) {
 						slog.Info("step did not return to prompt as configured", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+						writeSessionf(sessionLog, "\n[step:%s] command did not return to prompt as configured: %v\n", stepName, err)
 						if err := closeSSHClient(client); err != nil {
 							slog.Warn("error closing SSH connection after no-prompt step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+							writeSessionf(sessionLog, "[step:%s] warning: failed to close SSH connection after no-prompt step: %v\n", stepName, err)
 						}
 						client = nil
 						break
 					}
 					runFailed = true
 					slog.Error("error executing step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					writeSessionf(sessionLog, "\n[step:%s] command error: %v\n", stepName, err)
 					break
 				}
 
+				writeSessionf(sessionLog, "\n[step:%s] device=%s command=%q\n%s\n", stepName, hostname, cmd, output)
 				if !jsonOut {
 					fmt.Printf("device=%s step=%s command=%q\n%s\n", hostname, stepName, cmd, output)
 				}
@@ -434,6 +555,8 @@ func main() {
 					jb, _ := json.MarshalIndent(vres, "", "  ")
 					fmt.Printf("validation result for %s step=%s:\n%s\n", hostname, stepName, string(jb))
 				}
+				jb, _ := json.MarshalIndent(vres, "", "  ")
+				writeSessionf(sessionLog, "[step:%s] validation result:\n%s\n", stepName, string(jb))
 
 				if step.Register != "" && vres.RawExtract != "" {
 					variables[step.Register] = vres.RawExtract
@@ -470,6 +593,12 @@ func main() {
 		if err := client.Close(); err != nil {
 			runFailed = true
 			slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
+			writeSessionf(sessionLog, "ERROR: failed to close SSH connection: %v\n", err)
+		}
+		writeSessionf(sessionLog, "\nSession complete: %s\n", time.Now().Format(time.RFC3339))
+		if err := sessionLog.Close(); err != nil {
+			runFailed = true
+			slog.Error("error closing session log", "hostname", hostname, "ip", ip, "path", sessionLogPath, "error", err)
 		}
 	}
 

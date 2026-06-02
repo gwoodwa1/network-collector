@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kcajme/network-collector/pkg/validation"
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -174,6 +175,49 @@ func TestShouldReturnToPrompt(t *testing.T) {
 	value = false
 	if shouldReturnToPrompt(&value) {
 		t.Fatal("expected false return_to_prompt to allow no prompt")
+	}
+}
+
+func TestDeviceConfigOperationTimeoutDecode(t *testing.T) {
+	input := map[string]interface{}{
+		"hostname":          "device-ios-01",
+		"ip":                "192.0.2.1",
+		"type":              "cisco_ios",
+		"timeout":           20,
+		"operation_timeout": 120,
+		"cmd":               "show install request",
+	}
+
+	var device DeviceConfig
+	if err := mapstructure.Decode(input, &device); err != nil {
+		t.Fatalf("failed to decode device config: %v", err)
+	}
+	if device.Timeout != 20 {
+		t.Fatalf("expected connection timeout 20, got %d", device.Timeout)
+	}
+	if device.OperationTimeout != 120 {
+		t.Fatalf("expected operation timeout 120, got %d", device.OperationTimeout)
+	}
+}
+
+func TestSessionLogFormatting(t *testing.T) {
+	if got := sanitizeLogName("router 01/lab"); got != "router_01_lab" {
+		t.Fatalf("unexpected sanitized log name: %q", got)
+	}
+	if got := sanitizeLogName("   "); got != "unknown" {
+		t.Fatalf("expected unknown for blank log name, got %q", got)
+	}
+
+	started := time.Date(2026, 6, 2, 18, 30, 0, 0, time.UTC)
+	banner := formatSessionBanner("Software Upgrade on Cisco IOS", "router-01", started)
+	if !strings.Contains(banner, "Software Upgrade on Cisco IOS") {
+		t.Fatalf("expected banner to contain playbook title, got %q", banner)
+	}
+	if !strings.Contains(banner, "Hostname: router-01") {
+		t.Fatalf("expected banner to contain hostname, got %q", banner)
+	}
+	if !strings.Contains(banner, "Started:  2026-06-02T18:30:00Z") {
+		t.Fatalf("expected banner to contain timestamp, got %q", banner)
 	}
 }
 
