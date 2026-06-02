@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,12 +23,23 @@ type RetryConfig struct {
 	UntilPass       bool `mapstructure:"until_pass"`
 }
 
+type SSHProbeConfig struct {
+	Port            int `mapstructure:"port"`
+	IntervalSeconds int `mapstructure:"interval_seconds"`
+	MaxAttempts     int `mapstructure:"max_attempts"`
+	TimeoutSeconds  int `mapstructure:"timeout_seconds"`
+	PostWaitSeconds int `mapstructure:"post_wait_seconds"`
+}
+
 type StepConfig struct {
-	Name       string            `mapstructure:"name"`
-	Command    string            `mapstructure:"cmd"`
-	Validation *ValidationConfig `mapstructure:"validation"`
-	Retry      *RetryConfig      `mapstructure:"retry"`
-	Register   string            `mapstructure:"register"`
+	Name           string            `mapstructure:"name"`
+	Command        string            `mapstructure:"cmd"`
+	WaitSeconds    int               `mapstructure:"wait_seconds"`
+	ReturnToPrompt *bool             `mapstructure:"return_to_prompt"`
+	SSHProbe       *SSHProbeConfig   `mapstructure:"ssh_probe"`
+	Validation     *ValidationConfig `mapstructure:"validation"`
+	Retry          *RetryConfig      `mapstructure:"retry"`
+	Register       string            `mapstructure:"register"`
 }
 
 type DeviceConfig struct {
@@ -90,6 +103,101 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 		return rendered, nil
 	}
 	return expected, nil
+}
+
+func waitDuration(waitSeconds int) (time.Duration, error) {
+	if waitSeconds < 0 {
+		return 0, fmt.Errorf("wait_seconds must be greater than or equal to 0")
+	}
+	return time.Duration(waitSeconds) * time.Second, nil
+}
+
+func shouldReturnToPrompt(returnToPrompt *bool) bool {
+	return returnToPrompt == nil || *returnToPrompt
+}
+
+type resolvedSSHProbe struct {
+	Port     int
+	Interval time.Duration
+	Attempts int
+	Timeout  time.Duration
+	PostWait time.Duration
+}
+
+func resolveSSHProbeConfig(cfg *SSHProbeConfig) (resolvedSSHProbe, error) {
+	probe := resolvedSSHProbe{
+		Port:     22,
+		Interval: 30 * time.Second,
+		Attempts: 20,
+		Timeout:  5 * time.Second,
+	}
+	if cfg == nil {
+		return probe, nil
+	}
+	if cfg.Port < 0 || cfg.Port > 65535 {
+		return probe, fmt.Errorf("ssh_probe.port must be between 1 and 65535")
+	}
+	if cfg.Port > 0 {
+		probe.Port = cfg.Port
+	}
+	if cfg.IntervalSeconds < 0 {
+		return probe, fmt.Errorf("ssh_probe.interval_seconds must be greater than or equal to 0")
+	}
+	if cfg.IntervalSeconds > 0 {
+		probe.Interval = time.Duration(cfg.IntervalSeconds) * time.Second
+	}
+	if cfg.MaxAttempts < 0 {
+		return probe, fmt.Errorf("ssh_probe.max_attempts must be greater than or equal to 0")
+	}
+	if cfg.MaxAttempts > 0 {
+		probe.Attempts = cfg.MaxAttempts
+	}
+	if cfg.TimeoutSeconds < 0 {
+		return probe, fmt.Errorf("ssh_probe.timeout_seconds must be greater than or equal to 0")
+	}
+	if cfg.TimeoutSeconds > 0 {
+		probe.Timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	if cfg.PostWaitSeconds < 0 {
+		return probe, fmt.Errorf("ssh_probe.post_wait_seconds must be greater than or equal to 0")
+	}
+	if cfg.PostWaitSeconds > 0 {
+		probe.PostWait = time.Duration(cfg.PostWaitSeconds) * time.Second
+	}
+	return probe, nil
+}
+
+func sshProbeAddress(host string, port int) string {
+	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(port))
+}
+
+func waitForSSHPort(host string, cfg *SSHProbeConfig) error {
+	probe, err := resolveSSHProbeConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	address := sshProbeAddress(host, probe.Port)
+	var lastErr error
+	for attempt := 1; attempt <= probe.Attempts; attempt++ {
+		conn, err := net.DialTimeout("tcp", address, probe.Timeout)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		if attempt < probe.Attempts {
+			time.Sleep(probe.Interval)
+		}
+	}
+	return fmt.Errorf("ssh probe failed for %s after %d attempts: %w", address, probe.Attempts, lastErr)
+}
+
+func closeSSHClient(client *ssh.Client) error {
+	if client == nil {
+		return nil
+	}
+	return client.Close()
 }
 
 func init() {
@@ -187,10 +295,58 @@ func main() {
 		}
 
 		variables := map[string]string{}
+		stopDeviceSteps := false
 		for _, step := range steps {
 			stepName := strings.TrimSpace(step.Name)
 			if stepName == "" {
 				stepName = "unnamed"
+			}
+
+			wait, err := waitDuration(step.WaitSeconds)
+			if err != nil {
+				runFailed = true
+				slog.Error("invalid wait step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+				continue
+			}
+			if wait > 0 {
+				slog.Info("waiting before step", "hostname", hostname, "ip", ip, "step", stepName, "duration", wait)
+				time.Sleep(wait)
+			}
+
+			if step.SSHProbe != nil {
+				probe, err := resolveSSHProbeConfig(step.SSHProbe)
+				if err != nil {
+					runFailed = true
+					stopDeviceSteps = true
+					slog.Error("invalid SSH probe step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					break
+				}
+
+				if err := closeSSHClient(client); err != nil {
+					slog.Warn("error closing stale SSH connection before probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+				}
+				client = nil
+
+				slog.Info("probing SSH port", "hostname", hostname, "ip", ip, "step", stepName)
+				if err := waitForSSHPort(ip, step.SSHProbe); err != nil {
+					runFailed = true
+					stopDeviceSteps = true
+					slog.Error("SSH probe failed", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					break
+				}
+
+				if probe.PostWait > 0 {
+					slog.Info("waiting after successful SSH probe", "hostname", hostname, "ip", ip, "step", stepName, "duration", probe.PostWait)
+					time.Sleep(probe.PostWait)
+				}
+
+				client = ssh.NewClient(opts...)
+				if err := client.Connect(ip, username, password, deviceType); err != nil {
+					runFailed = true
+					stopDeviceSteps = true
+					slog.Error("error reconnecting to SSH device after probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					break
+				}
 			}
 
 			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
@@ -200,6 +356,9 @@ func main() {
 				continue
 			}
 			if cmd == "" {
+				if wait > 0 || step.SSHProbe != nil {
+					continue
+				}
 				runFailed = true
 				slog.Warn("skipping empty step", "hostname", hostname, "ip", ip, "step", stepName)
 				continue
@@ -212,6 +371,14 @@ func main() {
 
 				output, err := client.Execute(cmd)
 				if err != nil {
+					if !shouldReturnToPrompt(step.ReturnToPrompt) {
+						slog.Info("step did not return to prompt as configured", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+						if err := closeSSHClient(client); err != nil {
+							slog.Warn("error closing SSH connection after no-prompt step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+						}
+						client = nil
+						break
+					}
 					runFailed = true
 					slog.Error("error executing step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
 					break
@@ -295,6 +462,9 @@ func main() {
 			if step.Validation != nil {
 				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
 			}
+		}
+		if stopDeviceSteps {
+			slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
 		}
 
 		if err := client.Close(); err != nil {

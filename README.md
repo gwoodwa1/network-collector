@@ -221,6 +221,22 @@ ssh:
           expected_type: int
         register: install_id
 
+      - name: wait-for-install-state
+        wait_seconds: 30
+
+      - name: confirm-reload
+        cmd: yes
+        return_to_prompt: no
+
+      - name: wait-for-reboot
+        wait_seconds: 600
+        ssh_probe:
+          port: 22
+          interval_seconds: 30
+          max_attempts: 40
+          timeout_seconds: 5
+          post_wait_seconds: 120
+
       - name: show-install-by-id
         cmd: 'show install active {{install_id}}'
         retry:
@@ -236,6 +252,12 @@ ssh:
 ```
 
 The retry step keeps rerunning the command until validation passes, with the configured interval and attempt limit.
+
+Use `wait_seconds` on a step to pause while keeping the SSH connection open. A wait-only step does not require `cmd`; if both `wait_seconds` and `cmd` are set, the collector waits first and then runs the command.
+
+Use `ssh_probe` after software upgrades or reloads. The collector closes the stale SSH session, probes the configured TCP port until it responds, waits `post_wait_seconds` after the first successful probe, reconnects SSH, and then continues with the following steps. This helps cover the gap where port 22 is accepting connections but the device is still booting.
+
+Use `return_to_prompt: no` for commands that intentionally reboot or disconnect the device before a normal CLI prompt can return, such as a `yes` confirmation. Timeout/error from that command is treated as expected, the stale SSH client is closed, and the next wait/probe step can handle reconnecting.
 
 You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
 
