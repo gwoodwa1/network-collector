@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scrapli/scrapligo/driver/network"
 	"github.com/scrapli/scrapligo/driver/options"
 	"github.com/scrapli/scrapligo/platform"
 )
@@ -16,6 +17,7 @@ type Client struct {
 	driverName    string
 	host          string
 	platform      *platform.Platform
+	network       *network.Driver
 	channelLog    io.Writer
 	socketTimeout time.Duration
 	opsTimeout    time.Duration
@@ -96,12 +98,12 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 		return err
 	}
 
-	c.driverName = strings.TrimSpace(driverName)
-	c.host = strings.TrimSpace(host)
+	trimmedDriverName := strings.TrimSpace(driverName)
+	trimmedHost := strings.TrimSpace(host)
 
 	platformConfig, err := platform.NewPlatform(
-		c.driverName,
-		c.host,
+		trimmedDriverName,
+		trimmedHost,
 		options.WithAuthNoStrictKey(),
 		options.WithAuthUsername(username),
 		options.WithAuthPassword(password),
@@ -124,7 +126,19 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 		return fmt.Errorf("failed to create platform: %w", err)
 	}
 
+	driver, err := platformConfig.GetNetworkDriver()
+	if err != nil {
+		return fmt.Errorf("failed to get network driver: %w", err)
+	}
+
+	if err := driver.Open(); err != nil {
+		return fmt.Errorf("failed to open driver: %w", err)
+	}
+
+	c.driverName = trimmedDriverName
+	c.host = trimmedHost
 	c.platform = platformConfig
+	c.network = driver
 	return nil
 }
 
@@ -132,7 +146,7 @@ func (c *Client) Execute(cmd string) (string, error) {
 	if c == nil {
 		return "", errors.New("ssh client is nil")
 	}
-	if c.platform == nil {
+	if c.network == nil {
 		return "", errors.New("ssh client is not connected")
 	}
 	cmd = strings.TrimSpace(cmd)
@@ -140,16 +154,7 @@ func (c *Client) Execute(cmd string) (string, error) {
 		return "", errors.New("command is required")
 	}
 
-	driver, err := c.platform.GetNetworkDriver()
-	if err != nil {
-		return "", fmt.Errorf("failed to get network driver: %w", err)
-	}
-
-	if err := driver.Open(); err != nil {
-		return "", fmt.Errorf("failed to open driver: %w", err)
-	}
-
-	output, err := driver.Channel.SendInput(cmd)
+	output, err := c.network.Channel.SendInput(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to send input command: %w", err)
 	}
@@ -158,18 +163,15 @@ func (c *Client) Execute(cmd string) (string, error) {
 }
 
 func (c *Client) Close() error {
-	if c == nil || c.platform == nil {
+	if c == nil || c.network == nil {
 		return nil
 	}
 
-	driver, err := c.platform.GetNetworkDriver()
-	if err != nil {
-		return fmt.Errorf("failed to get network driver while closing: %w", err)
-	}
-
-	if err := driver.Close(); err != nil {
+	if err := c.network.Close(); err != nil {
 		return fmt.Errorf("failed to close network driver: %w", err)
 	}
 
+	c.network = nil
+	c.platform = nil
 	return nil
 }
