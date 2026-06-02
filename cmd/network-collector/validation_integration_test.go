@@ -200,6 +200,43 @@ func TestDeviceConfigOperationTimeoutDecode(t *testing.T) {
 	}
 }
 
+func TestConfigYAMLDecodeWithSSHProbe(t *testing.T) {
+	input := `
+name_playbook: Software Upgrade on Cisco IOS
+ssh:
+  - hostname: router-01
+    ip: 192.0.2.1
+    type: cisco_ios
+    steps:
+      - name: wait-for-reboot
+        wait_seconds: 600
+        ssh_probe:
+          port: 22
+          interval_seconds: 30
+          max_attempts: 40
+          timeout_seconds: 5
+          post_wait_seconds: 120
+`
+
+	var config Config
+	if err := yaml.Unmarshal([]byte(input), &config); err != nil {
+		t.Fatalf("failed to decode config with ssh_probe: %v", err)
+	}
+	if config.NamePlaybook != "Software Upgrade on Cisco IOS" {
+		t.Fatalf("unexpected playbook name: %q", config.NamePlaybook)
+	}
+	if len(config.SSH) != 1 || len(config.SSH[0].Steps) != 1 {
+		t.Fatalf("unexpected SSH step shape: %+v", config.SSH)
+	}
+	probe := config.SSH[0].Steps[0].SSHProbe
+	if probe == nil {
+		t.Fatal("expected ssh_probe to decode")
+	}
+	if probe.Port != 22 || probe.IntervalSeconds != 30 || probe.MaxAttempts != 40 || probe.TimeoutSeconds != 5 || probe.PostWaitSeconds != 120 {
+		t.Fatalf("unexpected ssh_probe config: %+v", probe)
+	}
+}
+
 func TestSessionLogFormatting(t *testing.T) {
 	if got := sanitizeLogName("router 01/lab"); got != "router_01_lab" {
 		t.Fatalf("unexpected sanitized log name: %q", got)

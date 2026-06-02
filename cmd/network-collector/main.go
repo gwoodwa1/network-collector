@@ -19,53 +19,53 @@ import (
 )
 
 type RetryConfig struct {
-	IntervalSeconds int  `mapstructure:"interval_seconds"`
-	MaxAttempts     int  `mapstructure:"max_attempts"`
-	UntilPass       bool `mapstructure:"until_pass"`
+	IntervalSeconds int  `mapstructure:"interval_seconds" yaml:"interval_seconds"`
+	MaxAttempts     int  `mapstructure:"max_attempts" yaml:"max_attempts"`
+	UntilPass       bool `mapstructure:"until_pass" yaml:"until_pass"`
 }
 
 type SSHProbeConfig struct {
-	Port            int `mapstructure:"port"`
-	IntervalSeconds int `mapstructure:"interval_seconds"`
-	MaxAttempts     int `mapstructure:"max_attempts"`
-	TimeoutSeconds  int `mapstructure:"timeout_seconds"`
-	PostWaitSeconds int `mapstructure:"post_wait_seconds"`
+	Port            int `mapstructure:"port" yaml:"port"`
+	IntervalSeconds int `mapstructure:"interval_seconds" yaml:"interval_seconds"`
+	MaxAttempts     int `mapstructure:"max_attempts" yaml:"max_attempts"`
+	TimeoutSeconds  int `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	PostWaitSeconds int `mapstructure:"post_wait_seconds" yaml:"post_wait_seconds"`
 }
 
 type StepConfig struct {
-	Name           string            `mapstructure:"name"`
-	Command        string            `mapstructure:"cmd"`
-	WaitSeconds    int               `mapstructure:"wait_seconds"`
-	ReturnToPrompt *bool             `mapstructure:"return_to_prompt"`
-	SSHProbe       *SSHProbeConfig   `mapstructure:"ssh_probe"`
-	Validation     *ValidationConfig `mapstructure:"validation"`
-	Retry          *RetryConfig      `mapstructure:"retry"`
-	Register       string            `mapstructure:"register"`
+	Name           string            `mapstructure:"name" yaml:"name"`
+	Command        string            `mapstructure:"cmd" yaml:"cmd"`
+	WaitSeconds    int               `mapstructure:"wait_seconds" yaml:"wait_seconds"`
+	ReturnToPrompt *bool             `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
+	SSHProbe       *SSHProbeConfig   `mapstructure:"ssh_probe" yaml:"ssh_probe"`
+	Validation     *ValidationConfig `mapstructure:"validation" yaml:"validation"`
+	Retry          *RetryConfig      `mapstructure:"retry" yaml:"retry"`
+	Register       string            `mapstructure:"register" yaml:"register"`
 }
 
 type DeviceConfig struct {
-	Hostname         string            `mapstructure:"hostname"`
-	IP               string            `mapstructure:"ip"`
-	Type             string            `mapstructure:"type"`
-	Timeout          int               `mapstructure:"timeout"`
-	OperationTimeout int               `mapstructure:"operation_timeout"`
-	Steps            []StepConfig      `mapstructure:"steps"`
-	Command          string            `mapstructure:"cmd"`
-	Validation       *ValidationConfig `mapstructure:"validation"`
+	Hostname         string            `mapstructure:"hostname" yaml:"hostname"`
+	IP               string            `mapstructure:"ip" yaml:"ip"`
+	Type             string            `mapstructure:"type" yaml:"type"`
+	Timeout          int               `mapstructure:"timeout" yaml:"timeout"`
+	OperationTimeout int               `mapstructure:"operation_timeout" yaml:"operation_timeout"`
+	Steps            []StepConfig      `mapstructure:"steps" yaml:"steps"`
+	Command          string            `mapstructure:"cmd" yaml:"cmd"`
+	Validation       *ValidationConfig `mapstructure:"validation" yaml:"validation"`
 }
 
 type ValidationConfig struct {
-	Extractor    string      `mapstructure:"extractor"`
-	Pattern      string      `mapstructure:"pattern"`
-	JSONPath     string      `mapstructure:"json_path"`
-	Condition    string      `mapstructure:"condition"`
-	Expected     interface{} `mapstructure:"expected"`
-	ExpectedType string      `mapstructure:"expected_type"`
+	Extractor    string      `mapstructure:"extractor" yaml:"extractor"`
+	Pattern      string      `mapstructure:"pattern" yaml:"pattern"`
+	JSONPath     string      `mapstructure:"json_path" yaml:"json_path"`
+	Condition    string      `mapstructure:"condition" yaml:"condition"`
+	Expected     interface{} `mapstructure:"expected" yaml:"expected"`
+	ExpectedType string      `mapstructure:"expected_type" yaml:"expected_type"`
 }
 
 type Config struct {
-	NamePlaybook string         `mapstructure:"name_playbook"`
-	SSH          []DeviceConfig `mapstructure:"ssh"`
+	NamePlaybook string         `mapstructure:"name_playbook" yaml:"name_playbook"`
+	SSH          []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
