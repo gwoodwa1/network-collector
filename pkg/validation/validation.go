@@ -54,6 +54,9 @@ func ValidateOutput(output string, rule ValidationRule) (ValidationResult, error
 
 	extracted, ok, err := extractValue(output, rule, &res)
 	if err != nil || !ok {
+		if err == nil && absenceSatisfiesCondition(rule, &res) {
+			return res, nil
+		}
 		return res, err
 	}
 
@@ -174,6 +177,18 @@ func compareValue(val interface{}, rule ValidationRule, res *ValidationResult) {
 		res.Err = fmt.Sprintf("unsupported condition: %s", rule.Condition)
 		res.Message = res.Err
 	}
+}
+
+func absenceSatisfiesCondition(rule ValidationRule, res *ValidationResult) bool {
+	if !strings.EqualFold(rule.Condition, "not_contains") {
+		return false
+	}
+
+	res.Pass = true
+	res.Status = "pass"
+	res.Message = "value does not contain expected"
+	res.Value = ""
+	return true
 }
 
 func compareEquality(val interface{}, rule ValidationRule, res *ValidationResult) {

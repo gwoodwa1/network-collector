@@ -138,6 +138,47 @@ func TestNotContains(t *testing.T) {
 	}
 }
 
+func TestRegexNotContainsPassesWhenPatternNotFound(t *testing.T) {
+	out := "CURRENT CURRENT CURRENT"
+	rule := ValidationRule{
+		Extractor:    "regex",
+		Pattern:      `NEED UPGD`,
+		Condition:    "not_contains",
+		Expected:     "NEED UPGD",
+		ExpectedType: "string",
+	}
+
+	res, err := ValidateOutput(out, rule)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("expected pass when NEED UPGD is absent, got: %+v", res)
+	}
+	if res.Status != "pass" {
+		t.Fatalf("expected pass status, got %q", res.Status)
+	}
+}
+
+func TestGJSONNotContainsPassesWhenPathNotFound(t *testing.T) {
+	out := `{"state":"CURRENT"}`
+	rule := ValidationRule{
+		Extractor:    "gjson",
+		JSONPath:     "upgrade.status",
+		Condition:    "not_contains",
+		Expected:     "NEED UPGD",
+		ExpectedType: "string",
+	}
+
+	res, err := ValidateOutput(out, rule)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("expected pass when json path is absent, got: %+v", res)
+	}
+}
+
 func TestGreaterThanOrEqual(t *testing.T) {
 	out := "Total routes: 100"
 	rule := ValidationRule{
