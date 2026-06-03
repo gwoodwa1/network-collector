@@ -271,10 +271,21 @@ Validation steps can also run conditional actions after the final validation res
           action: exit
           message: target image is already active; stopping this device
         on_fail:
-          cmd: show install summary
+          message: target image is not active; running upgrade path
+          steps:
+            - name: collect-install-state
+              cmd: show install summary
+              validation:
+                extractor: regex
+                pattern: 'State:\s+(\S+)'
+                condition: eq
+                expected: READY
+                expected_type: string
+            - name: perform-upgrade
+              cmd: install add file flash:iosxe-17.09.04.bin activate commit
 ```
 
-Use `on_pass` or `on_fail` on a step with `validation`. Supported actions are `exit`/`stop` to stop the remaining steps for the current device without failing, `fail` to stop and mark the run failed, and `cmd` to run another SSH command. If an action contains only `cmd`, `action: cmd` is implied. Action `message` and `cmd` values support registered variables such as `{{install_id}}`.
+Use `on_pass` or `on_fail` on a step with `validation`. Supported actions are `exit`/`stop` to stop the remaining steps for the current device without failing, `fail` to stop and mark the run failed, `cmd` to run another SSH command, `steps` to run a nested list of normal SSH steps, and `none`/`noop` to take no control-flow action. If an action block contains only `message`, the collector logs the message and continues. If it contains only `cmd`, `action: cmd` is implied. If it contains only `steps`, `action: steps` is implied. Nested steps support the same fields as top-level steps, including `validation`, `retry`, `register`, `ssh_probe`, `return_to_prompt`, and their own `on_pass` / `on_fail` actions. Action `message` and `cmd` values support registered variables such as `{{install_id}}`.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 

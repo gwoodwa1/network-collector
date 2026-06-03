@@ -224,7 +224,13 @@ func TestValidationActionSelectionAndExit(t *testing.T) {
 	}
 
 	var log bytes.Buffer
-	outcome, err := executeValidationAction(nil, passAction, map[string]string{}, &log, true, "router-01", "check-version")
+	ctx := stepExecutionContext{
+		hostname:   "router-01",
+		jsonOut:    true,
+		sessionLog: &log,
+		variables:  map[string]string{},
+	}
+	outcome, err := executeValidationAction(&ctx, nil, passAction, "check-version")
 	if err != nil {
 		t.Fatalf("executeValidationAction returned error: %v", err)
 	}
@@ -233,6 +239,43 @@ func TestValidationActionSelectionAndExit(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "already upgraded") {
 		t.Fatalf("expected action message in log, got %q", log.String())
+	}
+}
+
+func TestValidationActionMessageOnlyContinues(t *testing.T) {
+	action := &ValidationActionConfig{Message: "already checked {{image}}"}
+	var log bytes.Buffer
+	ctx := stepExecutionContext{
+		hostname:   "router-01",
+		jsonOut:    true,
+		sessionLog: &log,
+		variables:  map[string]string{"image": "17.9.4"},
+	}
+
+	outcome, err := executeValidationAction(&ctx, nil, action, "check-version")
+	if err != nil {
+		t.Fatalf("executeValidationAction returned error: %v", err)
+	}
+	if outcome.StopDevice || outcome.RunFailed {
+		t.Fatalf("unexpected action outcome: %+v", outcome)
+	}
+	if !strings.Contains(log.String(), "already checked 17.9.4") {
+		t.Fatalf("expected action message in log, got %q", log.String())
+	}
+}
+
+func TestValidationActionNoopContinues(t *testing.T) {
+	ctx := stepExecutionContext{
+		hostname:  "router-01",
+		jsonOut:   true,
+		variables: map[string]string{},
+	}
+	outcome, err := executeValidationAction(&ctx, nil, &ValidationActionConfig{Action: "noop"}, "check-version")
+	if err != nil {
+		t.Fatalf("executeValidationAction returned error: %v", err)
+	}
+	if outcome.StopDevice || outcome.RunFailed {
+		t.Fatalf("unexpected action outcome: %+v", outcome)
 	}
 }
 
@@ -247,18 +290,79 @@ validation:
   expected: 17.9.4
   expected_type: string
 on_pass:
-  action: exit
   message: already running requested image
 on_fail:
-  cmd: show install summary
+  action: none
+  message: target image not active; continuing upgrade flow
 `
 
 	var step StepConfig
 	if err := yaml.Unmarshal([]byte(input), &step); err != nil {
 		t.Fatalf("failed to decode step with validation actions: %v", err)
 	}
-	if step.OnPass == nil || step.OnPass.Action != "exit" {
+	if step.OnPass == nil || step.OnPass.Message != "already running requested image" {
 		t.Fatalf("unexpected on_pass action: %+v", step.OnPass)
+	}
+	if step.OnFail == nil || step.OnFail.Action != "none" {
+		t.Fatalf("unexpected on_fail action: %+v", step.OnFail)
+	}
+}
+
+func TestStepDecodeWithNestedValidationActionSteps(t *testing.T) {
+	input := `
+name: check-current-version
+cmd: show version
+validation:
+  extractor: regex
+  pattern: 'Version\s+(\S+)'
+  condition: eq
+  expected: 17.9.4
+  expected_type: string
+on_fail:
+  message: running upgrade path
+  steps:
+    - name: collect-install-state
+      cmd: show install summary
+      validation:
+        extractor: regex
+        pattern: 'State:\s+(\S+)'
+        condition: eq
+        expected: READY
+        expected_type: string
+    - name: perform-upgrade
+      cmd: install add file flash:image.bin activate commit
+`
+
+	var step StepConfig
+	if err := yaml.Unmarshal([]byte(input), &step); err != nil {
+		t.Fatalf("failed to decode step with nested validation action steps: %v", err)
+	}
+	if step.OnFail == nil || len(step.OnFail.Steps) != 2 {
+		t.Fatalf("expected two nested on_fail steps, got %+v", step.OnFail)
+	}
+	nested := step.OnFail.Steps[0]
+	if nested.Name != "collect-install-state" || nested.Validation == nil {
+		t.Fatalf("unexpected nested validation step: %+v", nested)
+	}
+}
+
+func TestStepDecodeWithCommandAction(t *testing.T) {
+	input := `
+name: check-current-version
+cmd: show version
+validation:
+  extractor: regex
+  pattern: 'Version\s+(\S+)'
+  condition: eq
+  expected: 17.9.4
+  expected_type: string
+on_fail:
+  cmd: show install summary
+`
+
+	var step StepConfig
+	if err := yaml.Unmarshal([]byte(input), &step); err != nil {
+		t.Fatalf("failed to decode step with command action: %v", err)
 	}
 	if step.OnFail == nil || step.OnFail.Command != "show install summary" {
 		t.Fatalf("unexpected on_fail action: %+v", step.OnFail)

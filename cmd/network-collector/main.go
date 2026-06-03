@@ -35,9 +35,10 @@ type SSHProbeConfig struct {
 }
 
 type ValidationActionConfig struct {
-	Action  string `mapstructure:"action" yaml:"action"`
-	Command string `mapstructure:"cmd" yaml:"cmd"`
-	Message string `mapstructure:"message" yaml:"message"`
+	Action  string       `mapstructure:"action" yaml:"action"`
+	Command string       `mapstructure:"cmd" yaml:"cmd"`
+	Message string       `mapstructure:"message" yaml:"message"`
+	Steps   []StepConfig `mapstructure:"steps" yaml:"steps"`
 }
 
 type StepConfig struct {
@@ -76,6 +77,26 @@ type ValidationConfig struct {
 type Config struct {
 	NamePlaybook string         `mapstructure:"name_playbook" yaml:"name_playbook"`
 	SSH          []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
+}
+
+type deviceValidation struct {
+	Hostname string                      `json:"hostname"`
+	IP       string                      `json:"ip"`
+	Result   validation.ValidationResult `json:"result"`
+}
+
+type stepExecutionContext struct {
+	hostname   string
+	ip         string
+	deviceType string
+	username   string
+	password   string
+	opts       []ssh.Option
+	jsonOut    bool
+	sessionLog io.Writer
+	variables  map[string]string
+	aggregated *[]deviceValidation
+	runFailed  *bool
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -247,19 +268,19 @@ type validationActionOutcome struct {
 	RunFailed  bool
 }
 
-func executeValidationAction(client *ssh.Client, action *ValidationActionConfig, vars map[string]string, writer io.Writer, jsonOut bool, hostname, stepName string) (validationActionOutcome, error) {
+func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, action *ValidationActionConfig, stepName string) (validationActionOutcome, error) {
 	if action == nil {
 		return validationActionOutcome{}, nil
 	}
 
 	if strings.TrimSpace(action.Message) != "" {
-		message, err := renderTemplate(action.Message, vars)
+		message, err := renderTemplate(action.Message, ctx.variables)
 		if err != nil {
 			return validationActionOutcome{}, fmt.Errorf("error rendering action message: %w", err)
 		}
-		writeSessionf(writer, "[step:%s] action: %s\n", stepName, message)
-		if !jsonOut {
-			fmt.Printf("device=%s step=%s action=%q\n", hostname, stepName, message)
+		writeSessionf(ctx.sessionLog, "[step:%s] action: %s\n", stepName, message)
+		if !ctx.jsonOut {
+			fmt.Printf("device=%s step=%s action=%q\n", ctx.hostname, stepName, message)
 		}
 	}
 
@@ -267,38 +288,261 @@ func executeValidationAction(client *ssh.Client, action *ValidationActionConfig,
 	if actionName == "" && strings.TrimSpace(action.Command) != "" {
 		actionName = "cmd"
 	}
+	if actionName == "" && len(action.Steps) > 0 {
+		actionName = "steps"
+	}
 
 	switch actionName {
+	case "", "none", "noop", "no_op":
+		return validationActionOutcome{}, nil
 	case "exit", "stop":
 		return validationActionOutcome{StopDevice: true}, nil
 	case "fail":
 		return validationActionOutcome{StopDevice: true, RunFailed: true}, nil
 	case "cmd", "command", "run":
-		if client == nil {
+		if client == nil || *client == nil {
 			return validationActionOutcome{}, fmt.Errorf("cannot run validation action command without an active SSH session")
 		}
-		cmd, err := renderTemplate(strings.TrimSpace(action.Command), vars)
+		cmd, err := renderTemplate(strings.TrimSpace(action.Command), ctx.variables)
 		if err != nil {
 			return validationActionOutcome{}, fmt.Errorf("error rendering action command: %w", err)
 		}
 		if cmd == "" {
 			return validationActionOutcome{}, fmt.Errorf("validation action command cannot be empty")
 		}
-		output, err := client.Execute(cmd)
+		output, err := (*client).Execute(cmd)
 		if err != nil {
 			return validationActionOutcome{}, err
 		}
-		writeSessionf(writer, "\n[step:%s] action command=%q\n%s\n", stepName, cmd, output)
-		if !jsonOut {
-			fmt.Printf("device=%s step=%s action_command=%q\n%s\n", hostname, stepName, cmd, output)
+		writeSessionf(ctx.sessionLog, "\n[step:%s] action command=%q\n%s\n", stepName, cmd, output)
+		if !ctx.jsonOut {
+			fmt.Printf("device=%s step=%s action_command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
+		}
+		if len(action.Steps) == 0 {
+			return validationActionOutcome{}, nil
+		}
+		fallthrough
+	case "steps":
+		if len(action.Steps) == 0 {
+			return validationActionOutcome{}, nil
+		}
+		if executeSteps(ctx, client, action.Steps) {
+			return validationActionOutcome{StopDevice: true}, nil
 		}
 		return validationActionOutcome{}, nil
 	default:
-		if actionName == "" {
-			return validationActionOutcome{}, fmt.Errorf("validation action requires action or cmd")
-		}
 		return validationActionOutcome{}, fmt.Errorf("unsupported validation action: %s", action.Action)
 	}
+}
+
+func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepConfig) bool {
+	stopDeviceSteps := false
+	for _, step := range steps {
+		stepName := strings.TrimSpace(step.Name)
+		if stepName == "" {
+			stepName = "unnamed"
+		}
+
+		wait, err := waitDuration(step.WaitSeconds)
+		if err != nil {
+			*ctx.runFailed = true
+			slog.Error("invalid wait step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			continue
+		}
+		if wait > 0 {
+			slog.Info("waiting before step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "duration", wait)
+			writeSessionf(ctx.sessionLog, "\n[step:%s] waiting %s\n", stepName, wait)
+			time.Sleep(wait)
+		}
+
+		if step.SSHProbe != nil {
+			probe, err := resolveSSHProbeConfig(step.SSHProbe)
+			if err != nil {
+				*ctx.runFailed = true
+				stopDeviceSteps = true
+				slog.Error("invalid SSH probe step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				break
+			}
+
+			if err := closeSSHClient(*client); err != nil {
+				slog.Warn("error closing stale SSH connection before probe", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "[step:%s] warning: failed to close stale SSH connection before probe: %v\n", stepName, err)
+			}
+			*client = nil
+
+			slog.Info("probing SSH port", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
+			writeSessionf(ctx.sessionLog, "\n[step:%s] probing SSH port on %s\n", stepName, ctx.ip)
+			if err := waitForSSHPort(ctx.ip, step.SSHProbe); err != nil {
+				*ctx.runFailed = true
+				stopDeviceSteps = true
+				slog.Error("SSH probe failed", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "[step:%s] SSH probe failed: %v\n", stepName, err)
+				break
+			}
+			writeSessionf(ctx.sessionLog, "[step:%s] SSH probe succeeded\n", stepName)
+
+			if probe.PostWait > 0 {
+				slog.Info("waiting after successful SSH probe", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "duration", probe.PostWait)
+				writeSessionf(ctx.sessionLog, "[step:%s] waiting %s after successful SSH probe\n", stepName, probe.PostWait)
+				time.Sleep(probe.PostWait)
+			}
+
+			*client = ssh.NewClient(ctx.opts...)
+			if err := (*client).Connect(ctx.ip, ctx.username, ctx.password, ctx.deviceType); err != nil {
+				*ctx.runFailed = true
+				stopDeviceSteps = true
+				slog.Error("error reconnecting to SSH device after probe", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "[step:%s] failed to reconnect after SSH probe: %v\n", stepName, err)
+				break
+			}
+			writeSessionf(ctx.sessionLog, "[step:%s] SSH session re-established\n", stepName)
+		}
+
+		cmd, err := renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
+		if err != nil {
+			*ctx.runFailed = true
+			slog.Error("error rendering command", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			continue
+		}
+		if cmd == "" {
+			if wait > 0 || step.SSHProbe != nil {
+				continue
+			}
+			*ctx.runFailed = true
+			slog.Warn("skipping empty step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
+			continue
+		}
+
+		var finalResult validation.ValidationResult
+		attempt := 0
+		for {
+			attempt++
+
+			if client == nil || *client == nil {
+				*ctx.runFailed = true
+				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
+				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
+				break
+			}
+
+			output, err := (*client).Execute(cmd)
+			if err != nil {
+				if !shouldReturnToPrompt(step.ReturnToPrompt) {
+					slog.Info("step did not return to prompt as configured", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+					writeSessionf(ctx.sessionLog, "\n[step:%s] command did not return to prompt as configured: %v\n", stepName, err)
+					if err := closeSSHClient(*client); err != nil {
+						slog.Warn("error closing SSH connection after no-prompt step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+						writeSessionf(ctx.sessionLog, "[step:%s] warning: failed to close SSH connection after no-prompt step: %v\n", stepName, err)
+					}
+					*client = nil
+					break
+				}
+				*ctx.runFailed = true
+				slog.Error("error executing step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n", stepName, err)
+				break
+			}
+
+			writeSessionf(ctx.sessionLog, "\n[step:%s] device=%s command=%q\n%s\n", stepName, ctx.hostname, cmd, output)
+			if !ctx.jsonOut {
+				fmt.Printf("device=%s step=%s command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
+			}
+
+			if step.Validation == nil {
+				break
+			}
+
+			pattern, err := renderTemplate(step.Validation.Pattern, ctx.variables)
+			if err != nil {
+				*ctx.runFailed = true
+				slog.Error("error rendering validation pattern", "hostname", ctx.hostname, "step", stepName, "error", err)
+				break
+			}
+
+			jsonPath, err := renderTemplate(step.Validation.JSONPath, ctx.variables)
+			if err != nil {
+				*ctx.runFailed = true
+				slog.Error("error rendering validation json_path", "hostname", ctx.hostname, "step", stepName, "error", err)
+				break
+			}
+
+			expected, err := renderExpectedValue(step.Validation.Expected, ctx.variables)
+			if err != nil {
+				*ctx.runFailed = true
+				slog.Error("error rendering validation expected value", "hostname", ctx.hostname, "step", stepName, "error", err)
+				break
+			}
+
+			rule := validation.ValidationRule{
+				Extractor:    step.Validation.Extractor,
+				Pattern:      pattern,
+				JSONPath:     jsonPath,
+				Condition:    step.Validation.Condition,
+				Expected:     expected,
+				ExpectedType: step.Validation.ExpectedType,
+			}
+
+			vres, verr := validation.ValidateOutput(output, rule)
+			if verr != nil {
+				*ctx.runFailed = true
+				slog.Error("validation error", "hostname", ctx.hostname, "step", stepName, "error", verr)
+			}
+
+			finalResult = vres
+
+			if !ctx.jsonOut {
+				jb, _ := json.MarshalIndent(vres, "", "  ")
+				fmt.Printf("validation result for %s step=%s:\n%s\n", ctx.hostname, stepName, string(jb))
+			}
+			jb, _ := json.MarshalIndent(vres, "", "  ")
+			writeSessionf(ctx.sessionLog, "[step:%s] validation result:\n%s\n", stepName, string(jb))
+
+			if step.Register != "" && vres.RawExtract != "" {
+				ctx.variables[step.Register] = vres.RawExtract
+				slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
+			}
+
+			retryCfg := step.Retry
+			if retryCfg != nil && retryCfg.UntilPass && finalResult.Status == "fail" {
+				if retryCfg.MaxAttempts > 0 && attempt >= retryCfg.MaxAttempts {
+					slog.Warn("step reached max attempts", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "max_attempts", retryCfg.MaxAttempts)
+					break
+				}
+
+				interval := time.Duration(retryCfg.IntervalSeconds) * time.Second
+				if interval <= 0 {
+					interval = 60 * time.Second
+				}
+				slog.Info("retrying step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "interval", interval, "attempt", attempt+1)
+				time.Sleep(interval)
+				continue
+			}
+
+			break
+		}
+
+		if step.Validation != nil {
+			*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: finalResult})
+
+			action := validationActionForResult(step, finalResult)
+			outcome, err := executeValidationAction(ctx, client, action, stepName)
+			if err != nil {
+				*ctx.runFailed = true
+				slog.Error("validation action failed", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "[step:%s] validation action failed: %v\n", stepName, err)
+				break
+			}
+			if outcome.RunFailed {
+				*ctx.runFailed = true
+			}
+			if outcome.StopDevice {
+				stopDeviceSteps = true
+				slog.Info("stopping remaining SSH steps after validation action", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
+				break
+			}
+		}
+	}
+	return stopDeviceSteps
 }
 
 func sanitizeLogName(value string) string {
@@ -443,12 +687,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	type deviceValidation struct {
-		Hostname string                      `json:"hostname"`
-		IP       string                      `json:"ip"`
-		Result   validation.ValidationResult `json:"result"`
-	}
-
 	var aggregated []deviceValidation
 	runFailed := false
 
@@ -503,206 +741,20 @@ func main() {
 			continue
 		}
 
-		variables := map[string]string{}
-		stopDeviceSteps := false
-		for _, step := range steps {
-			stepName := strings.TrimSpace(step.Name)
-			if stepName == "" {
-				stepName = "unnamed"
-			}
-
-			wait, err := waitDuration(step.WaitSeconds)
-			if err != nil {
-				runFailed = true
-				slog.Error("invalid wait step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-				continue
-			}
-			if wait > 0 {
-				slog.Info("waiting before step", "hostname", hostname, "ip", ip, "step", stepName, "duration", wait)
-				writeSessionf(sessionLog, "\n[step:%s] waiting %s\n", stepName, wait)
-				time.Sleep(wait)
-			}
-
-			if step.SSHProbe != nil {
-				probe, err := resolveSSHProbeConfig(step.SSHProbe)
-				if err != nil {
-					runFailed = true
-					stopDeviceSteps = true
-					slog.Error("invalid SSH probe step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					break
-				}
-
-				if err := closeSSHClient(client); err != nil {
-					slog.Warn("error closing stale SSH connection before probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					writeSessionf(sessionLog, "[step:%s] warning: failed to close stale SSH connection before probe: %v\n", stepName, err)
-				}
-				client = nil
-
-				slog.Info("probing SSH port", "hostname", hostname, "ip", ip, "step", stepName)
-				writeSessionf(sessionLog, "\n[step:%s] probing SSH port on %s\n", stepName, ip)
-				if err := waitForSSHPort(ip, step.SSHProbe); err != nil {
-					runFailed = true
-					stopDeviceSteps = true
-					slog.Error("SSH probe failed", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					writeSessionf(sessionLog, "[step:%s] SSH probe failed: %v\n", stepName, err)
-					break
-				}
-				writeSessionf(sessionLog, "[step:%s] SSH probe succeeded\n", stepName)
-
-				if probe.PostWait > 0 {
-					slog.Info("waiting after successful SSH probe", "hostname", hostname, "ip", ip, "step", stepName, "duration", probe.PostWait)
-					writeSessionf(sessionLog, "[step:%s] waiting %s after successful SSH probe\n", stepName, probe.PostWait)
-					time.Sleep(probe.PostWait)
-				}
-
-				client = ssh.NewClient(opts...)
-				if err := client.Connect(ip, username, password, deviceType); err != nil {
-					runFailed = true
-					stopDeviceSteps = true
-					slog.Error("error reconnecting to SSH device after probe", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					writeSessionf(sessionLog, "[step:%s] failed to reconnect after SSH probe: %v\n", stepName, err)
-					break
-				}
-				writeSessionf(sessionLog, "[step:%s] SSH session re-established\n", stepName)
-			}
-
-			cmd, err := renderTemplate(strings.TrimSpace(step.Command), variables)
-			if err != nil {
-				runFailed = true
-				slog.Error("error rendering command", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-				continue
-			}
-			if cmd == "" {
-				if wait > 0 || step.SSHProbe != nil {
-					continue
-				}
-				runFailed = true
-				slog.Warn("skipping empty step", "hostname", hostname, "ip", ip, "step", stepName)
-				continue
-			}
-
-			var finalResult validation.ValidationResult
-			attempt := 0
-			for {
-				attempt++
-
-				output, err := client.Execute(cmd)
-				if err != nil {
-					if !shouldReturnToPrompt(step.ReturnToPrompt) {
-						slog.Info("step did not return to prompt as configured", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-						writeSessionf(sessionLog, "\n[step:%s] command did not return to prompt as configured: %v\n", stepName, err)
-						if err := closeSSHClient(client); err != nil {
-							slog.Warn("error closing SSH connection after no-prompt step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-							writeSessionf(sessionLog, "[step:%s] warning: failed to close SSH connection after no-prompt step: %v\n", stepName, err)
-						}
-						client = nil
-						break
-					}
-					runFailed = true
-					slog.Error("error executing step", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					writeSessionf(sessionLog, "\n[step:%s] command error: %v\n", stepName, err)
-					break
-				}
-
-				writeSessionf(sessionLog, "\n[step:%s] device=%s command=%q\n%s\n", stepName, hostname, cmd, output)
-				if !jsonOut {
-					fmt.Printf("device=%s step=%s command=%q\n%s\n", hostname, stepName, cmd, output)
-				}
-
-				if step.Validation == nil {
-					break
-				}
-
-				pattern, err := renderTemplate(step.Validation.Pattern, variables)
-				if err != nil {
-					runFailed = true
-					slog.Error("error rendering validation pattern", "hostname", hostname, "step", stepName, "error", err)
-					break
-				}
-
-				jsonPath, err := renderTemplate(step.Validation.JSONPath, variables)
-				if err != nil {
-					runFailed = true
-					slog.Error("error rendering validation json_path", "hostname", hostname, "step", stepName, "error", err)
-					break
-				}
-
-				expected, err := renderExpectedValue(step.Validation.Expected, variables)
-				if err != nil {
-					runFailed = true
-					slog.Error("error rendering validation expected value", "hostname", hostname, "step", stepName, "error", err)
-					break
-				}
-
-				rule := validation.ValidationRule{
-					Extractor:    step.Validation.Extractor,
-					Pattern:      pattern,
-					JSONPath:     jsonPath,
-					Condition:    step.Validation.Condition,
-					Expected:     expected,
-					ExpectedType: step.Validation.ExpectedType,
-				}
-
-				vres, verr := validation.ValidateOutput(output, rule)
-				if verr != nil {
-					runFailed = true
-					slog.Error("validation error", "hostname", hostname, "step", stepName, "error", verr)
-				}
-
-				finalResult = vres
-
-				if !jsonOut {
-					jb, _ := json.MarshalIndent(vres, "", "  ")
-					fmt.Printf("validation result for %s step=%s:\n%s\n", hostname, stepName, string(jb))
-				}
-				jb, _ := json.MarshalIndent(vres, "", "  ")
-				writeSessionf(sessionLog, "[step:%s] validation result:\n%s\n", stepName, string(jb))
-
-				if step.Register != "" && vres.RawExtract != "" {
-					variables[step.Register] = vres.RawExtract
-					slog.Info("registered variable", "hostname", hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
-				}
-
-				retryCfg := step.Retry
-				if retryCfg != nil && retryCfg.UntilPass && finalResult.Status == "fail" {
-					if retryCfg.MaxAttempts > 0 && attempt >= retryCfg.MaxAttempts {
-						slog.Warn("step reached max attempts", "hostname", hostname, "ip", ip, "step", stepName, "max_attempts", retryCfg.MaxAttempts)
-						break
-					}
-
-					interval := time.Duration(retryCfg.IntervalSeconds) * time.Second
-					if interval <= 0 {
-						interval = 60 * time.Second
-					}
-					slog.Info("retrying step", "hostname", hostname, "ip", ip, "step", stepName, "interval", interval, "attempt", attempt+1)
-					time.Sleep(interval)
-					continue
-				}
-
-				break
-			}
-
-			if step.Validation != nil {
-				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
-
-				action := validationActionForResult(step, finalResult)
-				outcome, err := executeValidationAction(client, action, variables, sessionLog, jsonOut, hostname, stepName)
-				if err != nil {
-					runFailed = true
-					slog.Error("validation action failed", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
-					writeSessionf(sessionLog, "[step:%s] validation action failed: %v\n", stepName, err)
-					break
-				}
-				if outcome.RunFailed {
-					runFailed = true
-				}
-				if outcome.StopDevice {
-					stopDeviceSteps = true
-					slog.Info("stopping remaining SSH steps after validation action", "hostname", hostname, "ip", ip, "step", stepName)
-					break
-				}
-			}
+		ctx := stepExecutionContext{
+			hostname:   hostname,
+			ip:         ip,
+			deviceType: deviceType,
+			username:   username,
+			password:   password,
+			opts:       opts,
+			jsonOut:    jsonOut,
+			sessionLog: sessionLog,
+			variables:  map[string]string{},
+			aggregated: &aggregated,
+			runFailed:  &runFailed,
 		}
+		stopDeviceSteps := executeSteps(&ctx, &client, steps)
 		if stopDeviceSteps {
 			slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
 		}
