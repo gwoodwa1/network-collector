@@ -141,6 +141,85 @@ func TestStepVariableRegistrationAndInterpolation(t *testing.T) {
 	}
 }
 
+func TestRunStepValidationsRequiresAllRulesToPass(t *testing.T) {
+	output := `{"active_packages":["disk0:mini","disk0:fpd"],"profile":"Default Profile"}`
+	rules := []ValidationConfig{
+		{
+			Extractor:    "gjson",
+			JSONPath:     "active_packages.#",
+			Condition:    "eq",
+			Expected:     2,
+			ExpectedType: "int",
+		},
+		{
+			Extractor:    "gjson",
+			JSONPath:     "profile",
+			Condition:    "contains",
+			Expected:     "Default",
+			ExpectedType: "string",
+		},
+	}
+
+	results, overall, err := runStepValidations(output, rules, map[string]string{})
+	if err != nil {
+		t.Fatalf("runStepValidations returned error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected two validation results, got %d", len(results))
+	}
+	if !overall.Pass || overall.Status != "pass" {
+		t.Fatalf("expected overall pass, got %+v", overall)
+	}
+}
+
+func TestRunStepValidationsFailsWhenAnyRuleFails(t *testing.T) {
+	output := `{"active_packages":["disk0:mini"],"profile":"Default Profile"}`
+	rules := []ValidationConfig{
+		{
+			Extractor:    "gjson",
+			JSONPath:     "active_packages.#",
+			Condition:    "eq",
+			Expected:     2,
+			ExpectedType: "int",
+		},
+		{
+			Extractor:    "gjson",
+			JSONPath:     "profile",
+			Condition:    "contains",
+			Expected:     "Default",
+			ExpectedType: "string",
+		},
+	}
+
+	results, overall, err := runStepValidations(output, rules, map[string]string{})
+	if err != nil {
+		t.Fatalf("runStepValidations returned error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected two validation results, got %d", len(results))
+	}
+	if overall.Pass || overall.Status != "fail" {
+		t.Fatalf("expected overall fail, got %+v", overall)
+	}
+}
+
+func TestStepValidationsKeepsBackwardCompatibleSingleValidation(t *testing.T) {
+	step := StepConfig{
+		Validation: &ValidationConfig{Extractor: "regex", Pattern: `Version:\s+(\S+)`},
+		Validations: []ValidationConfig{
+			{Extractor: "gjson", JSONPath: "active_packages.#"},
+		},
+	}
+
+	validations := stepValidations(step)
+	if len(validations) != 2 {
+		t.Fatalf("expected single validation plus validations list, got %d", len(validations))
+	}
+	if validations[0].Extractor != "regex" || validations[1].Extractor != "gjson" {
+		t.Fatalf("unexpected validations order: %+v", validations)
+	}
+}
+
 func TestResolveInventoryDevicesPreservesInlineDevice(t *testing.T) {
 	devices := []DeviceConfig{{
 		Hostname: "router-01",
@@ -257,13 +336,100 @@ groups:
 	}
 }
 
+func TestParseOutputWithRegexModule(t *testing.T) {
+	output := `RP/0/RSP0/CPU0:router(admin)# show install active summary
+Mon Jun 22 23:41:19.509 PST
+Default Profile:
+  SDRs:
+    Owner
+  Active Packages:
+    disk0:comp-asr9k-mini-3.9.0.12I
+    disk0:asr9k-fpd-3.9.0.12I
+    disk0:asr9k-k9sec-3.9.0.12I
+`
+
+	parsers := map[string]ParserModuleConfig{
+		"xr_install_active_summary": {
+			Type: "regex",
+			Fields: map[string]ParserFieldConfig{
+				"active_packages": {
+					Pattern:  `(?m)^\s+(disk0:\S+)`,
+					Group:    1,
+					Repeated: true,
+				},
+				"profile": {
+					Pattern: `(?m)^(.+ Profile):`,
+					Group:   1,
+				},
+			},
+		},
+	}
+
+	parsed, err := parseOutputWithModule(output, "xr_install_active_summary", parsers)
+	if err != nil {
+		t.Fatalf("parseOutputWithModule returned error: %v", err)
+	}
+
+	rule := validation.ValidationRule{
+		Extractor:    "gjson",
+		JSONPath:     "active_packages.#",
+		Condition:    "eq",
+		Expected:     3,
+		ExpectedType: "int",
+	}
+	res, err := validation.ValidateOutput(parsed, rule)
+	if err != nil {
+		t.Fatalf("validation returned error: %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("expected gjson validation to pass against parsed output, got %+v from %s", res, parsed)
+	}
+}
+
+func TestLoadParsersRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("name_playbook: test\n"), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	parserPath := filepath.Join(dir, "parsers.yaml")
+	input := []byte(`
+parsers:
+  sample:
+    type: regex
+    fields:
+      value:
+        pattern: 'Value:\s+(\S+)'
+        group: 1
+`)
+	if err := os.WriteFile(parserPath, input, 0644); err != nil {
+		t.Fatalf("failed to write temp parsers: %v", err)
+	}
+
+	parsers, err := loadOptionalParsers("", configPath)
+	if err != nil {
+		t.Fatalf("loadOptionalParsers returned error: %v", err)
+	}
+	if parsers == nil || parsers.Parsers["sample"].Fields["value"].Pattern == "" {
+		t.Fatalf("unexpected parsers: %+v", parsers)
+	}
+}
+
 func TestConfigYAMLDecodeWithInventoryRefs(t *testing.T) {
 	input := `
 name_playbook: Inventory Playbook
 inventory_file: inventory.yaml
+parsers_file: parsers.yaml
 ssh:
   - host: router-01
+    parser: sample
     cmd: show version
+    validations:
+      - extractor: gjson
+        json_path: active_packages.#
+        condition: gte
+        expected: 1
+        expected_type: int
   - group: ios
     steps:
       - name: show-clock
@@ -277,11 +443,17 @@ ssh:
 	if config.InventoryFile != "inventory.yaml" {
 		t.Fatalf("unexpected inventory file: %q", config.InventoryFile)
 	}
+	if config.ParsersFile != "parsers.yaml" {
+		t.Fatalf("unexpected parsers file: %q", config.ParsersFile)
+	}
 	if len(config.SSH) != 2 {
 		t.Fatalf("expected two ssh entries, got %d", len(config.SSH))
 	}
-	if config.SSH[0].Host != "router-01" {
+	if config.SSH[0].Host != "router-01" || config.SSH[0].Parser != "sample" {
 		t.Fatalf("unexpected host ref: %+v", config.SSH[0])
+	}
+	if len(config.SSH[0].Validations) != 1 {
+		t.Fatalf("expected one validation in validations list, got %+v", config.SSH[0].Validations)
 	}
 	if config.SSH[1].Group != "ios" || len(config.SSH[1].Steps) != 1 {
 		t.Fatalf("unexpected group ref: %+v", config.SSH[1])
@@ -423,6 +595,34 @@ func TestValidationActionMessageOnlyContinues(t *testing.T) {
 	}
 }
 
+func TestStepMessageOnlyLogsAndContinues(t *testing.T) {
+	var log bytes.Buffer
+	aggregated := []deviceValidation{}
+	runFailed := false
+	ctx := stepExecutionContext{
+		hostname:   "router-01",
+		jsonOut:    true,
+		sessionLog: &log,
+		variables:  map[string]string{"image": "17.9.4"},
+		aggregated: &aggregated,
+		runFailed:  &runFailed,
+	}
+
+	stopped := executeSteps(&ctx, nil, []StepConfig{{
+		Name:    "announce",
+		Message: "target image {{image}} is already active",
+	}})
+	if stopped {
+		t.Fatal("expected message-only step to continue")
+	}
+	if runFailed {
+		t.Fatal("expected message-only step not to mark run failed")
+	}
+	if !strings.Contains(log.String(), "target image 17.9.4 is already active") {
+		t.Fatalf("expected step message in log, got %q", log.String())
+	}
+}
+
 func TestValidationActionNoopContinues(t *testing.T) {
 	ctx := stepExecutionContext{
 		hostname:  "router-01",
@@ -464,6 +664,21 @@ on_fail:
 	}
 	if step.OnFail == nil || step.OnFail.Action != "none" {
 		t.Fatalf("unexpected on_fail action: %+v", step.OnFail)
+	}
+}
+
+func TestStepDecodeWithMessage(t *testing.T) {
+	input := `
+name: announce
+message: target image is already active
+`
+
+	var step StepConfig
+	if err := yaml.Unmarshal([]byte(input), &step); err != nil {
+		t.Fatalf("failed to decode step message: %v", err)
+	}
+	if step.Message != "target image is already active" {
+		t.Fatalf("unexpected step message: %q", step.Message)
 	}
 }
 

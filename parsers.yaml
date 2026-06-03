@@ -1,0 +1,11 @@
+parsers:
+  xr_install_active_summary:
+    type: regex
+    fields:
+      active_packages:
+        pattern: '(?m)^\s+(disk0:\S+)'
+        group: 1
+        repeated: true
+      profile:
+        pattern: '(?m)^(.+ Profile):'
+        group: 1

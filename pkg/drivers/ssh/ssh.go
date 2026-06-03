@@ -119,7 +119,8 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 		}),
 		options.WithTimeoutSocket(c.socketTimeout),
 		options.WithTimeoutOps(c.opsTimeout),
-		options.WithDefaultLogger(),
+		// Keep scrapligo's process logger disabled; expected reload disconnects
+		// are handled by the collector and channel output is still logged below.
 		options.WithChannelLog(c.channelLog),
 	)
 	if err != nil {

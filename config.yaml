@@ -1,6 +1,7 @@
 fail_on_fail: false
 name_playbook: Software Upgrade on Cisco IOS
 inventory_file: inventory.yaml
+parsers_file: parsers.yaml
 
 restconf:
   - hostname: device-eos-02

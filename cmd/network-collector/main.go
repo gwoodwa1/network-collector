@@ -45,11 +45,14 @@ type ValidationActionConfig struct {
 
 type StepConfig struct {
 	Name           string                  `mapstructure:"name" yaml:"name"`
+	Message        string                  `mapstructure:"message" yaml:"message"`
 	Command        string                  `mapstructure:"cmd" yaml:"cmd"`
+	Parser         string                  `mapstructure:"parser" yaml:"parser"`
 	WaitSeconds    int                     `mapstructure:"wait_seconds" yaml:"wait_seconds"`
 	ReturnToPrompt *bool                   `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
 	SSHProbe       *SSHProbeConfig         `mapstructure:"ssh_probe" yaml:"ssh_probe"`
 	Validation     *ValidationConfig       `mapstructure:"validation" yaml:"validation"`
+	Validations    []ValidationConfig      `mapstructure:"validations" yaml:"validations"`
 	Retry          *RetryConfig            `mapstructure:"retry" yaml:"retry"`
 	Register       string                  `mapstructure:"register" yaml:"register"`
 	OnPass         *ValidationActionConfig `mapstructure:"on_pass" yaml:"on_pass"`
@@ -57,18 +60,20 @@ type StepConfig struct {
 }
 
 type DeviceConfig struct {
-	Hostname         string            `mapstructure:"hostname" yaml:"hostname"`
-	IP               string            `mapstructure:"ip" yaml:"ip"`
-	Host             string            `mapstructure:"host" yaml:"host"`
-	Hosts            []string          `mapstructure:"hosts" yaml:"hosts"`
-	Group            string            `mapstructure:"group" yaml:"group"`
-	Groups           []string          `mapstructure:"groups" yaml:"groups"`
-	Type             string            `mapstructure:"type" yaml:"type"`
-	Timeout          int               `mapstructure:"timeout" yaml:"timeout"`
-	OperationTimeout int               `mapstructure:"operation_timeout" yaml:"operation_timeout"`
-	Steps            []StepConfig      `mapstructure:"steps" yaml:"steps"`
-	Command          string            `mapstructure:"cmd" yaml:"cmd"`
-	Validation       *ValidationConfig `mapstructure:"validation" yaml:"validation"`
+	Hostname         string             `mapstructure:"hostname" yaml:"hostname"`
+	IP               string             `mapstructure:"ip" yaml:"ip"`
+	Host             string             `mapstructure:"host" yaml:"host"`
+	Hosts            []string           `mapstructure:"hosts" yaml:"hosts"`
+	Group            string             `mapstructure:"group" yaml:"group"`
+	Groups           []string           `mapstructure:"groups" yaml:"groups"`
+	Type             string             `mapstructure:"type" yaml:"type"`
+	Timeout          int                `mapstructure:"timeout" yaml:"timeout"`
+	OperationTimeout int                `mapstructure:"operation_timeout" yaml:"operation_timeout"`
+	Steps            []StepConfig       `mapstructure:"steps" yaml:"steps"`
+	Command          string             `mapstructure:"cmd" yaml:"cmd"`
+	Parser           string             `mapstructure:"parser" yaml:"parser"`
+	Validation       *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
+	Validations      []ValidationConfig `mapstructure:"validations" yaml:"validations"`
 }
 
 type ValidationConfig struct {
@@ -83,6 +88,7 @@ type ValidationConfig struct {
 type Config struct {
 	NamePlaybook  string         `mapstructure:"name_playbook" yaml:"name_playbook"`
 	InventoryFile string         `mapstructure:"inventory_file" yaml:"inventory_file"`
+	ParsersFile   string         `mapstructure:"parsers_file" yaml:"parsers_file"`
 	SSH           []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
 }
 
@@ -105,6 +111,22 @@ type InventoryConfig struct {
 	Groups map[string]InventoryGroupConfig `yaml:"groups"`
 }
 
+type ParserFieldConfig struct {
+	Pattern  string `yaml:"pattern"`
+	Group    int    `yaml:"group"`
+	Repeated bool   `yaml:"repeated"`
+	Type     string `yaml:"type"`
+}
+
+type ParserModuleConfig struct {
+	Type   string                       `yaml:"type"`
+	Fields map[string]ParserFieldConfig `yaml:"fields"`
+}
+
+type ParsersConfig struct {
+	Parsers map[string]ParserModuleConfig `yaml:"parsers"`
+}
+
 type deviceValidation struct {
 	Hostname string                      `json:"hostname"`
 	IP       string                      `json:"ip"`
@@ -123,6 +145,7 @@ type stepExecutionContext struct {
 	variables  map[string]string
 	aggregated *[]deviceValidation
 	runFailed  *bool
+	parsers    map[string]ParserModuleConfig
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -249,6 +272,140 @@ func loadOptionalInventory(inventoryFile, configFile string) (*InventoryConfig, 
 	return loadInventory(inventoryFile, configFile)
 }
 
+func resolveParsersPath(parsersFile, configFile string) string {
+	path := strings.TrimSpace(parsersFile)
+	if path == "" {
+		path = "parsers.yaml"
+	}
+	if !filepath.IsAbs(path) && strings.TrimSpace(configFile) != "" {
+		path = filepath.Join(filepath.Dir(configFile), path)
+	}
+	return path
+}
+
+func loadParsers(parsersFile, configFile string) (*ParsersConfig, error) {
+	path := resolveParsersPath(parsersFile, configFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsers ParsersConfig
+	if err := yaml.Unmarshal(b, &parsers); err != nil {
+		return nil, err
+	}
+	return &parsers, nil
+}
+
+func loadOptionalParsers(parsersFile, configFile string) (*ParsersConfig, error) {
+	explicit := strings.TrimSpace(parsersFile) != ""
+	path := resolveParsersPath(parsersFile, configFile)
+	if !explicit {
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return loadParsers(parsersFile, configFile)
+}
+
+func parserGroupIndex(field ParserFieldConfig, submatchCount int) int {
+	if field.Group > 0 {
+		return field.Group
+	}
+	if submatchCount > 1 {
+		return 1
+	}
+	return 0
+}
+
+func coerceParsedValue(value string, valueType string) (interface{}, error) {
+	switch strings.ToLower(strings.TrimSpace(valueType)) {
+	case "", "string":
+		return value, nil
+	case "int":
+		i, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return nil, err
+		}
+		return i, nil
+	default:
+		return nil, fmt.Errorf("unsupported parser field type: %s", valueType)
+	}
+}
+
+func parseWithRegexModule(output string, parser ParserModuleConfig) (string, error) {
+	parsed := map[string]interface{}{}
+	for fieldName, field := range parser.Fields {
+		if strings.TrimSpace(field.Pattern) == "" {
+			return "", fmt.Errorf("parser field %q missing pattern", fieldName)
+		}
+
+		re, err := regexp.Compile(field.Pattern)
+		if err != nil {
+			return "", fmt.Errorf("parser field %q has invalid regex: %w", fieldName, err)
+		}
+
+		if field.Repeated {
+			values := []interface{}{}
+			for _, match := range re.FindAllStringSubmatch(output, -1) {
+				group := parserGroupIndex(field, len(match))
+				if group >= len(match) {
+					return "", fmt.Errorf("parser field %q group %d not found", fieldName, group)
+				}
+				value, err := coerceParsedValue(match[group], field.Type)
+				if err != nil {
+					return "", fmt.Errorf("parser field %q failed to coerce value: %w", fieldName, err)
+				}
+				values = append(values, value)
+			}
+			parsed[fieldName] = values
+			continue
+		}
+
+		match := re.FindStringSubmatch(output)
+		if len(match) == 0 {
+			parsed[fieldName] = ""
+			continue
+		}
+		group := parserGroupIndex(field, len(match))
+		if group >= len(match) {
+			return "", fmt.Errorf("parser field %q group %d not found", fieldName, group)
+		}
+		value, err := coerceParsedValue(match[group], field.Type)
+		if err != nil {
+			return "", fmt.Errorf("parser field %q failed to coerce value: %w", fieldName, err)
+		}
+		parsed[fieldName] = value
+	}
+
+	b, err := json.Marshal(parsed)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func parseOutputWithModule(output, parserName string, parsers map[string]ParserModuleConfig) (string, error) {
+	parserName = strings.TrimSpace(parserName)
+	if parserName == "" {
+		return output, nil
+	}
+	parser, ok := parsers[parserName]
+	if !ok {
+		return "", fmt.Errorf("parser %q not found", parserName)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(parser.Type)) {
+	case "", "regex":
+		return parseWithRegexModule(output, parser)
+	default:
+		return "", fmt.Errorf("unsupported parser type %q for parser %q", parser.Type, parserName)
+	}
+}
+
 func inventoryIndex(inventory *InventoryConfig) (map[string]InventoryHostConfig, error) {
 	index := map[string]InventoryHostConfig{}
 	if inventory == nil {
@@ -356,6 +513,99 @@ func validationActionForResult(step StepConfig, result validation.ValidationResu
 		return step.OnFail
 	}
 	return nil
+}
+
+func stepValidations(step StepConfig) []ValidationConfig {
+	validations := []ValidationConfig{}
+	if step.Validation != nil {
+		validations = append(validations, *step.Validation)
+	}
+	validations = append(validations, step.Validations...)
+	return validations
+}
+
+func overallValidationResult(results []validation.ValidationResult) validation.ValidationResult {
+	if len(results) == 0 {
+		return validation.ValidationResult{}
+	}
+
+	overall := validation.ValidationResult{
+		Pass:      true,
+		Status:    "pass",
+		Message:   "all validations passed",
+		Timestamp: time.Now(),
+	}
+	for _, result := range results {
+		if result.Status == "error" {
+			overall.Pass = false
+			overall.Status = "error"
+			overall.Message = "one or more validations errored"
+			return overall
+		}
+		if !result.Pass || result.Status == "fail" {
+			overall.Pass = false
+			overall.Status = "fail"
+			overall.Message = "one or more validations failed"
+			return overall
+		}
+	}
+	return overall
+}
+
+func validationErrorResult(err error) validation.ValidationResult {
+	return validation.ValidationResult{
+		Pass:      false,
+		Status:    "error",
+		Message:   err.Error(),
+		Err:       err.Error(),
+		Timestamp: time.Now(),
+	}
+}
+
+func runStepValidations(output string, rules []ValidationConfig, vars map[string]string) ([]validation.ValidationResult, validation.ValidationResult, error) {
+	results := []validation.ValidationResult{}
+	for _, cfg := range rules {
+		pattern, err := renderTemplate(cfg.Pattern, vars)
+		if err != nil {
+			wrapped := fmt.Errorf("error rendering validation pattern: %w", err)
+			results = append(results, validationErrorResult(wrapped))
+			return results, overallValidationResult(results), wrapped
+		}
+
+		jsonPath, err := renderTemplate(cfg.JSONPath, vars)
+		if err != nil {
+			wrapped := fmt.Errorf("error rendering validation json_path: %w", err)
+			results = append(results, validationErrorResult(wrapped))
+			return results, overallValidationResult(results), wrapped
+		}
+
+		expected, err := renderExpectedValue(cfg.Expected, vars)
+		if err != nil {
+			wrapped := fmt.Errorf("error rendering validation expected value: %w", err)
+			results = append(results, validationErrorResult(wrapped))
+			return results, overallValidationResult(results), wrapped
+		}
+
+		rule := validation.ValidationRule{
+			Extractor:    cfg.Extractor,
+			Pattern:      pattern,
+			JSONPath:     jsonPath,
+			Condition:    cfg.Condition,
+			Expected:     expected,
+			ExpectedType: cfg.ExpectedType,
+		}
+
+		vres, verr := validation.ValidateOutput(output, rule)
+		if verr != nil {
+			if vres.Status == "" {
+				vres = validationErrorResult(verr)
+			}
+			results = append(results, vres)
+			return results, overallValidationResult(results), verr
+		}
+		results = append(results, vres)
+	}
+	return results, overallValidationResult(results), nil
 }
 
 func stringToBoolDecodeHook(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
@@ -541,6 +791,13 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			stepName = "unnamed"
 		}
 
+		if err := logStepMessage(ctx, stepName, step.Message); err != nil {
+			*ctx.runFailed = true
+			slog.Error("error rendering step message", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			writeSessionf(ctx.sessionLog, "[step:%s] message error: %v\n", stepName, err)
+			continue
+		}
+
 		wait, err := waitDuration(step.WaitSeconds)
 		if err != nil {
 			*ctx.runFailed = true
@@ -603,7 +860,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			continue
 		}
 		if cmd == "" {
-			if wait > 0 || step.SSHProbe != nil {
+			if wait > 0 || step.SSHProbe != nil || strings.TrimSpace(step.Message) != "" {
 				continue
 			}
 			*ctx.runFailed = true
@@ -626,8 +883,8 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			output, err := (*client).Execute(cmd)
 			if err != nil {
 				if !shouldReturnToPrompt(step.ReturnToPrompt) {
-					slog.Info("step did not return to prompt as configured", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
-					writeSessionf(ctx.sessionLog, "\n[step:%s] command did not return to prompt as configured: %v\n", stepName, err)
+					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
 					if err := closeSSHClient(*client); err != nil {
 						slog.Warn("error closing SSH connection after no-prompt step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 						writeSessionf(ctx.sessionLog, "[step:%s] warning: failed to close SSH connection after no-prompt step: %v\n", stepName, err)
@@ -646,58 +903,51 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				fmt.Printf("device=%s step=%s command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
 			}
 
-			if step.Validation == nil {
+			validationOutput := output
+			if strings.TrimSpace(step.Parser) != "" {
+				parsedOutput, err := parseOutputWithModule(output, step.Parser, ctx.parsers)
+				if err != nil {
+					*ctx.runFailed = true
+					slog.Error("parser error", "hostname", ctx.hostname, "step", stepName, "parser", step.Parser, "error", err)
+					writeSessionf(ctx.sessionLog, "[step:%s] parser %q error: %v\n", stepName, step.Parser, err)
+					break
+				}
+				validationOutput = parsedOutput
+				writeSessionf(ctx.sessionLog, "[step:%s] parser %q output:\n%s\n", stepName, step.Parser, parsedOutput)
+				if !ctx.jsonOut {
+					fmt.Printf("parser output for %s step=%s parser=%s:\n%s\n", ctx.hostname, stepName, step.Parser, parsedOutput)
+				}
+			}
+
+			validations := stepValidations(step)
+			if len(validations) == 0 {
 				break
 			}
 
-			pattern, err := renderTemplate(step.Validation.Pattern, ctx.variables)
-			if err != nil {
-				*ctx.runFailed = true
-				slog.Error("error rendering validation pattern", "hostname", ctx.hostname, "step", stepName, "error", err)
-				break
-			}
-
-			jsonPath, err := renderTemplate(step.Validation.JSONPath, ctx.variables)
-			if err != nil {
-				*ctx.runFailed = true
-				slog.Error("error rendering validation json_path", "hostname", ctx.hostname, "step", stepName, "error", err)
-				break
-			}
-
-			expected, err := renderExpectedValue(step.Validation.Expected, ctx.variables)
-			if err != nil {
-				*ctx.runFailed = true
-				slog.Error("error rendering validation expected value", "hostname", ctx.hostname, "step", stepName, "error", err)
-				break
-			}
-
-			rule := validation.ValidationRule{
-				Extractor:    step.Validation.Extractor,
-				Pattern:      pattern,
-				JSONPath:     jsonPath,
-				Condition:    step.Validation.Condition,
-				Expected:     expected,
-				ExpectedType: step.Validation.ExpectedType,
-			}
-
-			vres, verr := validation.ValidateOutput(output, rule)
+			results, overall, verr := runStepValidations(validationOutput, validations, ctx.variables)
 			if verr != nil {
 				*ctx.runFailed = true
 				slog.Error("validation error", "hostname", ctx.hostname, "step", stepName, "error", verr)
 			}
 
-			finalResult = vres
+			finalResult = overall
 
-			if !ctx.jsonOut {
+			for idx, vres := range results {
+				if !ctx.jsonOut {
+					jb, _ := json.MarshalIndent(vres, "", "  ")
+					fmt.Printf("validation result for %s step=%s validation=%d:\n%s\n", ctx.hostname, stepName, idx+1, string(jb))
+				}
 				jb, _ := json.MarshalIndent(vres, "", "  ")
-				fmt.Printf("validation result for %s step=%s:\n%s\n", ctx.hostname, stepName, string(jb))
+				writeSessionf(ctx.sessionLog, "[step:%s] validation result %d:\n%s\n", stepName, idx+1, string(jb))
+				*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: vres})
 			}
-			jb, _ := json.MarshalIndent(vres, "", "  ")
-			writeSessionf(ctx.sessionLog, "[step:%s] validation result:\n%s\n", stepName, string(jb))
 
-			if step.Register != "" && vres.RawExtract != "" {
-				ctx.variables[step.Register] = vres.RawExtract
-				slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
+			for _, vres := range results {
+				if step.Register != "" && vres.RawExtract != "" {
+					ctx.variables[step.Register] = vres.RawExtract
+					slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
+					break
+				}
 			}
 
 			retryCfg := step.Retry
@@ -719,9 +969,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			break
 		}
 
-		if step.Validation != nil {
-			*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: finalResult})
-
+		if len(stepValidations(step)) > 0 {
 			action := validationActionForResult(step, finalResult)
 			outcome, err := executeValidationAction(ctx, client, action, stepName)
 			if err != nil {
@@ -825,6 +1073,21 @@ func writeSessionf(writer io.Writer, format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(writer, format, args...)
 }
 
+func logStepMessage(ctx *stepExecutionContext, stepName, messageTemplate string) error {
+	if strings.TrimSpace(messageTemplate) == "" {
+		return nil
+	}
+	message, err := renderTemplate(messageTemplate, ctx.variables)
+	if err != nil {
+		return err
+	}
+	writeSessionf(ctx.sessionLog, "[step:%s] message: %s\n", stepName, message)
+	if !ctx.jsonOut {
+		fmt.Printf("device=%s step=%s message=%q\n", ctx.hostname, stepName, message)
+	}
+	return nil
+}
+
 func sshOptionsForDevice(device DeviceConfig) []ssh.Option {
 	opts := []ssh.Option{}
 	if device.Timeout > 0 {
@@ -857,8 +1120,10 @@ func main() {
 	var cliFailOnFail bool
 	var configFile string
 	var cliInventoryFile string
+	var cliParsersFile string
 	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
 	flag.StringVar(&cliInventoryFile, "inventory", "", "path to inventory file")
+	flag.StringVar(&cliParsersFile, "parsers", "", "path to parser module file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.Parse()
@@ -889,6 +1154,9 @@ func main() {
 	if strings.TrimSpace(cliInventoryFile) != "" {
 		config.InventoryFile = cliInventoryFile
 	}
+	if strings.TrimSpace(cliParsersFile) != "" {
+		config.ParsersFile = cliParsersFile
+	}
 
 	inventory, err := loadOptionalInventory(config.InventoryFile, configFile)
 	if err != nil {
@@ -900,6 +1168,16 @@ func main() {
 	if err != nil {
 		slog.Error("error resolving SSH inventory", "error", err)
 		os.Exit(1)
+	}
+
+	parserConfig, err := loadOptionalParsers(config.ParsersFile, configFile)
+	if err != nil {
+		slog.Error("error reading parser modules", "parsers_file", config.ParsersFile, "error", err)
+		os.Exit(1)
+	}
+	parsers := map[string]ParserModuleConfig{}
+	if parserConfig != nil && parserConfig.Parsers != nil {
+		parsers = parserConfig.Parsers
 	}
 
 	var aggregated []deviceValidation
@@ -919,9 +1197,11 @@ func main() {
 		steps := device.Steps
 		if len(steps) == 0 && strings.TrimSpace(device.Command) != "" {
 			steps = []StepConfig{{
-				Name:       "default",
-				Command:    strings.TrimSpace(device.Command),
-				Validation: device.Validation,
+				Name:        "default",
+				Command:     strings.TrimSpace(device.Command),
+				Parser:      strings.TrimSpace(device.Parser),
+				Validation:  device.Validation,
+				Validations: device.Validations,
 			}}
 		}
 
@@ -968,6 +1248,7 @@ func main() {
 			variables:  map[string]string{},
 			aggregated: &aggregated,
 			runFailed:  &runFailed,
+			parsers:    parsers,
 		}
 		stopDeviceSteps := executeSteps(&ctx, &client, steps)
 		if stopDeviceSteps {

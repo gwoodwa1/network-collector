@@ -219,6 +219,7 @@ Example `config.yaml`:
 
 ```yaml
 inventory_file: inventory.yaml
+parsers_file: parsers.yaml
 
 ssh:
   - host: router-01
@@ -232,11 +233,58 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### Regex parser modules
+
+You can define reusable regex parser modules in `parsers.yaml`, reference them from a step with `parser`, and validate the generated JSON with the existing `gjson` extractor.
+
+Example `parsers.yaml`:
+
+```yaml
+parsers:
+  xr_install_active_summary:
+    type: regex
+    fields:
+      active_packages:
+        pattern: '(?m)^\s+(disk0:\S+)'
+        group: 1
+        repeated: true
+      profile:
+        pattern: '(?m)^(.+ Profile):'
+        group: 1
+```
+
+Example `config.yaml`:
+
+```yaml
+parsers_file: parsers.yaml
+
+ssh:
+  - host: xr-router-1
+    steps:
+      - name: parse-active-packages
+        cmd: show install active summary
+        parser: xr_install_active_summary
+        validations:
+          - extractor: gjson
+            json_path: active_packages.#
+            condition: gte
+            expected: 1
+            expected_type: int
+          - extractor: gjson
+            json_path: profile
+            condition: contains
+            expected: Default
+            expected_type: string
+```
+
+Parser fields support `pattern`, optional capture `group` (defaults to the first capture group when present), `repeated: true` for arrays, and `type: int` for numeric coercion. Parsed JSON is written to the session log before validation.
+
 Example:
 
 ```yaml
 name_playbook: Software Upgrade on Cisco IOS
 inventory_file: inventory.yaml
+parsers_file: parsers.yaml
 
 ssh:
   - host: device-ios-03
@@ -244,6 +292,7 @@ ssh:
     operation_timeout: 120
     steps:
       - name: show-version
+        message: checking currently running image
         cmd: show version
         validation:
           extractor: regex
@@ -331,6 +380,8 @@ Use `operation_timeout` on an SSH device to increase the scrapligo operation tim
 
 Use `wait_seconds` on a step to pause while keeping the SSH connection open. A wait-only step does not require `cmd`; if both `wait_seconds` and `cmd` are set, the collector waits first and then runs the command.
 
+Use `message` on a step to write an operator note to stdout and the session log. Message-only steps are allowed, and messages can use registered variables such as `{{install_id}}`. Action messages under `on_pass` and `on_fail` are logged the same way.
+
 Use `ssh_probe` after software upgrades or reloads. The collector closes the stale SSH session, probes the configured TCP port until it responds, waits `post_wait_seconds` after the first successful probe, reconnects SSH, and then continues with the following steps. This helps cover the gap where port 22 is accepting connections but the device is still booting.
 
 Use `return_to_prompt: false` for commands that intentionally reboot or disconnect the device before a normal CLI prompt can return, such as a `yes` confirmation. Timeout/error from that command is treated as expected, the stale SSH client is closed, and the next wait/probe step can handle reconnecting. The collector also accepts `no` as a compatibility alias.
@@ -339,7 +390,7 @@ You can also register a value from a step using `register: <name>` and reuse it 
 
 ### Validation semantics
 
-Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads (gNMI/RESTCONF responses).
+Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads, including parser output. Use `validation` for one rule, or `validations` for multiple rules. When multiple validations are configured, all rules must pass for the step to trigger `on_pass`; any failed or errored rule triggers `on_fail`.
 
 - `pattern` / `json_path`: the extraction pattern or JSON path. Regex extraction uses the first capture group when present; otherwise it uses the whole regex match.
 - `condition`: `eq`, `neq`, `contains`, `not_contains`, `matches`, `gt`, `gte`, `lt`, or `lte`.
