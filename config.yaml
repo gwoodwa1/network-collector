@@ -1,5 +1,6 @@
 fail_on_fail: false
 name_playbook: Software Upgrade on Cisco IOS
+inventory_file: inventory.yaml
 
 restconf:
   - hostname: device-eos-02
@@ -21,22 +22,16 @@ gnmi:
       expected: "up"
 
 ssh:
-  - hostname: device-nxos-01
-    ip: 192.168.16.1
-    type: cisco_nxos
+  - host: device-nxos-01
     cmd: show ip route
     validation:
       extractor: regex
       pattern: "Total routes:\\s+(\\d+)"
       condition: gt
       expected: 100
-  - hostname: device-qfx-01
-    ip: 192.168.16.1
-    type: juniper_junos
+  - host: device-qfx-01
     cmd: show route
-  - hostname: device-ios-01
-    ip: 192.168.16.11
-    type: cisco_ios
+  - host: device-ios-01
     cmd: show system status
     validation:
       extractor: regex
@@ -44,9 +39,7 @@ ssh:
       condition: eq
       expected: "RUNNING"
       expected_type: string
-  - hostname: device-ios-02
-    ip: 192.168.16.12
-    type: cisco_ios
+  - host: device-ios-02
     cmd: show process memory
     validation:
       extractor: regex
@@ -55,9 +48,7 @@ ssh:
       expected: 100
       expected_type: int
 
-  - hostname: device-ios-03
-    ip: 192.168.16.13
-    type: cisco_ios
+  - host: device-ios-03
     timeout: 20
     steps:
       - name: show-version
@@ -101,9 +92,7 @@ ssh:
           timeout_seconds: 5
           post_wait_seconds: 120
 
-  - hostname: xr-router-1
-    ip: 10.0.0.1
-    type: cisco_xr
+  - host: xr-router-1
     timeout: 30
     steps:
       - name: enter-config
@@ -115,9 +104,7 @@ ssh:
       - name: commit
         cmd: commit
 
-  - hostname: xr-router-1
-    ip: 10.0.0.1
-    type: cisco_xr
+  - host: xr-router-1
     timeout: 30
     cmd: "configure terminal\nrouter isis 100\n address-family ipv4 unicast overload\ncommit"
     validation:

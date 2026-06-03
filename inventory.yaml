@@ -1,0 +1,27 @@
+hosts:
+  - name: device-nxos-01
+    ip: 192.168.16.1
+    type: cisco_nxos
+  - name: device-qfx-01
+    ip: 192.168.16.1
+    type: juniper_junos
+  - name: device-ios-01
+    ip: 192.168.16.11
+    type: cisco_ios
+  - name: device-ios-02
+    ip: 192.168.16.12
+    type: cisco_ios
+  - name: device-ios-03
+    ip: 192.168.16.13
+    type: cisco_ios
+  - name: xr-router-1
+    ip: 10.0.0.1
+    type: cisco_xr
+
+groups:
+  ios_upgrade:
+    hosts:
+      - device-ios-03
+  xr:
+    hosts:
+      - xr-router-1

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/kcajme/network-collector/pkg/validation"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 type RetryConfig struct {
@@ -57,6 +59,10 @@ type StepConfig struct {
 type DeviceConfig struct {
 	Hostname         string            `mapstructure:"hostname" yaml:"hostname"`
 	IP               string            `mapstructure:"ip" yaml:"ip"`
+	Host             string            `mapstructure:"host" yaml:"host"`
+	Hosts            []string          `mapstructure:"hosts" yaml:"hosts"`
+	Group            string            `mapstructure:"group" yaml:"group"`
+	Groups           []string          `mapstructure:"groups" yaml:"groups"`
 	Type             string            `mapstructure:"type" yaml:"type"`
 	Timeout          int               `mapstructure:"timeout" yaml:"timeout"`
 	OperationTimeout int               `mapstructure:"operation_timeout" yaml:"operation_timeout"`
@@ -75,8 +81,28 @@ type ValidationConfig struct {
 }
 
 type Config struct {
-	NamePlaybook string         `mapstructure:"name_playbook" yaml:"name_playbook"`
-	SSH          []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
+	NamePlaybook  string         `mapstructure:"name_playbook" yaml:"name_playbook"`
+	InventoryFile string         `mapstructure:"inventory_file" yaml:"inventory_file"`
+	SSH           []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
+}
+
+type InventoryHostConfig struct {
+	Name             string `yaml:"name"`
+	Hostname         string `yaml:"hostname"`
+	IP               string `yaml:"ip"`
+	Address          string `yaml:"address"`
+	Type             string `yaml:"type"`
+	Timeout          int    `yaml:"timeout"`
+	OperationTimeout int    `yaml:"operation_timeout"`
+}
+
+type InventoryGroupConfig struct {
+	Hosts []string `yaml:"hosts"`
+}
+
+type InventoryConfig struct {
+	Hosts  []InventoryHostConfig           `yaml:"hosts"`
+	Groups map[string]InventoryGroupConfig `yaml:"groups"`
 }
 
 type deviceValidation struct {
@@ -137,6 +163,178 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 		return rendered, nil
 	}
 	return expected, nil
+}
+
+func cloneDeviceConfig(device DeviceConfig) DeviceConfig {
+	device.Host = ""
+	device.Hosts = nil
+	device.Group = ""
+	device.Groups = nil
+	return device
+}
+
+func inventoryHostKey(host InventoryHostConfig) string {
+	name := strings.TrimSpace(host.Name)
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(host.Hostname)
+}
+
+func inventoryHostIP(host InventoryHostConfig) string {
+	ip := strings.TrimSpace(host.IP)
+	if ip != "" {
+		return ip
+	}
+	return strings.TrimSpace(host.Address)
+}
+
+func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceConfig {
+	resolved := cloneDeviceConfig(device)
+	name := inventoryHostKey(host)
+	if strings.TrimSpace(resolved.Hostname) == "" {
+		resolved.Hostname = name
+	}
+	if strings.TrimSpace(resolved.IP) == "" {
+		resolved.IP = inventoryHostIP(host)
+	}
+	if strings.TrimSpace(resolved.Type) == "" {
+		resolved.Type = strings.TrimSpace(host.Type)
+	}
+	if resolved.Timeout == 0 {
+		resolved.Timeout = host.Timeout
+	}
+	if resolved.OperationTimeout == 0 {
+		resolved.OperationTimeout = host.OperationTimeout
+	}
+	return resolved
+}
+
+func resolveInventoryPath(inventoryFile, configFile string) string {
+	path := strings.TrimSpace(inventoryFile)
+	if path == "" {
+		path = "inventory.yaml"
+	}
+	if !filepath.IsAbs(path) && strings.TrimSpace(configFile) != "" {
+		path = filepath.Join(filepath.Dir(configFile), path)
+	}
+	return path
+}
+
+func loadInventory(inventoryFile, configFile string) (*InventoryConfig, error) {
+	path := resolveInventoryPath(inventoryFile, configFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var inventory InventoryConfig
+	if err := yaml.Unmarshal(b, &inventory); err != nil {
+		return nil, err
+	}
+	return &inventory, nil
+}
+
+func loadOptionalInventory(inventoryFile, configFile string) (*InventoryConfig, error) {
+	explicit := strings.TrimSpace(inventoryFile) != ""
+	path := resolveInventoryPath(inventoryFile, configFile)
+	if !explicit {
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return loadInventory(inventoryFile, configFile)
+}
+
+func inventoryIndex(inventory *InventoryConfig) (map[string]InventoryHostConfig, error) {
+	index := map[string]InventoryHostConfig{}
+	if inventory == nil {
+		return index, nil
+	}
+
+	for _, host := range inventory.Hosts {
+		key := inventoryHostKey(host)
+		if key == "" {
+			return nil, fmt.Errorf("inventory host missing name or hostname")
+		}
+		if inventoryHostIP(host) == "" {
+			return nil, fmt.Errorf("inventory host %q missing ip or address", key)
+		}
+		if _, exists := index[key]; exists {
+			return nil, fmt.Errorf("duplicate inventory host %q", key)
+		}
+		index[key] = host
+	}
+	return index, nil
+}
+
+func inventoryTargets(device DeviceConfig) []string {
+	targets := []string{}
+	if strings.TrimSpace(device.Host) != "" {
+		targets = append(targets, strings.TrimSpace(device.Host))
+	}
+	for _, host := range device.Hosts {
+		if strings.TrimSpace(host) != "" {
+			targets = append(targets, strings.TrimSpace(host))
+		}
+	}
+	return targets
+}
+
+func inventoryGroupNames(device DeviceConfig) []string {
+	groups := []string{}
+	if strings.TrimSpace(device.Group) != "" {
+		groups = append(groups, strings.TrimSpace(device.Group))
+	}
+	for _, group := range device.Groups {
+		if strings.TrimSpace(group) != "" {
+			groups = append(groups, strings.TrimSpace(group))
+		}
+	}
+	return groups
+}
+
+func resolveInventoryDevices(devices []DeviceConfig, inventory *InventoryConfig) ([]DeviceConfig, error) {
+	hostIndex, err := inventoryIndex(inventory)
+	if err != nil {
+		return nil, err
+	}
+
+	var resolved []DeviceConfig
+	for _, device := range devices {
+		targets := inventoryTargets(device)
+		for _, groupName := range inventoryGroupNames(device) {
+			if inventory == nil || inventory.Groups == nil {
+				return nil, fmt.Errorf("inventory group %q requested but no inventory groups are loaded", groupName)
+			}
+			group, ok := inventory.Groups[groupName]
+			if !ok {
+				return nil, fmt.Errorf("inventory group %q not found", groupName)
+			}
+			for _, host := range group.Hosts {
+				if strings.TrimSpace(host) != "" {
+					targets = append(targets, strings.TrimSpace(host))
+				}
+			}
+		}
+
+		if len(targets) == 0 {
+			resolved = append(resolved, cloneDeviceConfig(device))
+			continue
+		}
+
+		for _, target := range targets {
+			host, ok := hostIndex[target]
+			if !ok {
+				return nil, fmt.Errorf("inventory host %q not found", target)
+			}
+			resolved = append(resolved, applyInventoryHost(device, host))
+		}
+	}
+	return resolved, nil
 }
 
 func waitDuration(waitSeconds int) (time.Duration, error) {
@@ -658,7 +856,9 @@ func main() {
 	var jsonOut bool
 	var cliFailOnFail bool
 	var configFile string
+	var cliInventoryFile string
 	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
+	flag.StringVar(&cliInventoryFile, "inventory", "", "path to inventory file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.Parse()
@@ -686,11 +886,26 @@ func main() {
 		slog.Error("error reading config", "error", err)
 		os.Exit(1)
 	}
+	if strings.TrimSpace(cliInventoryFile) != "" {
+		config.InventoryFile = cliInventoryFile
+	}
+
+	inventory, err := loadOptionalInventory(config.InventoryFile, configFile)
+	if err != nil {
+		slog.Error("error reading inventory", "inventory_file", config.InventoryFile, "error", err)
+		os.Exit(1)
+	}
+
+	sshDevices, err := resolveInventoryDevices(config.SSH, inventory)
+	if err != nil {
+		slog.Error("error resolving SSH inventory", "error", err)
+		os.Exit(1)
+	}
 
 	var aggregated []deviceValidation
 	runFailed := false
 
-	for _, device := range config.SSH {
+	for _, device := range sshDevices {
 		hostname := strings.TrimSpace(device.Hostname)
 		ip := strings.TrimSpace(device.IP)
 		deviceType := strings.TrimSpace(device.Type)

@@ -193,15 +193,53 @@ netconf:
 
 The `cmd/network-collector` example supports `ssh.steps`, which lets you run multiple commands over the same SSH connection for a single device. Each step can include `validation` and optional retry behavior.
 
+### Inventory-based SSH targets
+
+You can keep connection details in `inventory.yaml` and reference them from `config.yaml`, which avoids repeating hostnames, IP addresses, and device types across playbook entries.
+
+Example `inventory.yaml`:
+
+```yaml
+hosts:
+  - name: router-01
+    ip: 192.0.2.10
+    type: cisco_ios
+  - name: router-02
+    ip: 192.0.2.11
+    type: cisco_ios
+
+groups:
+  ios:
+    hosts:
+      - router-01
+      - router-02
+```
+
+Example `config.yaml`:
+
+```yaml
+inventory_file: inventory.yaml
+
+ssh:
+  - host: router-01
+    cmd: show version
+
+  - group: ios
+    steps:
+      - name: show-version
+        cmd: show version
+```
+
+Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
+
 Example:
 
 ```yaml
 name_playbook: Software Upgrade on Cisco IOS
+inventory_file: inventory.yaml
 
 ssh:
-  - hostname: device-ios-03
-    ip: 192.168.16.13
-    type: cisco_ios
+  - host: device-ios-03
     timeout: 20
     operation_timeout: 120
     steps:

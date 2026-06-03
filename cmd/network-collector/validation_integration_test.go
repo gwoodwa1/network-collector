@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"io/ioutil"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ import (
 // reuse lightweight structs to parse config.yaml for tests
 type testDevice struct {
 	Hostname   string                 `yaml:"hostname"`
+	Host       string                 `yaml:"host"`
 	IP         string                 `yaml:"ip"`
 	Type       string                 `yaml:"type"`
 	Command    string                 `yaml:"cmd"`
@@ -64,6 +67,8 @@ func TestValidationIntegration(t *testing.T) {
 			sample = "System state: RUNNING"
 		} else if rule.Pattern != "" && contains(rule.Pattern, "Total memory") {
 			sample = "Total memory: 100MB"
+		} else if rule.Pattern != "" && contains(rule.Pattern, "address-family ipv4 unicast overload") {
+			sample = "address-family ipv4 unicast overload"
 		} else {
 			// default fallback to the expected as string
 			sample = toString(rule.Expected)
@@ -71,12 +76,19 @@ func TestValidationIntegration(t *testing.T) {
 
 		res, err := validation.ValidateOutput(sample, rule)
 		if err != nil {
-			t.Fatalf("validation execution error for %s: %v", d.Hostname, err)
+			t.Fatalf("validation execution error for %s: %v", testDeviceName(d), err)
 		}
 		if !res.Pass {
-			t.Fatalf("expected validation pass for %s, got: %+v", d.Hostname, res)
+			t.Fatalf("expected validation pass for %s, got: %+v", testDeviceName(d), res)
 		}
 	}
+}
+
+func testDeviceName(d testDevice) string {
+	if strings.TrimSpace(d.Hostname) != "" {
+		return d.Hostname
+	}
+	return d.Host
 }
 
 func TestStepVariableRegistrationAndInterpolation(t *testing.T) {
@@ -126,6 +138,153 @@ func TestStepVariableRegistrationAndInterpolation(t *testing.T) {
 	}
 	if pattern != `Package ID:\s+14` {
 		t.Fatalf("unexpected rendered pattern: %q", pattern)
+	}
+}
+
+func TestResolveInventoryDevicesPreservesInlineDevice(t *testing.T) {
+	devices := []DeviceConfig{{
+		Hostname: "router-01",
+		IP:       "192.0.2.1",
+		Type:     "cisco_ios",
+		Command:  "show version",
+	}}
+
+	resolved, err := resolveInventoryDevices(devices, nil)
+	if err != nil {
+		t.Fatalf("resolveInventoryDevices returned error: %v", err)
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("expected one resolved device, got %d", len(resolved))
+	}
+	if resolved[0].Hostname != "router-01" || resolved[0].IP != "192.0.2.1" || resolved[0].Type != "cisco_ios" {
+		t.Fatalf("unexpected resolved inline device: %+v", resolved[0])
+	}
+}
+
+func TestResolveInventoryDevicesExpandsHostAndGroup(t *testing.T) {
+	inventory := &InventoryConfig{
+		Hosts: []InventoryHostConfig{
+			{Name: "router-01", IP: "192.0.2.1", Type: "cisco_ios", Timeout: 20},
+			{Name: "router-02", IP: "192.0.2.2", Type: "cisco_ios", Timeout: 30},
+		},
+		Groups: map[string]InventoryGroupConfig{
+			"ios": {Hosts: []string{"router-01", "router-02"}},
+		},
+	}
+
+	devices := []DeviceConfig{{
+		Group:            "ios",
+		OperationTimeout: 120,
+		Command:          "show version",
+	}}
+
+	resolved, err := resolveInventoryDevices(devices, inventory)
+	if err != nil {
+		t.Fatalf("resolveInventoryDevices returned error: %v", err)
+	}
+	if len(resolved) != 2 {
+		t.Fatalf("expected two resolved devices, got %d", len(resolved))
+	}
+	if resolved[0].Hostname != "router-01" || resolved[0].IP != "192.0.2.1" || resolved[0].Type != "cisco_ios" {
+		t.Fatalf("unexpected first resolved device: %+v", resolved[0])
+	}
+	if resolved[1].Hostname != "router-02" || resolved[1].IP != "192.0.2.2" || resolved[1].Type != "cisco_ios" {
+		t.Fatalf("unexpected second resolved device: %+v", resolved[1])
+	}
+	if resolved[0].Timeout != 20 || resolved[0].OperationTimeout != 120 {
+		t.Fatalf("expected inventory timeout and config operation timeout, got %+v", resolved[0])
+	}
+}
+
+func TestResolveInventoryDevicesMissingHostReturnsError(t *testing.T) {
+	devices := []DeviceConfig{{
+		Host:    "missing-router",
+		Command: "show version",
+	}}
+
+	_, err := resolveInventoryDevices(devices, &InventoryConfig{})
+	if err == nil {
+		t.Fatal("expected error for missing inventory host, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing-router") {
+		t.Fatalf("expected error to mention missing host, got %v", err)
+	}
+}
+
+func TestLoadOptionalInventoryMissingDefaultDoesNotError(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("name_playbook: test\n"), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	inventory, err := loadOptionalInventory("", configPath)
+	if err != nil {
+		t.Fatalf("loadOptionalInventory returned error: %v", err)
+	}
+	if inventory != nil {
+		t.Fatalf("expected nil inventory for missing default, got %+v", inventory)
+	}
+}
+
+func TestLoadInventoryRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("name_playbook: test\n"), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	inventoryPath := filepath.Join(dir, "inventory.yaml")
+	input := []byte(`
+hosts:
+  - name: router-01
+    ip: 192.0.2.1
+    type: cisco_ios
+groups:
+  ios:
+    hosts:
+      - router-01
+`)
+	if err := os.WriteFile(inventoryPath, input, 0644); err != nil {
+		t.Fatalf("failed to write temp inventory: %v", err)
+	}
+
+	inventory, err := loadOptionalInventory("", configPath)
+	if err != nil {
+		t.Fatalf("loadOptionalInventory returned error: %v", err)
+	}
+	if inventory == nil || len(inventory.Hosts) != 1 || inventory.Hosts[0].Name != "router-01" {
+		t.Fatalf("unexpected inventory: %+v", inventory)
+	}
+}
+
+func TestConfigYAMLDecodeWithInventoryRefs(t *testing.T) {
+	input := `
+name_playbook: Inventory Playbook
+inventory_file: inventory.yaml
+ssh:
+  - host: router-01
+    cmd: show version
+  - group: ios
+    steps:
+      - name: show-clock
+        cmd: show clock
+`
+
+	var config Config
+	if err := yaml.Unmarshal([]byte(input), &config); err != nil {
+		t.Fatalf("failed to decode config with inventory refs: %v", err)
+	}
+	if config.InventoryFile != "inventory.yaml" {
+		t.Fatalf("unexpected inventory file: %q", config.InventoryFile)
+	}
+	if len(config.SSH) != 2 {
+		t.Fatalf("expected two ssh entries, got %d", len(config.SSH))
+	}
+	if config.SSH[0].Host != "router-01" {
+		t.Fatalf("unexpected host ref: %+v", config.SSH[0])
+	}
+	if config.SSH[1].Group != "ios" || len(config.SSH[1].Steps) != 1 {
+		t.Fatalf("unexpected group ref: %+v", config.SSH[1])
 	}
 }
 
