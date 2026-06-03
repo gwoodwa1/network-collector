@@ -92,15 +92,14 @@ ssh:
           expected: '{{install_id}}'
           expected_type: string
 
-      # Use ssh_probe inside a step after a reboot/reload wait.
-      # - name: wait-for-reboot
-      #   wait_seconds: 600
-      #   ssh_probe:
-      #     port: 22
-      #     interval_seconds: 30
-      #     max_attempts: 40
-      #     timeout_seconds: 5
-      #     post_wait_seconds: 120
+      - name: wait-for-reboot
+        wait_seconds: 600
+        ssh_probe:
+          port: 22
+          interval_seconds: 30
+          max_attempts: 40
+          timeout_seconds: 5
+          post_wait_seconds: 120
 
   - hostname: xr-router-1
     ip: 10.0.0.1

@@ -229,7 +229,7 @@ ssh:
 
       - name: confirm-reload
         cmd: yes
-        return_to_prompt: no
+        return_to_prompt: false
 
       - name: wait-for-reboot
         wait_seconds: 600
@@ -256,6 +256,26 @@ ssh:
 
 The retry step keeps rerunning the command until validation passes, with the configured interval and attempt limit.
 
+Validation steps can also run conditional actions after the final validation result:
+
+```yaml
+      - name: check-current-image
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: "System image file is \"(.+)\""
+          condition: contains
+          expected: iosxe-17.09.04
+          expected_type: string
+        on_pass:
+          action: exit
+          message: target image is already active; stopping this device
+        on_fail:
+          cmd: show install summary
+```
+
+Use `on_pass` or `on_fail` on a step with `validation`. Supported actions are `exit`/`stop` to stop the remaining steps for the current device without failing, `fail` to stop and mark the run failed, and `cmd` to run another SSH command. If an action contains only `cmd`, `action: cmd` is implied. Action `message` and `cmd` values support registered variables such as `{{install_id}}`.
+
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 
 Use `operation_timeout` on an SSH device to increase the scrapligo operation timeout for long-running commands. The value is seconds; for example, `operation_timeout: 120` gives commands up to two minutes to return to the prompt.
@@ -264,7 +284,7 @@ Use `wait_seconds` on a step to pause while keeping the SSH connection open. A w
 
 Use `ssh_probe` after software upgrades or reloads. The collector closes the stale SSH session, probes the configured TCP port until it responds, waits `post_wait_seconds` after the first successful probe, reconnects SSH, and then continues with the following steps. This helps cover the gap where port 22 is accepting connections but the device is still booting.
 
-Use `return_to_prompt: no` for commands that intentionally reboot or disconnect the device before a normal CLI prompt can return, such as a `yes` confirmation. Timeout/error from that command is treated as expected, the stale SSH client is closed, and the next wait/probe step can handle reconnecting.
+Use `return_to_prompt: false` for commands that intentionally reboot or disconnect the device before a normal CLI prompt can return, such as a `yes` confirmation. Timeout/error from that command is treated as expected, the stale SSH client is closed, and the next wait/probe step can handle reconnecting. The collector also accepts `no` as a compatibility alias.
 
 You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
 

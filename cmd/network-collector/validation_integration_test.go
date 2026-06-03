@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io/ioutil"
 	"net"
 	"strconv"
@@ -175,6 +176,92 @@ func TestShouldReturnToPrompt(t *testing.T) {
 	value = false
 	if shouldReturnToPrompt(&value) {
 		t.Fatal("expected false return_to_prompt to allow no prompt")
+	}
+}
+
+func TestReturnToPromptDecodeAcceptsNo(t *testing.T) {
+	input := map[string]interface{}{
+		"name":             "confirm-reload",
+		"cmd":              "yes",
+		"return_to_prompt": "no",
+	}
+
+	var step StepConfig
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToBoolDecodeHook,
+		),
+		Result: &step,
+	})
+	if err != nil {
+		t.Fatalf("failed to create decoder: %v", err)
+	}
+	if err := decoder.Decode(input); err != nil {
+		t.Fatalf("failed to decode return_to_prompt: %v", err)
+	}
+	if step.ReturnToPrompt == nil {
+		t.Fatal("expected return_to_prompt to decode")
+	}
+	if *step.ReturnToPrompt {
+		t.Fatal("expected return_to_prompt: no to decode as false")
+	}
+}
+
+func TestValidationActionSelectionAndExit(t *testing.T) {
+	step := StepConfig{
+		OnPass: &ValidationActionConfig{Action: "exit", Message: "already upgraded"},
+		OnFail: &ValidationActionConfig{Action: "fail", Message: "upgrade check failed"},
+	}
+
+	passAction := validationActionForResult(step, validation.ValidationResult{Status: "pass"})
+	if passAction == nil || passAction.Action != "exit" {
+		t.Fatalf("expected pass action exit, got %+v", passAction)
+	}
+
+	failAction := validationActionForResult(step, validation.ValidationResult{Status: "fail"})
+	if failAction == nil || failAction.Action != "fail" {
+		t.Fatalf("expected fail action fail, got %+v", failAction)
+	}
+
+	var log bytes.Buffer
+	outcome, err := executeValidationAction(nil, passAction, map[string]string{}, &log, true, "router-01", "check-version")
+	if err != nil {
+		t.Fatalf("executeValidationAction returned error: %v", err)
+	}
+	if !outcome.StopDevice || outcome.RunFailed {
+		t.Fatalf("unexpected action outcome: %+v", outcome)
+	}
+	if !strings.Contains(log.String(), "already upgraded") {
+		t.Fatalf("expected action message in log, got %q", log.String())
+	}
+}
+
+func TestStepDecodeWithValidationActions(t *testing.T) {
+	input := `
+name: check-current-version
+cmd: show version
+validation:
+  extractor: regex
+  pattern: 'Version\s+(\S+)'
+  condition: eq
+  expected: 17.9.4
+  expected_type: string
+on_pass:
+  action: exit
+  message: already running requested image
+on_fail:
+  cmd: show install summary
+`
+
+	var step StepConfig
+	if err := yaml.Unmarshal([]byte(input), &step); err != nil {
+		t.Fatalf("failed to decode step with validation actions: %v", err)
+	}
+	if step.OnPass == nil || step.OnPass.Action != "exit" {
+		t.Fatalf("unexpected on_pass action: %+v", step.OnPass)
+	}
+	if step.OnFail == nil || step.OnFail.Command != "show install summary" {
+		t.Fatalf("unexpected on_fail action: %+v", step.OnFail)
 	}
 }
 

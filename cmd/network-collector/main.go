@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/kcajme/network-collector/pkg/drivers/ssh"
 	"github.com/kcajme/network-collector/pkg/validation"
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 )
 
@@ -32,15 +34,23 @@ type SSHProbeConfig struct {
 	PostWaitSeconds int `mapstructure:"post_wait_seconds" yaml:"post_wait_seconds"`
 }
 
+type ValidationActionConfig struct {
+	Action  string `mapstructure:"action" yaml:"action"`
+	Command string `mapstructure:"cmd" yaml:"cmd"`
+	Message string `mapstructure:"message" yaml:"message"`
+}
+
 type StepConfig struct {
-	Name           string            `mapstructure:"name" yaml:"name"`
-	Command        string            `mapstructure:"cmd" yaml:"cmd"`
-	WaitSeconds    int               `mapstructure:"wait_seconds" yaml:"wait_seconds"`
-	ReturnToPrompt *bool             `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
-	SSHProbe       *SSHProbeConfig   `mapstructure:"ssh_probe" yaml:"ssh_probe"`
-	Validation     *ValidationConfig `mapstructure:"validation" yaml:"validation"`
-	Retry          *RetryConfig      `mapstructure:"retry" yaml:"retry"`
-	Register       string            `mapstructure:"register" yaml:"register"`
+	Name           string                  `mapstructure:"name" yaml:"name"`
+	Command        string                  `mapstructure:"cmd" yaml:"cmd"`
+	WaitSeconds    int                     `mapstructure:"wait_seconds" yaml:"wait_seconds"`
+	ReturnToPrompt *bool                   `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
+	SSHProbe       *SSHProbeConfig         `mapstructure:"ssh_probe" yaml:"ssh_probe"`
+	Validation     *ValidationConfig       `mapstructure:"validation" yaml:"validation"`
+	Retry          *RetryConfig            `mapstructure:"retry" yaml:"retry"`
+	Register       string                  `mapstructure:"register" yaml:"register"`
+	OnPass         *ValidationActionConfig `mapstructure:"on_pass" yaml:"on_pass"`
+	OnFail         *ValidationActionConfig `mapstructure:"on_fail" yaml:"on_fail"`
 }
 
 type DeviceConfig struct {
@@ -117,6 +127,35 @@ func waitDuration(waitSeconds int) (time.Duration, error) {
 
 func shouldReturnToPrompt(returnToPrompt *bool) bool {
 	return returnToPrompt == nil || *returnToPrompt
+}
+
+func validationActionForResult(step StepConfig, result validation.ValidationResult) *ValidationActionConfig {
+	if result.Status == "pass" {
+		return step.OnPass
+	}
+	if result.Status == "fail" || result.Status == "error" {
+		return step.OnFail
+	}
+	return nil
+}
+
+func stringToBoolDecodeHook(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+	if from.Kind() != reflect.String || to.Kind() != reflect.Bool {
+		return data, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(data.(string))) {
+	case "yes", "y":
+		return true, nil
+	case "no", "n":
+		return false, nil
+	default:
+		value, err := strconv.ParseBool(strings.TrimSpace(data.(string)))
+		if err != nil {
+			return data, nil
+		}
+		return value, nil
+	}
 }
 
 type resolvedSSHProbe struct {
@@ -201,6 +240,65 @@ func closeSSHClient(client *ssh.Client) error {
 		return nil
 	}
 	return client.Close()
+}
+
+type validationActionOutcome struct {
+	StopDevice bool
+	RunFailed  bool
+}
+
+func executeValidationAction(client *ssh.Client, action *ValidationActionConfig, vars map[string]string, writer io.Writer, jsonOut bool, hostname, stepName string) (validationActionOutcome, error) {
+	if action == nil {
+		return validationActionOutcome{}, nil
+	}
+
+	if strings.TrimSpace(action.Message) != "" {
+		message, err := renderTemplate(action.Message, vars)
+		if err != nil {
+			return validationActionOutcome{}, fmt.Errorf("error rendering action message: %w", err)
+		}
+		writeSessionf(writer, "[step:%s] action: %s\n", stepName, message)
+		if !jsonOut {
+			fmt.Printf("device=%s step=%s action=%q\n", hostname, stepName, message)
+		}
+	}
+
+	actionName := strings.ToLower(strings.TrimSpace(action.Action))
+	if actionName == "" && strings.TrimSpace(action.Command) != "" {
+		actionName = "cmd"
+	}
+
+	switch actionName {
+	case "exit", "stop":
+		return validationActionOutcome{StopDevice: true}, nil
+	case "fail":
+		return validationActionOutcome{StopDevice: true, RunFailed: true}, nil
+	case "cmd", "command", "run":
+		if client == nil {
+			return validationActionOutcome{}, fmt.Errorf("cannot run validation action command without an active SSH session")
+		}
+		cmd, err := renderTemplate(strings.TrimSpace(action.Command), vars)
+		if err != nil {
+			return validationActionOutcome{}, fmt.Errorf("error rendering action command: %w", err)
+		}
+		if cmd == "" {
+			return validationActionOutcome{}, fmt.Errorf("validation action command cannot be empty")
+		}
+		output, err := client.Execute(cmd)
+		if err != nil {
+			return validationActionOutcome{}, err
+		}
+		writeSessionf(writer, "\n[step:%s] action command=%q\n%s\n", stepName, cmd, output)
+		if !jsonOut {
+			fmt.Printf("device=%s step=%s action_command=%q\n%s\n", hostname, stepName, cmd, output)
+		}
+		return validationActionOutcome{}, nil
+	default:
+		if actionName == "" {
+			return validationActionOutcome{}, fmt.Errorf("validation action requires action or cmd")
+		}
+		return validationActionOutcome{}, fmt.Errorf("unsupported validation action: %s", action.Action)
+	}
 }
 
 func sanitizeLogName(value string) string {
@@ -338,7 +436,9 @@ func main() {
 	}
 
 	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := viper.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		stringToBoolDecodeHook,
+	))); err != nil {
 		slog.Error("error reading config", "error", err)
 		os.Exit(1)
 	}
@@ -584,13 +684,30 @@ func main() {
 
 			if step.Validation != nil {
 				aggregated = append(aggregated, deviceValidation{Hostname: hostname, IP: ip, Result: finalResult})
+
+				action := validationActionForResult(step, finalResult)
+				outcome, err := executeValidationAction(client, action, variables, sessionLog, jsonOut, hostname, stepName)
+				if err != nil {
+					runFailed = true
+					slog.Error("validation action failed", "hostname", hostname, "ip", ip, "step", stepName, "error", err)
+					writeSessionf(sessionLog, "[step:%s] validation action failed: %v\n", stepName, err)
+					break
+				}
+				if outcome.RunFailed {
+					runFailed = true
+				}
+				if outcome.StopDevice {
+					stopDeviceSteps = true
+					slog.Info("stopping remaining SSH steps after validation action", "hostname", hostname, "ip", ip, "step", stepName)
+					break
+				}
 			}
 		}
 		if stopDeviceSteps {
 			slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
 		}
 
-		if err := client.Close(); err != nil {
+		if err := closeSSHClient(client); err != nil {
 			runFailed = true
 			slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
 			writeSessionf(sessionLog, "ERROR: failed to close SSH connection: %v\n", err)
