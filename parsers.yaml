@@ -9,3 +9,26 @@ parsers:
       profile:
         pattern: '(?m)^(.+ Profile):'
         group: 1
+  xr_show_alarms_brief_system_active:
+    type: regex
+    fields:
+      locations:
+        pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
+        group: 1
+        repeated: true
+      severities:
+        pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
+        group: 2
+        repeated: true
+      groups:
+        pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
+        group: 3
+        repeated: true
+      set_times:
+        pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
+        group: 4
+        repeated: true
+      descriptions:
+        pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
+        group: 5
+        repeated: true

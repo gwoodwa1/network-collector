@@ -220,6 +220,31 @@ func TestStepValidationsKeepsBackwardCompatibleSingleValidation(t *testing.T) {
 	}
 }
 
+func TestRegisterParserOutputStoresParsedJSON(t *testing.T) {
+	vars := map[string]string{}
+	parsed := `{"descriptions":["Power Group redundancy lost."],"groups":["Environ"],"locations":["0"]}`
+
+	registered := registerParserOutput(vars, StepConfig{Register: " baseline_alarms "}, parsed)
+	if !registered {
+		t.Fatalf("expected parser output to be registered")
+	}
+	if vars["baseline_alarms"] != parsed {
+		t.Fatalf("unexpected registered value: %q", vars["baseline_alarms"])
+	}
+}
+
+func TestRegisterParserOutputSkipsEmptyRegister(t *testing.T) {
+	vars := map[string]string{}
+
+	registered := registerParserOutput(vars, StepConfig{}, `{"locations":["0"]}`)
+	if registered {
+		t.Fatalf("did not expect parser output to be registered")
+	}
+	if len(vars) != 0 {
+		t.Fatalf("unexpected variables: %+v", vars)
+	}
+}
+
 func TestResolveInventoryDevicesPreservesInlineDevice(t *testing.T) {
 	devices := []DeviceConfig{{
 		Hostname: "router-01",
@@ -383,6 +408,66 @@ Default Profile:
 	}
 	if !res.Pass {
 		t.Fatalf("expected gjson validation to pass against parsed output, got %+v from %s", res, parsed)
+	}
+}
+
+func TestXRShowAlarmsBriefSystemActiveParser(t *testing.T) {
+	output := `RP/0/RSP1/CPU0:alice-b2bc-1#show alarms brief system active
+Wed Jun  3 15:26:30.339 BST
+
+Active Alarms
+--------------------------------------------------------------------------------
+Location        Severity     Group       Set Time                   Description
+--------------------------------------------------------------------------------
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_VIN_VOLT_OOR).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_NO_INPUT_DETECTED).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Output Disabled (PM_OUTPUT_EN_PI_HI).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_VIN_A_VOLT_OOR).
+0/RSP1/CPU0     Major        Software    01/09/2026 23:56:40 BST    One Or More Fabricq ASICs Offline
+Hu0/0/0/31      Critical     Software    05/07/2026 19:30:03 BST    HW_OPTICS: RX POWER LANE-0 Low Alarm
+Hu0/0/0/31      Critical     Software    05/07/2026 19:30:03 BST    HW_OPTICS: RX POWER LANE-1 Low Alarm
+`
+
+	parsers, err := loadParsers("../../parsers.yaml", "")
+	if err != nil {
+		t.Fatalf("failed to load parsers.yaml: %v", err)
+	}
+	parsed, err := parseOutputWithModule(output, "xr_show_alarms_brief_system_active", parsers.Parsers)
+	if err != nil {
+		t.Fatalf("parseOutputWithModule returned error: %v", err)
+	}
+
+	tests := []validation.ValidationRule{
+		{
+			Extractor:    "gjson",
+			JSONPath:     "locations.#",
+			Condition:    "eq",
+			Expected:     7,
+			ExpectedType: "int",
+		},
+		{
+			Extractor:    "gjson",
+			JSONPath:     "severities.5",
+			Condition:    "eq",
+			Expected:     "Critical",
+			ExpectedType: "string",
+		},
+		{
+			Extractor:    "gjson",
+			JSONPath:     "descriptions.4",
+			Condition:    "contains",
+			Expected:     "Fabricq ASICs Offline",
+			ExpectedType: "string",
+		},
+	}
+	for _, rule := range tests {
+		res, err := validation.ValidateOutput(parsed, rule)
+		if err != nil {
+			t.Fatalf("validation returned error for %s: %v", rule.JSONPath, err)
+		}
+		if !res.Pass {
+			t.Fatalf("expected validation pass for %s, got %+v from %s", rule.JSONPath, res, parsed)
+		}
 	}
 }
 

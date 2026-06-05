@@ -524,6 +524,15 @@ func stepValidations(step StepConfig) []ValidationConfig {
 	return validations
 }
 
+func registerParserOutput(vars map[string]string, step StepConfig, parsedOutput string) bool {
+	name := strings.TrimSpace(step.Register)
+	if name == "" {
+		return false
+	}
+	vars[name] = parsedOutput
+	return true
+}
+
 func overallValidationResult(results []validation.ValidationResult) validation.ValidationResult {
 	if len(results) == 0 {
 		return validation.ValidationResult{}
@@ -904,6 +913,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			}
 
 			validationOutput := output
+			parsedForRegister := false
 			if strings.TrimSpace(step.Parser) != "" {
 				parsedOutput, err := parseOutputWithModule(output, step.Parser, ctx.parsers)
 				if err != nil {
@@ -917,10 +927,15 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				if !ctx.jsonOut {
 					fmt.Printf("parser output for %s step=%s parser=%s:\n%s\n", ctx.hostname, stepName, step.Parser, parsedOutput)
 				}
+				parsedForRegister = true
 			}
 
 			validations := stepValidations(step)
 			if len(validations) == 0 {
+				if step.Register != "" && parsedForRegister {
+					registerParserOutput(ctx.variables, step, validationOutput)
+					slog.Info("registered parser output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
+				}
 				break
 			}
 
