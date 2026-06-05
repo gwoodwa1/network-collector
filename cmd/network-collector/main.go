@@ -533,6 +533,10 @@ func registerParserOutput(vars map[string]string, step StepConfig, parsedOutput 
 	return true
 }
 
+func variableScopeKey(hostname, ip string) string {
+	return strings.TrimSpace(hostname) + "\x00" + strings.TrimSpace(ip)
+}
+
 func overallValidationResult(results []validation.ValidationResult) validation.ValidationResult {
 	if len(results) == 0 {
 		return validation.ValidationResult{}
@@ -913,7 +917,6 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			}
 
 			validationOutput := output
-			parsedForRegister := false
 			if strings.TrimSpace(step.Parser) != "" {
 				parsedOutput, err := parseOutputWithModule(output, step.Parser, ctx.parsers)
 				if err != nil {
@@ -927,15 +930,13 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				if !ctx.jsonOut {
 					fmt.Printf("parser output for %s step=%s parser=%s:\n%s\n", ctx.hostname, stepName, step.Parser, parsedOutput)
 				}
-				parsedForRegister = true
+				if registerParserOutput(ctx.variables, step, validationOutput) {
+					slog.Info("registered parser output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
+				}
 			}
 
 			validations := stepValidations(step)
 			if len(validations) == 0 {
-				if step.Register != "" && parsedForRegister {
-					registerParserOutput(ctx.variables, step, validationOutput)
-					slog.Info("registered parser output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
-				}
 				break
 			}
 
@@ -1197,6 +1198,7 @@ func main() {
 
 	var aggregated []deviceValidation
 	runFailed := false
+	deviceVariables := map[string]map[string]string{}
 
 	for _, device := range sshDevices {
 		hostname := strings.TrimSpace(device.Hostname)
@@ -1251,6 +1253,13 @@ func main() {
 			continue
 		}
 
+		variableKey := variableScopeKey(hostname, ip)
+		variables := deviceVariables[variableKey]
+		if variables == nil {
+			variables = map[string]string{}
+			deviceVariables[variableKey] = variables
+		}
+
 		ctx := stepExecutionContext{
 			hostname:   hostname,
 			ip:         ip,
@@ -1260,7 +1269,7 @@ func main() {
 			opts:       opts,
 			jsonOut:    jsonOut,
 			sessionLog: sessionLog,
-			variables:  map[string]string{},
+			variables:  variables,
 			aggregated: &aggregated,
 			runFailed:  &runFailed,
 			parsers:    parsers,

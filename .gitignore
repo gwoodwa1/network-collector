@@ -3,3 +3,6 @@ LINTING_REPORT.md
 lint_report.txt
 BACKDOOR_SECURITY_REPORT.md
 SECURITY_AUDIT.md
+
+# Local build artifacts
+/network-collector

@@ -245,6 +245,54 @@ func TestRegisterParserOutputSkipsEmptyRegister(t *testing.T) {
 	}
 }
 
+func TestParsedAlarmBaselineCanRenderFinalComparison(t *testing.T) {
+	vars := map[string]string{}
+	baseline := `{"descriptions":["Power Group redundancy lost."],"groups":["Environ"],"locations":["0"],"set_times":["02/26/2026 15:05:05 GMT"],"severities":["Major"]}`
+
+	if !registerParserOutput(vars, StepConfig{Register: "baseline_alarms"}, baseline) {
+		t.Fatalf("expected baseline alarms to be registered")
+	}
+
+	expected, err := renderExpectedValue("{{baseline_alarms}}", vars)
+	if err != nil {
+		t.Fatalf("renderExpectedValue failed: %v", err)
+	}
+	if expected != baseline {
+		t.Fatalf("unexpected rendered baseline: %#v", expected)
+	}
+
+	rules := []ValidationConfig{{
+		Extractor:    "gjson",
+		JSONPath:     "@this",
+		Condition:    "eq",
+		Expected:     "{{baseline_alarms}}",
+		ExpectedType: "string",
+	}}
+	results, overall, err := runStepValidations(baseline, rules, vars)
+	if err != nil {
+		t.Fatalf("runStepValidations returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one validation result, got %d", len(results))
+	}
+	if !overall.Pass {
+		t.Fatalf("expected final alarm comparison to pass, got %+v from %+v", overall, results[0])
+	}
+}
+
+func TestVariableScopeKeyMatchesSameDeviceOnly(t *testing.T) {
+	first := variableScopeKey(" router-1 ", " 192.0.2.1 ")
+	second := variableScopeKey("router-1", "192.0.2.1")
+	other := variableScopeKey("router-1", "192.0.2.2")
+
+	if first != second {
+		t.Fatalf("expected whitespace-normalized device keys to match")
+	}
+	if first == other {
+		t.Fatalf("expected different device IPs to have separate variable scopes")
+	}
+}
+
 func TestResolveInventoryDevicesPreservesInlineDevice(t *testing.T) {
 	devices := []DeviceConfig{{
 		Hostname: "router-01",
