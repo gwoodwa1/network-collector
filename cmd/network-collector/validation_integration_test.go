@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/validation"
+	"github.com/gwoodwa1/network-collector/pkg/validation"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"

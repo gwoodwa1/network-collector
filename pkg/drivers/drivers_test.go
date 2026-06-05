@@ -4,11 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/drivers"
-	"github.com/kcajme/network-collector/pkg/drivers/aristahttp"
-	"github.com/kcajme/network-collector/pkg/drivers/gnmi"
-	"github.com/kcajme/network-collector/pkg/drivers/netconf"
-	"github.com/kcajme/network-collector/pkg/drivers/restconf"
+	"github.com/gwoodwa1/network-collector/pkg/drivers"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/aristahttp"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/gnmi"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/netconf"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/restconf"
 )
 
 func TestDriverInterfaces(t *testing.T) {

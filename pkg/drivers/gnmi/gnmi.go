@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/drivers"
+	"github.com/gwoodwa1/network-collector/pkg/drivers"
 	"github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/openconfig/gnmic/pkg/api/path"
 	"github.com/openconfig/gnmic/pkg/api/target"

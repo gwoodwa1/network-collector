@@ -1,4 +1,4 @@
-module github.com/kcajme/network-collector
+module github.com/gwoodwa1/network-collector
 
 go 1.23
 

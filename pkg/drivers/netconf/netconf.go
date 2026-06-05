@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/drivers"
+	"github.com/gwoodwa1/network-collector/pkg/drivers"
 	"github.com/scrapli/scrapligo/driver/netconf"
 	"github.com/scrapli/scrapligo/driver/opoptions"
 	scraplioptions "github.com/scrapli/scrapligo/driver/options"

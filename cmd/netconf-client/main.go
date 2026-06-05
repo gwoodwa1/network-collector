@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/drivers/netconf"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/netconf"
 	"github.com/spf13/viper"
 )
 

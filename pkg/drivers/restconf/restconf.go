@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kcajme/network-collector/pkg/drivers"
+	"github.com/gwoodwa1/network-collector/pkg/drivers"
 )
 
 // Option is a type-safe option for configuring RESTCONFClient
