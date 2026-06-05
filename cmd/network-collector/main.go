@@ -570,6 +570,19 @@ func isFailureResult(result validation.ValidationResult) bool {
 	return result.Status == "fail" || result.Status == "error" || !result.Pass && result.Status != ""
 }
 
+func recordStepFailure(ctx *stepExecutionContext, stepName, message string) {
+	if ctx == nil {
+		return
+	}
+	if err := appendFailureMessage(ctx, stepName, "error", message); err != nil {
+		if ctx.runFailed != nil {
+			*ctx.runFailed = true
+		}
+		slog.Error("error writing failure log", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+		writeSessionf(ctx.sessionLog, "[step:%s] failed to write failure log: %v\n", stepName, err)
+	}
+}
+
 func validationErrorResult(err error) validation.ValidationResult {
 	return validation.ValidationResult{
 		Pass:      false,
@@ -813,6 +826,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			*ctx.runFailed = true
 			slog.Error("error rendering step message", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 			writeSessionf(ctx.sessionLog, "[step:%s] message error: %v\n", stepName, err)
+			recordStepFailure(ctx, stepName, fmt.Sprintf("message error: %v", err))
 			continue
 		}
 
@@ -820,6 +834,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 		if err != nil {
 			*ctx.runFailed = true
 			slog.Error("invalid wait step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			recordStepFailure(ctx, stepName, fmt.Sprintf("invalid wait step: %v", err))
 			continue
 		}
 		if wait > 0 {
@@ -834,6 +849,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				*ctx.runFailed = true
 				stopDeviceSteps = true
 				slog.Error("invalid SSH probe step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("invalid SSH probe step: %v", err))
 				break
 			}
 
@@ -850,6 +866,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				stopDeviceSteps = true
 				slog.Error("SSH probe failed", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				writeSessionf(ctx.sessionLog, "[step:%s] SSH probe failed: %v\n", stepName, err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("SSH probe failed: %v", err))
 				break
 			}
 			writeSessionf(ctx.sessionLog, "[step:%s] SSH probe succeeded\n", stepName)
@@ -866,6 +883,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				stopDeviceSteps = true
 				slog.Error("error reconnecting to SSH device after probe", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				writeSessionf(ctx.sessionLog, "[step:%s] failed to reconnect after SSH probe: %v\n", stepName, err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("failed to reconnect after SSH probe: %v", err))
 				break
 			}
 			writeSessionf(ctx.sessionLog, "[step:%s] SSH session re-established\n", stepName)
@@ -875,6 +893,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 		if err != nil {
 			*ctx.runFailed = true
 			slog.Error("error rendering command", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			recordStepFailure(ctx, stepName, fmt.Sprintf("command render error: %v", err))
 			continue
 		}
 		if cmd == "" {
@@ -883,6 +902,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			}
 			*ctx.runFailed = true
 			slog.Warn("skipping empty step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
+			recordStepFailure(ctx, stepName, "empty step command")
 			continue
 		}
 
@@ -896,6 +916,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				*ctx.runFailed = true
 				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
+				recordStepFailure(ctx, stepName, "command error: no active SSH session")
 				break
 			}
 
@@ -914,6 +935,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				*ctx.runFailed = true
 				slog.Error("error executing step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n", stepName, err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("command error: %v", err))
 				break
 			}
 
@@ -929,6 +951,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 					*ctx.runFailed = true
 					slog.Error("parser error", "hostname", ctx.hostname, "step", stepName, "parser", step.Parser, "error", err)
 					writeSessionf(ctx.sessionLog, "[step:%s] parser %q error: %v\n", stepName, step.Parser, err)
+					recordStepFailure(ctx, stepName, fmt.Sprintf("parser %q error: %v", step.Parser, err))
 					break
 				}
 				validationOutput = parsedOutput
@@ -1007,6 +1030,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				*ctx.runFailed = true
 				slog.Error("validation action failed", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				writeSessionf(ctx.sessionLog, "[step:%s] validation action failed: %v\n", stepName, err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("validation action failed: %v", err))
 				break
 			}
 			if outcome.RunFailed {
@@ -1081,6 +1105,9 @@ func openSessionLog(hostname, playbookName string, started time.Time) (*os.File,
 	if err := os.MkdirAll("session_logs", 0755); err != nil {
 		return nil, "", fmt.Errorf("failed to create session log directory: %w", err)
 	}
+	if err := ensureFailureLog(failureLogPath()); err != nil {
+		return nil, "", err
+	}
 
 	filename := fmt.Sprintf("%s_%s.log", sanitizeLogName(hostname), started.Format("20060102_150405"))
 	path := "session_logs/" + filename
@@ -1101,14 +1128,31 @@ func failureLogPath() string {
 	return filepath.Join("session_logs", "FAILURES.txt")
 }
 
+func ensureFailureLog(path string) error {
+	if strings.TrimSpace(path) == "" {
+		path = failureLogPath()
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create failure log file: %w", err)
+	}
+	return file.Close()
+}
+
 func formatFailureLogEntry(ctx *stepExecutionContext, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) string {
+	return formatFailureRecord(ctx.hostname, ctx.ip, stepName, overall, results)
+}
+
+func formatFailureRecord(hostname, ip, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat("=", 78))
 	b.WriteByte('\n')
 	b.WriteString(fmt.Sprintf("Time:     %s\n", time.Now().Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("Hostname: %s\n", ctx.hostname))
-	b.WriteString(fmt.Sprintf("IP:       %s\n", ctx.ip))
-	b.WriteString(fmt.Sprintf("Step:     %s\n", stepName))
+	b.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	b.WriteString(fmt.Sprintf("IP:       %s\n", ip))
+	if strings.TrimSpace(stepName) != "" {
+		b.WriteString(fmt.Sprintf("Step:     %s\n", stepName))
+	}
 	b.WriteString(fmt.Sprintf("Status:   %s\n", overall.Status))
 	if strings.TrimSpace(overall.Message) != "" {
 		b.WriteString(fmt.Sprintf("Message:  %s\n", overall.Message))
@@ -1131,13 +1175,18 @@ func formatFailureLogEntry(ctx *stepExecutionContext, stepName string, overall v
 	return b.String()
 }
 
-func appendFailureLog(ctx *stepExecutionContext, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) error {
-	if ctx == nil {
-		return nil
-	}
-	path := strings.TrimSpace(ctx.failureLog)
-	if path == "" {
+func appendFailureRecord(path, hostname, ip, stepName, status, message string, results []validation.ValidationResult) error {
+	if strings.TrimSpace(path) == "" {
 		path = failureLogPath()
+	}
+	if strings.TrimSpace(status) == "" {
+		status = "error"
+	}
+	overall := validation.ValidationResult{
+		Pass:      false,
+		Status:    status,
+		Message:   strings.TrimSpace(message),
+		Timestamp: time.Now(),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create failure log directory: %w", err)
@@ -1148,10 +1197,28 @@ func appendFailureLog(ctx *stepExecutionContext, stepName string, overall valida
 	}
 	defer file.Close()
 
-	if _, err := file.WriteString(formatFailureLogEntry(ctx, stepName, overall, results)); err != nil {
+	if _, err := file.WriteString(formatFailureRecord(hostname, ip, stepName, overall, results)); err != nil {
 		return fmt.Errorf("failed to write failure log entry: %w", err)
 	}
 	return nil
+}
+
+func appendFailureLog(ctx *stepExecutionContext, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) error {
+	if ctx == nil {
+		return nil
+	}
+	path := strings.TrimSpace(ctx.failureLog)
+	if path == "" {
+		path = failureLogPath()
+	}
+	return appendFailureRecord(path, ctx.hostname, ctx.ip, stepName, overall.Status, overall.Message, results)
+}
+
+func appendFailureMessage(ctx *stepExecutionContext, stepName, status, message string) error {
+	if ctx == nil {
+		return nil
+	}
+	return appendFailureRecord(ctx.failureLog, ctx.hostname, ctx.ip, stepName, status, message, nil)
 }
 
 func writeSessionf(writer io.Writer, format string, args ...interface{}) {
@@ -1280,6 +1347,9 @@ func main() {
 		if hostname == "" || ip == "" || deviceType == "" {
 			runFailed = true
 			slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
+			if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping invalid SSH entry", nil); err != nil {
+				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
+			}
 			continue
 		}
 
@@ -1297,6 +1367,9 @@ func main() {
 		if len(steps) == 0 {
 			runFailed = true
 			slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
+			if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping SSH device with no steps or command", nil); err != nil {
+				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
+			}
 			continue
 		}
 
@@ -1321,6 +1394,10 @@ func main() {
 			runFailed = true
 			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
 			writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
+			if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to connect to %s (%s): %v", hostname, ip, err), nil); ferr != nil {
+				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+				writeSessionf(sessionLog, "ERROR: failed to write failure log: %v\n", ferr)
+			}
 			_ = sessionLog.Close()
 			continue
 		}
@@ -1356,6 +1433,10 @@ func main() {
 			runFailed = true
 			slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
 			writeSessionf(sessionLog, "ERROR: failed to close SSH connection: %v\n", err)
+			if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to close SSH connection: %v", err), nil); ferr != nil {
+				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+				writeSessionf(sessionLog, "ERROR: failed to write failure log: %v\n", ferr)
+			}
 		}
 		writeSessionf(sessionLog, "\nSession complete: %s\n", time.Now().Format(time.RFC3339))
 		if err := sessionLog.Close(); err != nil {
