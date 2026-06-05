@@ -279,6 +279,57 @@ ssh:
 
 Parser fields support `pattern`, optional capture `group` (defaults to the first capture group when present), `repeated: true` for arrays, and `type: int` for numeric coercion. Parsed JSON is written to the session log before validation.
 
+### Offline parser fixture tests
+
+Parser and validation changes can be tested without logging into a network device. Add captured command output as plain text under `cmd/network-collector/testdata/cli/`, then add a case to `cmd/network-collector/testdata/parser-fixtures.yaml`.
+
+Fixture cases can define `parser` and `validations` directly, or reference a parser-bearing step from `cmd/network-collector/testdata/offline-config.yaml`:
+
+```yaml
+cases:
+  - name: xr-show-alarms-brief-system-active
+    input: cli/xr_show_alarms_brief_system_active.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-active-alarms
+```
+
+Run the offline parser suite with:
+
+```bash
+go test ./cmd/network-collector -run TestParserFixtures
+```
+
+The fixture runner loads `parsers.yaml`, parses the CLI text file, applies the referenced config step's `validation` or `validations`, and fails the test if parsing or validation does not pass.
+
+For baseline/final comparisons, provide both `baseline_input` and `input`. The baseline output is parsed, registered into the variable named by the baseline config step's `register`, and then the final output is parsed and validated.
+
+```yaml
+cases:
+  - name: xr-active-alarms-unchanged
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_unchanged.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+
+  - name: xr-active-alarms-changed
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_changed.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+    expect_pass: false
+```
+
+Use `expect_pass: false` for negative fixtures that should detect a changed parser result.
+
 Example:
 
 ```yaml

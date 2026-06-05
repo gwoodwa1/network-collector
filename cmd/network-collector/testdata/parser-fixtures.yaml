@@ -1,0 +1,36 @@
+parsers_file: ../../../parsers.yaml
+config_file: offline-config.yaml
+
+cases:
+  - name: xr-install-active-summary
+    input: cli/xr_install_active_summary.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-install-active-summary
+
+  - name: xr-show-alarms-brief-system-active
+    input: cli/xr_show_alarms_brief_system_active.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-active-alarms
+
+  - name: xr-active-alarms-unchanged
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_unchanged.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+
+  - name: xr-active-alarms-changed
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_changed.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+    expect_pass: false

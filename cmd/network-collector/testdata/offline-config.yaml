@@ -1,0 +1,56 @@
+parsers_file: ../../../parsers.yaml
+
+ssh:
+  - hostname: fixture-xr-router
+    ip: 192.0.2.10
+    type: cisco_ios
+    steps:
+      - name: parse-install-active-summary
+        cmd: show install active summary
+        parser: xr_install_active_summary
+        validations:
+          - extractor: gjson
+            json_path: active_packages.#
+            condition: eq
+            expected: 3
+            expected_type: int
+          - extractor: gjson
+            json_path: profile
+            condition: eq
+            expected: Default Profile
+            expected_type: string
+
+      - name: parse-active-alarms
+        cmd: show alarms brief system active
+        parser: xr_show_alarms_brief_system_active
+        validations:
+          - extractor: gjson
+            json_path: locations.#
+            condition: eq
+            expected: 7
+            expected_type: int
+          - extractor: gjson
+            json_path: severities.5
+            condition: eq
+            expected: Critical
+            expected_type: string
+          - extractor: gjson
+            json_path: descriptions.4
+            condition: contains
+            expected: Fabricq ASICs Offline
+            expected_type: string
+
+      - name: capture-baseline-alarms
+        cmd: show alarms brief system active
+        parser: xr_show_alarms_brief_system_active
+        register: baseline_alarms
+
+      - name: compare-final-alarms
+        cmd: show alarms brief system active
+        parser: xr_show_alarms_brief_system_active
+        validation:
+          extractor: gjson
+          json_path: '@this'
+          condition: eq
+          expected: '{{baseline_alarms}}'
+          expected_type: string

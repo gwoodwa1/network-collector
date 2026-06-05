@@ -616,3 +616,74 @@ Before returning generated YAML:
 - For multi-step workflows, prefer one SSH entry with ordered `steps`.
 - For reload workflows, include `return_to_prompt: false`, `wait_seconds`, and `ssh_probe`.
 - For baseline/final comparisons, register the baseline parser output and compare final parser output with `json_path: '@this'`.
+- When creating or changing a parser, also create or update an offline parser fixture under `cmd/network-collector/testdata/`.
+
+## Offline Parser Fixture Tests
+
+Use offline fixtures to test parsers and config validations without logging into network devices.
+
+Files:
+
+- `cmd/network-collector/testdata/parser-fixtures.yaml`: fixture manifest.
+- `cmd/network-collector/testdata/offline-config.yaml`: config steps used by fixtures.
+- `cmd/network-collector/testdata/cli/*.txt`: captured raw CLI outputs.
+
+Manifest format:
+
+```yaml
+parsers_file: ../../../parsers.yaml
+config_file: offline-config.yaml
+
+cases:
+  - name: xr-show-alarms-brief-system-active
+    input: cli/xr_show_alarms_brief_system_active.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-active-alarms
+```
+
+Before/after change-detection fixture format:
+
+```yaml
+cases:
+  - name: xr-active-alarms-unchanged
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_unchanged.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+
+  - name: xr-active-alarms-changed
+    baseline_input: cli/xr_show_alarms_before.txt
+    input: cli/xr_show_alarms_after_changed.txt
+    baseline_config_ref:
+      ssh_index: 0
+      step: capture-baseline-alarms
+    config_ref:
+      ssh_index: 0
+      step: compare-final-alarms
+    expect_pass: false
+```
+
+Fixture behavior:
+
+- The fixture runner reads the CLI text file.
+- It resolves `config_ref` to a step in the fixture config.
+- It uses that step's `parser`.
+- It parses the CLI output with the parser from `parsers.yaml`.
+- It applies that step's `validation` or `validations` to the parsed JSON.
+- The test fails if parsing errors or any validation fails.
+- If `baseline_input` is set, the fixture runner parses it first and stores it in the variable named by `baseline_register` or the `register` value on `baseline_config_ref`.
+- If `expect_pass: false` is set, the fixture passes only when validation fails or errors.
+
+Rules:
+
+- Add one CLI text file per real command output shape.
+- Add one fixture case per parser scenario.
+- For change detection, add at least two paired fixtures: unchanged output with default pass behavior, and changed output with `expect_pass: false`.
+- Prefer `config_ref` so the fixture tests the same parser and validations that a playbook step uses.
+- Use direct `parser` plus `validations` in the manifest only for parser-only experiments.
+- Run fixtures with `go test ./cmd/network-collector -run TestParserFixtures`.

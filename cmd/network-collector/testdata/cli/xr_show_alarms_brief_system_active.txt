@@ -1,0 +1,14 @@
+RP/0/RSP1/CPU0:alice-b2bc-1#show alarms brief system active
+Wed Jun  3 15:26:30.339 BST
+
+Active Alarms
+--------------------------------------------------------------------------------
+Location        Severity     Group       Set Time                   Description
+--------------------------------------------------------------------------------
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_VIN_VOLT_OOR).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_NO_INPUT_DETECTED).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Output Disabled (PM_OUTPUT_EN_PI_HI).
+0/FT0-FH2       Major        Environ     02/12/2026 10:11:26 GMT    Power Module Error (PM_VIN_A_VOLT_OOR).
+0/RSP1/CPU0     Major        Software    01/09/2026 23:56:40 BST    One Or More Fabricq ASICs Offline
+Hu0/0/0/31      Critical     Software    05/07/2026 19:30:03 BST    HW_OPTICS: RX POWER LANE-0 Low Alarm
+Hu0/0/0/31      Critical     Software    05/07/2026 19:30:03 BST    HW_OPTICS: RX POWER LANE-1 Low Alarm
