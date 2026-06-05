@@ -956,6 +956,71 @@ func TestSessionLogFormatting(t *testing.T) {
 	}
 }
 
+func TestAppendFailureLogWritesFinalFailureEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "FAILURES.txt")
+	ctx := stepExecutionContext{
+		hostname:   "router-01",
+		ip:         "192.0.2.1",
+		failureLog: path,
+	}
+	overall := validation.ValidationResult{
+		Pass:    false,
+		Status:  "fail",
+		Message: "one or more validations failed",
+	}
+	results := []validation.ValidationResult{
+		{
+			Pass:          true,
+			Status:        "pass",
+			Extractor:     "regex",
+			PatternOrPath: `Version:\s+(\S+)`,
+			RawExtract:    "17.9.4",
+			Expected:      "17.9.4",
+			Condition:     "eq",
+			Message:       "values equal",
+		},
+		{
+			Pass:          false,
+			Status:        "fail",
+			Extractor:     "gjson",
+			PatternOrPath: "active_packages.#",
+			RawExtract:    "2",
+			Expected:      3,
+			ExpectedType:  "int",
+			Condition:     "eq",
+			Message:       "values differ",
+		},
+	}
+
+	if err := appendFailureLog(&ctx, "check-install", overall, results); err != nil {
+		t.Fatalf("appendFailureLog returned error: %v", err)
+	}
+	if err := appendFailureLog(&ctx, "check-install-again", overall, results); err != nil {
+		t.Fatalf("second appendFailureLog returned error: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read failure log: %v", err)
+	}
+	log := string(b)
+	for _, want := range []string{
+		"Hostname: router-01",
+		"IP:       192.0.2.1",
+		"Step:     check-install",
+		"Status:   fail",
+		`"pattern_or_path": "active_packages.#"`,
+		"Step:     check-install-again",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected failure log to contain %q, got %q", want, log)
+		}
+	}
+	if strings.Contains(log, `"pattern_or_path": "Version:\\s+(\\S+)"`) {
+		t.Fatalf("expected passing validation result to be omitted, got %q", log)
+	}
+}
+
 func TestResolveSSHProbeConfig(t *testing.T) {
 	probe, err := resolveSSHProbeConfig(nil)
 	if err != nil {

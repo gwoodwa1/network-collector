@@ -142,6 +142,7 @@ type stepExecutionContext struct {
 	opts       []ssh.Option
 	jsonOut    bool
 	sessionLog io.Writer
+	failureLog string
 	variables  map[string]string
 	aggregated *[]deviceValidation
 	runFailed  *bool
@@ -565,6 +566,10 @@ func overallValidationResult(results []validation.ValidationResult) validation.V
 	return overall
 }
 
+func isFailureResult(result validation.ValidationResult) bool {
+	return result.Status == "fail" || result.Status == "error" || !result.Pass && result.Status != ""
+}
+
 func validationErrorResult(err error) validation.ValidationResult {
 	return validation.ValidationResult{
 		Pass:      false,
@@ -882,6 +887,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 		}
 
 		var finalResult validation.ValidationResult
+		var finalValidationResults []validation.ValidationResult
 		attempt := 0
 		for {
 			attempt++
@@ -947,6 +953,7 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			}
 
 			finalResult = overall
+			finalValidationResults = results
 
 			for idx, vres := range results {
 				if !ctx.jsonOut {
@@ -986,6 +993,14 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 		}
 
 		if len(stepValidations(step)) > 0 {
+			if isFailureResult(finalResult) {
+				if err := appendFailureLog(ctx, stepName, finalResult, finalValidationResults); err != nil {
+					*ctx.runFailed = true
+					slog.Error("error writing failure log", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+					writeSessionf(ctx.sessionLog, "[step:%s] failed to write failure log: %v\n", stepName, err)
+				}
+			}
+
 			action := validationActionForResult(step, finalResult)
 			outcome, err := executeValidationAction(ctx, client, action, stepName)
 			if err != nil {
@@ -1080,6 +1095,63 @@ func openSessionLog(hostname, playbookName string, started time.Time) (*os.File,
 	}
 
 	return file, path, nil
+}
+
+func failureLogPath() string {
+	return filepath.Join("session_logs", "FAILURES.txt")
+}
+
+func formatFailureLogEntry(ctx *stepExecutionContext, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat("=", 78))
+	b.WriteByte('\n')
+	b.WriteString(fmt.Sprintf("Time:     %s\n", time.Now().Format(time.RFC3339)))
+	b.WriteString(fmt.Sprintf("Hostname: %s\n", ctx.hostname))
+	b.WriteString(fmt.Sprintf("IP:       %s\n", ctx.ip))
+	b.WriteString(fmt.Sprintf("Step:     %s\n", stepName))
+	b.WriteString(fmt.Sprintf("Status:   %s\n", overall.Status))
+	if strings.TrimSpace(overall.Message) != "" {
+		b.WriteString(fmt.Sprintf("Message:  %s\n", overall.Message))
+	}
+
+	failed := make([]validation.ValidationResult, 0, len(results))
+	for _, result := range results {
+		if isFailureResult(result) {
+			failed = append(failed, result)
+		}
+	}
+	if len(failed) > 0 {
+		b.WriteString("Validation results:\n")
+		for idx, result := range failed {
+			jb, _ := json.MarshalIndent(result, "  ", "  ")
+			b.WriteString(fmt.Sprintf("  [%d]\n%s\n", idx+1, string(jb)))
+		}
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func appendFailureLog(ctx *stepExecutionContext, stepName string, overall validation.ValidationResult, results []validation.ValidationResult) error {
+	if ctx == nil {
+		return nil
+	}
+	path := strings.TrimSpace(ctx.failureLog)
+	if path == "" {
+		path = failureLogPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create failure log directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open failure log file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(formatFailureLogEntry(ctx, stepName, overall, results)); err != nil {
+		return fmt.Errorf("failed to write failure log entry: %w", err)
+	}
+	return nil
 }
 
 func writeSessionf(writer io.Writer, format string, args ...interface{}) {
@@ -1269,6 +1341,7 @@ func main() {
 			opts:       opts,
 			jsonOut:    jsonOut,
 			sessionLog: sessionLog,
+			failureLog: failureLogPath(),
 			variables:  variables,
 			aggregated: &aggregated,
 			runFailed:  &runFailed,
