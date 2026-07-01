@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/pkg/credentials"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 	"github.com/mitchellh/mapstructure"
@@ -1273,6 +1274,7 @@ func main() {
 	// CLI flags
 	var jsonOut bool
 	var cliFailOnFail bool
+	var cliCredsInput bool
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -1281,6 +1283,7 @@ func main() {
 	flag.StringVar(&cliParsersFile, "parsers", "", "path to parser module file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
+	flag.BoolVar(&cliCredsInput, "creds_input", false, "prompt for username and password interactively")
 	flag.Parse()
 
 	loadConfig(configFile)
@@ -1291,11 +1294,13 @@ func main() {
 		}
 	})
 
-	username := strings.TrimSpace(viper.GetString("NET_USER"))
-	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
-
+	username, password, err := credentials.ResolveCredentials(cliCredsInput, nil, nil)
+	if err != nil {
+		slog.Error("error reading credentials", "error", err)
+		os.Exit(1)
+	}
 	if username == "" || password == "" {
-		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
 		os.Exit(1)
 	}
 

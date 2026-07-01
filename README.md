@@ -35,11 +35,21 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
     go build -o restconf-client ./cmd/restconf-client
     ```
 
-4. **Set credentials:**
+4. **Provide credentials:**
+
+    Set credentials using environment variables:
 
     ```bash
     export NET_USER=<username>
     export NET_PASSWORD=<your password>
+    ```
+
+    Alternatively, pass `--creds_input` to any of the built commands to be
+    prompted for a username and password. Interactive input overrides any
+    credentials already set in the environment, and password entry is hidden:
+
+    ```bash
+    ./network-collector --creds_input
     ```
 
 ## Package usage
@@ -101,10 +111,11 @@ if err := client.Close(); err != nil {
 
 ## CLI validation and output
 
-The `cmd/network-collector` SSH example supports validation configured in `config.yaml` and two useful CLI flags:
+The `cmd/network-collector` SSH example supports validation configured in `config.yaml` and these CLI flags:
 
 - `--json`: emit consolidated machine-readable JSON for all validation results (suppresses raw command output)
 - `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`, or if a device/step cannot run successfully
+- `--creds_input`: securely prompt for credentials instead of using `NET_USER` and `NET_PASSWORD`
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 

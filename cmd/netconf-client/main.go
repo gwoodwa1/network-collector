@@ -1,12 +1,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/pkg/credentials"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/netconf"
 	"github.com/spf13/viper"
 )
@@ -33,11 +35,17 @@ func init() {
 }
 
 func main() {
-	username := strings.TrimSpace(viper.GetString("NET_USER"))
-	password := strings.TrimSpace(viper.GetString("NET_PASSWORD"))
+	var promptForCreds bool
+	flag.BoolVar(&promptForCreds, "creds_input", false, "prompt for username and password interactively")
+	flag.Parse()
 
+	username, password, err := credentials.ResolveCredentials(promptForCreds, nil, nil)
+	if err != nil {
+		slog.Error("error reading credentials", "error", err)
+		os.Exit(1)
+	}
 	if username == "" || password == "" {
-		slog.Error("missing required environment variables", "required", "NET_USER,NET_PASSWORD")
+		slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
 		os.Exit(1)
 	}
 

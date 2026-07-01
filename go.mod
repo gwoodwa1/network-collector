@@ -9,6 +9,7 @@ require (
 	github.com/scrapli/scrapligo v1.3.1
 	github.com/spf13/viper v1.18.2
 	github.com/tidwall/gjson v1.19.0
+	golang.org/x/term v0.19.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
