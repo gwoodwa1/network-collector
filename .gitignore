@@ -6,3 +6,12 @@ SECURITY_AUDIT.md
 
 # Local build artifacts
 /network-collector
+
+# Repository-local Go caches
+/.gocache/
+/.gomodcache/
+
+# Temporary local files
+/.cache/
+/tmp/
+.DS_Store
