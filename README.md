@@ -462,10 +462,13 @@ parsers:
 
 TextFSM value names are preserved as JSON keys. For example, `Value INTERFACE ...` produces an `INTERFACE` key. The `root` setting defaults to `records` for both record-oriented parser types.
 
-#### Included IOS-XR NTP parsers
+#### Included IOS-XR TextFSM parsers
 
 The parser pack includes custom TextFSM coverage for:
 
+- `show platform` → `xr_show_platform`, rooted at `nodes`
+- `show route summary` → `xr_show_route_summary`, rooted at `routes`
+- `show interfaces brief` → `xr_show_interfaces_brief_textfsm`, rooted at `interfaces`
 - `show ntp associations` → `xr_show_ntp_associations`, rooted at `associations`
 - `show ntp status` → `xr_show_ntp_status`, rooted at `status`
 - `show running-config ntp` → `xr_show_running_config_ntp`, rooted at `ntp`

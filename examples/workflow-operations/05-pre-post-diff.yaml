@@ -1,0 +1,124 @@
+name_playbook: Pre-change and post-change state diff
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+workflows:
+  compare-snapshot:
+    parameters: [label, before, after]
+    steps:
+      - name: announce-comparison
+        message: comparing pre-change and post-change {{label}}
+      - name: unified-diff
+        local:
+          command: python3
+          args:
+            - -c
+            - |
+              import difflib
+              import pathlib
+              import sys
+
+              before = pathlib.Path(sys.argv[1]).read_text().splitlines(keepends=True)
+              after = pathlib.Path(sys.argv[2]).read_text().splitlines(keepends=True)
+              sys.stdout.write("".join(difflib.unified_diff(
+                  before, after, fromfile="pre-change", tofile="post-change",
+              )))
+            - '{{before_file}}'
+            - '{{after_file}}'
+          inputs:
+            before_file: '{{before}}'
+            after_file: '{{after}}'
+          timeout_seconds: 30
+        validation:
+          extractor: regex
+          pattern: '(?s)^(.*)$'
+          condition: eq
+          expected: ''
+        on_fail:
+          message: '{{label}} changed; review the unified diff in the session log and artifacts'
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: pre-change-checks
+        message: capturing independent pre-change state
+        parallel:
+          max_parallel: 4
+          steps:
+            - {name: pre-platform, cmd: show platform, parser: xr_show_platform, register: pre_platform}
+            - {name: pre-routes, cmd: show route summary, parser: xr_show_route_summary, register: pre_routes}
+            - {name: pre-interfaces, cmd: show interfaces summary, register: pre_interfaces}
+            - {name: pre-alarms, cmd: show alarms brief system active, register: pre_alarms}
+            - {name: pre-ntp, cmd: show ntp status, register: pre_ntp}
+            - {name: pre-redundancy, cmd: show redundancy summary, register: pre_redundancy}
+
+      - name: pre-change-health-gate
+        cmd: show alarms brief system active
+        validation:
+          extractor: regex
+          pattern: '(?m)^(.*(Critical|Major).*)$'
+          condition: not_contains
+          # Any regex match contains the empty string and therefore fails;
+          # no match satisfies not_contains. This rejects either severity.
+          expected: ''
+        on_fail:
+          action: fail
+          message: critical or major alarms are present; aborting before the change
+
+      - name: authorize-change
+        approval:
+          message: Pre-checks passed. Continue to the change window?
+          timeout_seconds: 300
+
+      # Replace this message-only hook with tested change or upgrade steps.
+      - name: perform-change
+        message: CHANGE HOOK - insert the tested change workflow here
+
+      - name: post-change-settle
+        wait_seconds: 30
+        message: allowing control-plane state to settle before post-checks
+
+      - name: post-change-checks
+        message: capturing independent post-change state
+        parallel:
+          max_parallel: 4
+          steps:
+            - {name: post-platform, cmd: show platform, parser: xr_show_platform, register: post_platform}
+            - {name: post-routes, cmd: show route summary, parser: xr_show_route_summary, register: post_routes}
+            - {name: post-interfaces, cmd: show interfaces summary, register: post_interfaces}
+            - {name: post-alarms, cmd: show alarms brief system active, register: post_alarms}
+            - {name: post-ntp, cmd: show ntp status, register: post_ntp}
+            - {name: post-redundancy, cmd: show redundancy summary, register: post_redundancy}
+
+      # Keep byte-for-byte comparisons only for output stable on your platform.
+      - name: compare-stable-state
+        parallel:
+          max_parallel: 4
+          steps:
+            - name: diff-platform
+              use: compare-snapshot
+              with: {label: platform, before: '{{pre_platform}}', after: '{{post_platform}}'}
+            - name: diff-routes
+              use: compare-snapshot
+              with: {label: routes, before: '{{pre_routes}}', after: '{{post_routes}}'}
+            - name: diff-interfaces
+              use: compare-snapshot
+              with: {label: interfaces, before: '{{pre_interfaces}}', after: '{{post_interfaces}}'}
+            - name: diff-alarms
+              use: compare-snapshot
+              with: {label: alarms, before: '{{pre_alarms}}', after: '{{post_alarms}}'}
+            - name: diff-ntp
+              use: compare-snapshot
+              with: {label: ntp, before: '{{pre_ntp}}', after: '{{post_ntp}}'}
+            - name: diff-redundancy
+              use: compare-snapshot
+              with: {label: redundancy, before: '{{pre_redundancy}}', after: '{{post_redundancy}}'}
+
+      - name: change-window-complete
+        message: post-check collection and stable-state comparisons completed

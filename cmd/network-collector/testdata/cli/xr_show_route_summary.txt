@@ -1,0 +1,9 @@
+RP/0/RP0/CPU0:xr-lab-01#show route summary
+Route Source                     Routes     Backup     Deleted     Memory (bytes)
+local                            12         0          0           1920
+connected                        6          0          0           960
+static                           3          1          0           640
+ospf 100                         542        7          0           87840
+bgp 65000                        120034     24         0           19449440
+Total                            120597     32         0           19540800
+

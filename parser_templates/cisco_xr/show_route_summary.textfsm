@@ -1,0 +1,8 @@
+Value Required SOURCE (.+?)
+Value Required ROUTES (\d+)
+Value Required BACKUP (\d+)
+Value Required DELETED (\d+)
+Value Required MEMORY_BYTES (\d+)
+
+Start
+  ^\s*${SOURCE}\s+${ROUTES}\s+${BACKUP}\s+${DELETED}\s+${MEMORY_BYTES}\s*$$ -> Record

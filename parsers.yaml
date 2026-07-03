@@ -49,6 +49,14 @@ parsers:
     type: textfsm
     template: parser_templates/cisco_xr/show_interfaces_brief.textfsm
     root: interfaces
+  xr_show_platform:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_platform.textfsm
+    root: nodes
+  xr_show_route_summary:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_route_summary.textfsm
+    root: routes
   xr_show_ntp_associations:
     type: textfsm
     template: parser_templates/cisco_xr/show_ntp_associations.textfsm

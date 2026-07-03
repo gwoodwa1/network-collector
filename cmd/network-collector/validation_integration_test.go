@@ -1689,8 +1689,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 5 {
-		t.Fatalf("expected inventory plus four workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 6 {
+		t.Fatalf("expected inventory plus five workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1707,8 +1707,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 4 {
-		t.Fatalf("expected four loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 5 {
+		t.Fatalf("expected five loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1725,6 +1725,10 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	scheduled := loaded["04-recurring-schedule.yaml"]
 	if scheduled.Schedule.Count != 3 || len(scheduled.LocalSteps) != 1 {
 		t.Fatalf("schedule example is incomplete: %+v", scheduled)
+	}
+	diff := loaded["05-pre-post-diff.yaml"]
+	if len(diff.Workflows) != 1 || len(diff.SSH) != 1 || len(diff.SSH[0].Steps) != 8 || diff.SSH[0].Steps[0].Parallel == nil || diff.SSH[0].Steps[2].Approval == nil || diff.SSH[0].Steps[6].Parallel == nil {
+		t.Fatalf("pre/post diff example is incomplete: %+v", diff)
 	}
 }
 

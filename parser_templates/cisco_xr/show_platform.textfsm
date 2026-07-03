@@ -1,0 +1,8 @@
+Value Required NODE (\S+)
+Value Required TYPE (\S+)
+Value Required STATE (IOS XR RUN|OPERATIONAL|FAILED|UNPOWERED|UNKNOWN)
+Value CONFIG_STATE (.*)
+
+Start
+  ^${NODE}\s+${TYPE}\s+${STATE}\s+${CONFIG_STATE}\s*$$ -> Record
+

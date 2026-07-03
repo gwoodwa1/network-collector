@@ -1,0 +1,7 @@
+RP/0/RP0/CPU0:xr-lab-01#show platform
+Node              Type                       State             Config state
+--------------------------------------------------------------------------------
+0/RP0/CPU0        ASR-9904-RP(Active)        IOS XR RUN        PWR,NSHUT,MON
+0/RP1/CPU0        ASR-9904-RP(Standby)       IOS XR RUN        PWR,NSHUT,MON
+0/0/CPU0          A9K-4X100GE-TR             IOS XR RUN        PWR,NSHUT,MON
+

@@ -47,6 +47,32 @@ cases:
       ssh_index: 0
       step: parse-interfaces-textfsm
 
+  - name: xr-show-platform-textfsm
+    input: cli/xr_show_platform.txt
+    parser: xr_show_platform
+    validations:
+      - extractor: gjson
+        json_path: nodes.0.NODE
+        condition: eq
+        expected: 0/RP0/CPU0
+      - extractor: gjson
+        json_path: nodes.2.STATE
+        condition: eq
+        expected: IOS XR RUN
+
+  - name: xr-show-route-summary-textfsm
+    input: cli/xr_show_route_summary.txt
+    parser: xr_show_route_summary
+    validations:
+      - extractor: gjson
+        json_path: routes.#(SOURCE=="connected").ROUTES
+        condition: eq
+        expected: '6'
+      - extractor: gjson
+        json_path: routes.#(SOURCE=="Total").MEMORY_BYTES
+        condition: eq
+        expected: '19540800'
+
   - name: xr-ntp-associations-synchronized
     input: cli/xr_show_ntp_associations_synced.txt
     config_ref:

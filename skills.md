@@ -482,6 +482,8 @@ Supported parser module keys:
 - `template`: required for `textfsm`; relative paths resolve from `parsers.yaml`.
 - `root`: JSON array key for `regex_records` and `textfsm`; defaults to `records`.
 
+Bundled IOS-XR TextFSM modules include `xr_show_platform`, `xr_show_route_summary`, `xr_show_interfaces_brief_textfsm`, `xr_show_ntp_associations`, `xr_show_ntp_status`, and `xr_show_running_config_ntp`.
+
 Supported parser field keys:
 
 - `pattern`: required regex.
