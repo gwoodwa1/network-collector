@@ -1,0 +1,32 @@
+parsers:
+  xr_interface_error_counters:
+    type: regex
+    fields:
+      input_errors:
+        pattern: '(?mi)^\s*(\d+)\s+input errors'
+        group: 1
+        type: int
+      crc_errors:
+        pattern: '(?mi)\b(\d+)\s+CRC'
+        group: 1
+        type: int
+      output_errors:
+        pattern: '(?mi)^\s*(\d+)\s+output errors'
+        group: 1
+        type: int
+
+  xr_controller_optics_power:
+    type: regex
+    fields:
+      receive_power_dbm:
+        pattern: '(?mi)^.*(?:Rx|Receive(?:r)?)[^\n]*?(?:Power|power)[^\n]*?(-?\d+(?:\.\d+)?)\s*dBm'
+        group: 1
+        repeated: true
+      transmit_power_dbm:
+        pattern: '(?mi)^.*(?:Tx|Transmit(?:ter)?|Laser output)[^\n]*?(?:Power|power)[^\n]*?(-?\d+(?:\.\d+)?)\s*dBm'
+        group: 1
+        repeated: true
+      alarm_flags:
+        pattern: '(?mi)^.*(?:LOS|Loss of Signal|Low Alarm|High Alarm)[^\n]*?(?:ON|ASSERTED|YES)\s*$'
+        group: 0
+        repeated: true

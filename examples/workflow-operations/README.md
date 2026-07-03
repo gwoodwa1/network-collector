@@ -10,6 +10,7 @@ These playbooks demonstrate the workflow language as complete configurations. Th
 | `04-recurring-schedule.yaml` | finite `schedule`, device concurrency, retries, validation actions |
 | `05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
 | `06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
+| `07-interface-turnup.yaml` | approval, interface configuration, light levels, error counters, rollback |
 
 Run one example from the repository root:
 
@@ -34,3 +35,5 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 `05-pre-post-diff.yaml` is the most complete change-window pattern. It captures six pre/post command outputs, parses platform and route summaries with bundled TextFSM modules, generates unified JSON diffs with a reusable local workflow, and fails when selected state changes. Raw output may contain counters or timestamps, so compare only commands stable on your platform or parse and compare stable fields.
 
 `06-custom-variables.yaml` imports shared values from `vars/common.yaml` and uses them throughout the workflow. This is a useful pattern for keeping site, environment, interface, expected-state, and change-window data separate from reusable workflow logic.
+
+`07-interface-turnup.yaml` is a guarded interface activation pattern. It verifies the port exists, asks for approval, commits `no shutdown`, checks line protocol, parses Rx/Tx optical power and alarm flags, verifies zero input/CRC/output errors, and returns the interface to shutdown if a post-check fails. Its multiline IOS-XR configuration commands are a lab template and must be tested against the target driver and commit policy.

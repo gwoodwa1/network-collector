@@ -1,0 +1,109 @@
+name_playbook: Guarded interface turn-up
+inventory_file: inventory.yaml
+parsers_file: parsers/interface-turnup.yaml
+fail_on_fail: true
+
+vars:
+  interface: HundredGigE0/0/0/0
+  interface_description: Example core uplink
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: capture-pre-change-interface
+        cmd: show interfaces {{interface}}
+        register: interface_before
+        validation:
+          extractor: regex
+          pattern: '(?m)^{{interface}} is (.+?), line protocol is (.+)$'
+          condition: matches
+          expected: '.+'
+        on_fail:
+          action: fail
+          message: interface {{interface}} was not found; refusing the change
+
+      - name: authorize-interface-turnup
+        approval:
+          message: Turn up {{interface}} with description "{{interface_description}}"?
+          timeout_seconds: 300
+
+      - name: turn-up-and-verify
+        block:
+          steps:
+            # LAB TEMPLATE: verify multiline configuration handling and commit
+            # semantics against the target platform before production use.
+            - name: configure-interface
+              cmd: |-
+                configure terminal
+                interface {{interface}}
+                description {{interface_description}}
+                no shutdown
+                commit
+                end
+
+            - name: allow-optics-and-counters-to-settle
+              wait_seconds: 20
+              message: waiting for {{interface}} optics and counters to settle
+
+            - name: verify-interface-up
+              cmd: show interfaces {{interface}}
+              validation:
+                extractor: regex
+                pattern: '(?m)^{{interface}} is (up), line protocol is (up)$'
+                condition: eq
+                expected: up
+
+            - name: collect-light-levels
+              cmd: show controllers optics {{interface}}
+              parser: xr_controller_optics_power
+              register: interface_optics
+              validations:
+                - extractor: gjson
+                  json_path: receive_power_dbm
+                  condition: gt
+                  expected: 0
+                  expected_type: length
+                - extractor: gjson
+                  json_path: transmit_power_dbm
+                  condition: gt
+                  expected: 0
+                  expected_type: length
+                - extractor: gjson
+                  json_path: alarm_flags
+                  condition: eq
+                  expected: 0
+                  expected_type: length
+
+            - name: verify-zero-interface-errors
+              cmd: show interfaces {{interface}}
+              parser: xr_interface_error_counters
+              register: interface_counters
+              validations:
+                - {extractor: gjson, json_path: input_errors, condition: eq, expected: 0, expected_type: int}
+                - {extractor: gjson, json_path: crc_errors, condition: eq, expected: 0, expected_type: int}
+                - {extractor: gjson, json_path: output_errors, condition: eq, expected: 0, expected_type: int}
+
+          rollback:
+            - name: return-interface-to-shutdown
+              message: post-check failed; returning {{interface}} to shutdown
+              cmd: |-
+                configure terminal
+                interface {{interface}}
+                shutdown
+                commit
+                end
+
+          always:
+            - name: collect-final-interface-state
+              cmd: show interfaces {{interface}}
+              output:
+                save_raw: true
+
+      - name: interface-turnup-workflow-complete
+        message: '{{interface}} workflow completed; review results to confirm it remained up or was rolled back'

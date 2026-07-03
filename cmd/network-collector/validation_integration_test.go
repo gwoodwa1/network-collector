@@ -1735,8 +1735,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 7 {
-		t.Fatalf("expected inventory plus six workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 8 {
+		t.Fatalf("expected inventory plus seven workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1753,8 +1753,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 6 {
-		t.Fatalf("expected six loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 7 {
+		t.Fatalf("expected seven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1780,6 +1780,35 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	variables, err := configVariables(custom.Vars)
 	if err != nil || variables["site_name"] != "london-lab" || variables["change_reference"] != "CHG-2026-0042" || custom.SSH[0].Steps[2].Foreach == nil {
 		t.Fatalf("custom variable example is incomplete: variables=%+v config=%+v error=%v", variables, custom, err)
+	}
+	turnup := loaded["07-interface-turnup.yaml"]
+	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, filepath.Join(directory, "07-interface-turnup.yaml"))
+	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("interface turn-up example is incomplete: parsers=%+v config=%+v error=%v", turnupParsers, turnup, err)
+	}
+}
+
+func TestInterfaceTurnupExampleParsers(t *testing.T) {
+	path := filepath.Join("..", "..", "examples", "workflow-operations", "parsers", "interface-turnup.yaml")
+	parsers, err := loadParsers(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	optics := "Rx Power: -3.21 dBm\nTx Power: -2.18 dBm\nRx LOS: OFF\n"
+	parsed, err := parseOutputWithModule(optics, "xr_controller_optics_power", parsers.Parsers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(parsed, `"receive_power_dbm":["-3.21"]`) || !strings.Contains(parsed, `"transmit_power_dbm":["-2.18"]`) || !strings.Contains(parsed, `"alarm_flags":[]`) {
+		t.Fatalf("unexpected optics parse: %s", parsed)
+	}
+	counters := "  0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored\n  0 output errors, 0 underruns\n"
+	parsed, err = parseOutputWithModule(counters, "xr_interface_error_counters", parsers.Parsers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(parsed, `"input_errors":0`) || !strings.Contains(parsed, `"crc_errors":0`) || !strings.Contains(parsed, `"output_errors":0`) {
+		t.Fatalf("unexpected counter parse: %s", parsed)
 	}
 }
 
