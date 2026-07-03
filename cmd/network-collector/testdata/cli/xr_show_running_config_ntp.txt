@@ -1,0 +1,4 @@
+ntp
+ server 10.4.1.1
+ server vrf management 10.4.1.1
+!

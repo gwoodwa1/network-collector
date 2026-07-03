@@ -84,3 +84,48 @@ ssh:
             condition: eq
             expected: GigabitEthernet0/0/0/0
             expected_type: string
+
+      - name: parse-ntp-associations
+        cmd: show ntp associations
+        parser: xr_show_ntp_associations
+        validations:
+          - extractor: gjson
+            json_path: associations.#
+            condition: gt
+            expected: 0
+            expected_type: int
+
+      - name: parse-ntp-status
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+        validations:
+          - extractor: gjson
+            json_path: status.0.STATUS
+            condition: eq
+            expected: synchronized
+            expected_type: string
+
+      - name: parse-ntp-status-unsynchronized
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+        validations:
+          - extractor: gjson
+            json_path: status.0.STATUS
+            condition: eq
+            expected: unsynchronized
+            expected_type: string
+          - extractor: gjson
+            json_path: status.0.LAST_UPDATE
+            condition: eq
+            expected: never updated
+            expected_type: string
+
+      - name: parse-running-config-ntp
+        cmd: show running-config ntp
+        parser: xr_show_running_config_ntp
+        validations:
+          - extractor: gjson
+            json_path: ntp.#
+            condition: eq
+            expected: 2
+            expected_type: int

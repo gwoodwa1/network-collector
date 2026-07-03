@@ -1,0 +1,29 @@
+Value Required STATUS (\w+)
+Value STRATUM (\d+)
+Value REFID (\S+)
+Value NOMINAL_FREQUENCY ([\d.]+)
+Value ACTUAL_FREQUENCY ([\d.]+)
+Value PRECISION ([\d*]+)
+Value UPTIME (.+?)
+Value RESOLUTION (\d+)
+Value REFERENCE_TIME (.+)
+Value OFFSET ([-\d.]+)
+Value ROOT_DELAY ([\d.]+)
+Value ROOT_DISPERSION ([\d.]+)
+Value PEER_DISPERSION ([\d.]+)
+Value LOOPFILTER_STATE (.+?)
+Value DRIFT ([-\d.]+\s+\S+)
+Value POLL (\d+)
+Value LAST_UPDATE (.+?)
+
+Start
+  ^\s*Clock\s+is\s+${STATUS},\s+stratum\s+${STRATUM},\s+reference\s+is\s+${REFID}\s*$$
+  ^\s*Clock\s+is\s+${STATUS},\s+stratum\s+${STRATUM},\s+no\s+reference\s+clock\s*$$
+  ^\s*nominal\s+freq\s+is\s+${NOMINAL_FREQUENCY}\s+Hz,\s+actual\s+freq\s+is\s+${ACTUAL_FREQUENCY}\s+Hz,\s+precision\s+is\s+${PRECISION}\s*$$
+  ^\s*ntp\s+uptime\s+is\s+${UPTIME},\s+resolution\s+is\s+${RESOLUTION}\s*$$
+  ^\s*reference\s+time\s+is\s+${REFERENCE_TIME}\s*$$
+  ^\s*clock\s+offset\s+is\s+${OFFSET}\s+msec,\s+root\s+delay\s+is\s+${ROOT_DELAY}\s+msec\s*$$
+  ^\s*root\s+dispersion\s+is\s+${ROOT_DISPERSION}\s+msec,\s+peer\s+dispersion\s+is\s+${PEER_DISPERSION}\s+msec\s*$$
+  ^\s*loopfilter\s+state\s+is\s+${LOOPFILTER_STATE},\s+drift\s+is\s+${DRIFT}\s*$$
+  ^\s*system\s+poll\s+interval\s+is\s+${POLL},\s+last\s+update\s+was\s+${LAST_UPDATE}\.?\s*$$ -> Record
+  ^\s*system\s+poll\s+interval\s+is\s+${POLL},\s+${LAST_UPDATE}\s*$$ -> Record

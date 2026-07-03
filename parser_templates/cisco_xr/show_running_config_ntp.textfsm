@@ -1,0 +1,9 @@
+Value TYPE (server|peer)
+Value VRF (\S+)
+Value ADDRESS ([0-9A-Fa-f:.]+)
+Value SOURCE (\S+)
+
+Start
+  ^\s*${TYPE}\s+vrf\s+${VRF}\s+${ADDRESS}\s*$$ -> Record
+  ^\s*${TYPE}\s+${ADDRESS}\s*$$ -> Record
+  ^\s*source\s+${SOURCE}\s*$$ -> Record

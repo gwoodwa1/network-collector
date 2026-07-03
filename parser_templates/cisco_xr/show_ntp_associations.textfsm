@@ -1,0 +1,19 @@
+Value MODE ([*#+x-]?)
+Value CONFIGURED (~?)
+Value REMOTE ([0-9A-Fa-f:.]+)
+Value VRF (\S+)
+Value REFID (\S+)
+Value STRATUM (\d+)
+Value RECEIVE_TIME ([\d-]+)
+Value POLL (\d+)
+Value REACH (\d+)
+Value DELAY ([\d.]+)
+Value OFFSET ([-\d.]+)
+Value JITTER ([-\d.]+)
+
+Start
+  ^\s*${MODE}${CONFIGURED}\s*${REMOTE}\s+vrf\s+${VRF}\s*$$ -> VrfRow
+  ^\s*${MODE}${CONFIGURED}\s*${REMOTE}\s+${REFID}\s+${STRATUM}\s+${RECEIVE_TIME}\s+${POLL}\s+${REACH}\s+${DELAY}\s+${OFFSET}\s+${JITTER}\s*$$ -> Record
+
+VrfRow
+  ^\s+${REFID}\s+${STRATUM}\s+${RECEIVE_TIME}\s+${POLL}\s+${REACH}\s+${DELAY}\s+${OFFSET}\s+${JITTER}\s*$$ -> Record Start

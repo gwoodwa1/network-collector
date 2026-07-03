@@ -369,6 +369,31 @@ parsers:
 
 TextFSM value names are preserved as JSON keys. For example, `Value INTERFACE ...` produces an `INTERFACE` key. The `root` setting defaults to `records` for both record-oriented parser types.
 
+#### Included IOS-XR NTP parsers
+
+The parser pack includes custom TextFSM coverage for:
+
+- `show ntp associations` → `xr_show_ntp_associations`, rooted at `associations`
+- `show ntp status` → `xr_show_ntp_status`, rooted at `status`
+- `show running-config ntp` → `xr_show_running_config_ntp`, rooted at `ntp`
+
+```yaml
+ssh:
+  - group: xr
+    steps:
+      - name: collect-ntp-associations
+        cmd: show ntp associations
+        parser: xr_show_ntp_associations
+      - name: collect-ntp-status
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+      - name: collect-ntp-config
+        cmd: show running-config ntp
+        parser: xr_show_running_config_ntp
+```
+
+The association template handles IPv4, IPv6, configured peers, selection markers, VRFs, and continuation rows. The status template handles synchronized and unsynchronized clocks, including `never updated`. Numeric TextFSM values remain JSON strings; use `expected_type` in validations when a typed comparison is required.
+
 ### Offline parser fixture tests
 
 Parser and validation changes can be tested without logging into a network device. Add captured command output as plain text under `cmd/network-collector/testdata/cli/`, then add a case to `cmd/network-collector/testdata/parser-fixtures.yaml`.

@@ -49,3 +49,15 @@ parsers:
     type: textfsm
     template: parser_templates/cisco_xr/show_interfaces_brief.textfsm
     root: interfaces
+  xr_show_ntp_associations:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_ntp_associations.textfsm
+    root: associations
+  xr_show_ntp_status:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_ntp_status.textfsm
+    root: status
+  xr_show_running_config_ntp:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_running_config_ntp.textfsm
+    root: ntp

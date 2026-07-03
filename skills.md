@@ -421,6 +421,8 @@ Parser behavior:
 - `regex_records` applies its module pattern once and maps each match's capture groups into a record object.
 - `textfsm` preserves template value names as JSON keys and supports normal TextFSM state and value options.
 
+Included IOS-XR NTP parser names are `xr_show_ntp_associations`, `xr_show_ntp_status`, and `xr_show_running_config_ntp`.
+
 Rules:
 
 - Include `(?m)` for line-oriented CLI output so `^` and `$` match each line.

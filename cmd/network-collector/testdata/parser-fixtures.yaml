@@ -46,3 +46,91 @@ cases:
     config_ref:
       ssh_index: 0
       step: parse-interfaces-textfsm
+
+  - name: xr-ntp-associations-synchronized
+    input: cli/xr_show_ntp_associations_synced.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-associations
+    validations:
+      - extractor: gjson
+        json_path: associations.1.MODE
+        condition: eq
+        expected: '*'
+        expected_type: string
+      - extractor: gjson
+        json_path: associations.1.REMOTE
+        condition: eq
+        expected: 172.19.69.1
+        expected_type: string
+
+  - name: xr-ntp-associations-vrf-continuations
+    input: cli/xr_show_ntp_associations_vrf.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-associations
+    validations:
+      - extractor: gjson
+        json_path: associations.0.VRF
+        condition: eq
+        expected: VRF1
+        expected_type: string
+      - extractor: gjson
+        json_path: associations.1.VRF
+        condition: eq
+        expected: ''
+        expected_type: string
+
+  - name: xr-ntp-associations-ipv6
+    input: cli/xr_show_ntp_associations_ipv6.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-associations
+    validations:
+      - extractor: gjson
+        json_path: associations.1.REMOTE
+        condition: eq
+        expected: '2001:db8:429a:3189::2'
+        expected_type: string
+
+  - name: xr-ntp-status-synchronized
+    input: cli/xr_show_ntp_status_synced.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-status
+    validations:
+      - extractor: gjson
+        json_path: status.0.LAST_UPDATE
+        condition: eq
+        expected: 66 sec ago
+        expected_type: string
+
+  - name: xr-ntp-status-unsynchronized
+    input: cli/xr_show_ntp_status_unsynced.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-status-unsynchronized
+
+  - name: xr-ntp-status-partial-eof-record
+    input: cli/xr_show_ntp_status_partial.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-ntp-status
+    validations:
+      - extractor: gjson
+        json_path: status.0.ROOT_DELAY
+        condition: eq
+        expected: '7.80'
+        expected_type: string
+
+  - name: xr-running-config-ntp
+    input: cli/xr_show_running_config_ntp.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-running-config-ntp
+    validations:
+      - extractor: gjson
+        json_path: ntp.1.VRF
+        condition: eq
+        expected: management
+        expected_type: string
