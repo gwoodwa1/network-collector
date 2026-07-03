@@ -4,6 +4,7 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added inline custom variables and relative variable-file imports with deterministic precedence and support throughout templates and workflow logic.
 - Added direct conditions, list iteration, parameterized workflows, recovery and rollback, approval gates, isolated parallel branches, and bounded recurring schedules for SSH workflows.
 - Migrated the application to the maintained `go-viper/mapstructure/v2` configuration decoder.
 - Added weekly dependency update pull requests with automatic dependency-file and test verification.

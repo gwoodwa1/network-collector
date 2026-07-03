@@ -811,6 +811,19 @@ Use `return_to_prompt: false` for commands that intentionally reboot or disconne
 
 You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
 
+Define custom variables inline or import variable maps relative to the file that declares them:
+
+```yaml
+vars_files:
+  - vars/common.yaml
+  - vars/site.yaml
+
+vars:
+  change_reference: CHG-2026-0042
+```
+
+Earlier variable files are overridden by later files, inline `vars` override file values, and values registered during execution override both for that device. Variable files may contain a bare map or a single top-level `vars:` map. Lists and objects are exposed as compact JSON, allowing an imported list to be used directly by `foreach.from`. Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Files declared inside imported configs resolve relative to that imported config.
+
 ### Running local tools
 
 A step can run an installed local CLI with `local`. Commands are executed directly as an argument list, without a shell. This avoids shell expansion and quoting surprises. Local commands default to a 30-second timeout, and their output can be registered, parsed, validated, and saved like SSH command output.

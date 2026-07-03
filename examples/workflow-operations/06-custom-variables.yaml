@@ -1,0 +1,62 @@
+name_playbook: Imported custom variables
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+vars_files:
+  - vars/common.yaml
+
+# Inline values override values loaded from vars_files.
+vars:
+  change_reference: CHG-2026-0042
+  collection_label: pre-maintenance
+
+workflows:
+  inspect-interface:
+    parameters: [interface, label]
+    steps:
+      - name: announce-interface
+        message: '{{label}} check for {{interface}} at {{site_name}}'
+      - name: inspect-interface
+        cmd: show interfaces {{interface}}
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: announce-run
+        message: starting {{collection_label}} checks for {{change_reference}} at {{site_name}}
+
+      - name: conditional-platform
+        when:
+          variable: collect_platform
+          condition: eq
+          expected: true
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: '(IOS XR)'
+          condition: eq
+          expected: '{{expected_platform}}'
+
+      # Lists loaded from vars_files are exposed as JSON arrays and can feed
+      # foreach directly.
+      - name: configured-interfaces
+        foreach:
+          from: target_interfaces
+          item: interface
+          steps:
+            - name: call-interface-check
+              use: inspect-interface
+              with:
+                interface: '{{interface}}'
+                label: '{{collection_label}}'
+
+      - name: verify-ntp-state
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+        validation:
+          extractor: gjson
+          json_path: status.0.STATUS
+          condition: eq
+          expected: '{{expected_ntp_state}}'
+

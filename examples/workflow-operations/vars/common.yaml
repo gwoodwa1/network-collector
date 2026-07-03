@@ -1,0 +1,8 @@
+site_name: london-lab
+expected_platform: IOS XR
+collect_platform: true
+target_interfaces:
+  - Loopback0
+  - MgmtEth0/RP0/CPU0/0
+expected_ntp_state: synchronized
+

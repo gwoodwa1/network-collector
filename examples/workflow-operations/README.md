@@ -9,6 +9,7 @@ These playbooks demonstrate the workflow language as complete configurations. Th
 | `03-approval-and-parallel.yaml` | manual `approval`, `--approve-all`, independent `parallel` branches |
 | `04-recurring-schedule.yaml` | finite `schedule`, device concurrency, retries, validation actions |
 | `05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
+| `06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
 
 Run one example from the repository root:
 
@@ -31,3 +32,5 @@ go run ./cmd/network-collector \
 Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occurrences and exits; use an external scheduler for indefinite calendar-based execution.
 
 `05-pre-post-diff.yaml` is the most complete change-window pattern. It captures six pre/post command outputs, parses platform and route summaries with bundled TextFSM modules, generates unified JSON diffs with a reusable local workflow, and fails when selected state changes. Raw output may contain counters or timestamps, so compare only commands stable on your platform or parse and compare stable fields.
+
+`06-custom-variables.yaml` imports shared values from `vars/common.yaml` and uses them throughout the workflow. This is a useful pattern for keeping site, environment, interface, expected-state, and change-window data separate from reusable workflow logic.

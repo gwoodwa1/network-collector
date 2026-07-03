@@ -26,6 +26,10 @@ name_playbook: Human readable playbook title
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 fail_on_fail: false
+vars_files:
+  - vars/common.yaml
+vars:
+  environment: production
 execution:
   max_parallel: 3
   start_interval_seconds: 120
@@ -49,6 +53,8 @@ Rules:
 - `inventory_file` is optional; default behavior is to look for `inventory.yaml`.
 - `parsers_file` is optional; default behavior is to look for `parsers.yaml`.
 - `fail_on_fail` is optional. Use `true` when the process should exit non-zero if any validation fails or errors.
+- `vars_files` imports variable maps relative to the declaring config; globs and multiple files are supported.
+- `vars` defines inline values and overrides imported variable-file values.
 - `execution` is optional. Without it, SSH devices run serially as before.
 - `execution.max_parallel` limits active device runs; `0` means the serial default of one.
 - `execution.start_interval_seconds` sets the minimum delay between device starts.
@@ -272,6 +278,11 @@ Rules:
 Variable syntax:
 
 ```yaml
+vars_files:
+  - vars/common.yaml
+vars:
+  change_reference: CHG-2026-0042
+
 cmd: show install active {{install_id}}
 pattern: 'Package ID:\s+{{install_id}}'
 json_path: '{{dynamic_path}}'
@@ -284,7 +295,10 @@ Rules:
 - Variables use `{{variable_name}}`.
 - Variable names must match `[a-zA-Z_][a-zA-Z0-9_]*`.
 - Variables can be used in `cmd`, `pattern`, `json_path`, string `expected` values, `message`, and action `cmd` or `message`.
-- Variables must be registered before use.
+- Variables may come from top-level `vars`, relative `vars_files`, workflow parameters, loop scopes, or earlier `register` steps.
+- Variable file precedence is earlier files, later files, inline `vars`, then runtime registration.
+- Variable files contain either a bare map or one `vars:` map. Lists and objects become compact JSON and can feed `foreach.from`.
+- `vars_files` in imported configs resolve relative to the config that declares them.
 - For parsed JSON baselines, use `register` on the parser step and compare later with `expected: '{{variable_name}}'`.
 
 Regex extraction variable example:

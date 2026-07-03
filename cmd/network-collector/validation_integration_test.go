@@ -1581,6 +1581,52 @@ ssh:
 	}
 }
 
+func TestCustomVariablesFilesPrecedenceAndExecution(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "roles", "vars"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(dir, "roles", "vars", "common.yaml"): "site: role-site\ninterfaces: [Loopback0, Loopback1]\ncollect_routes: true\n",
+		filepath.Join(dir, "roles", "role.yaml"):           "vars_files: [vars/common.yaml]\nvars:\n  role_value: imported\n",
+		filepath.Join(dir, "override.yaml"):                "vars:\n  site: file-site\n  region: emea\n",
+		filepath.Join(dir, "config.yaml"):                  "imports: [roles/role.yaml]\nvars_files: [override.yaml]\nvars:\n  site: inline-site\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, _, err := loadConfig(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	variables, err := configVariables(config.Vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if variables["site"] != "inline-site" || variables["region"] != "emea" || variables["role_value"] != "imported" || variables["collect_routes"] != "true" || variables["interfaces"] != `["Loopback0","Loopback1"]` {
+		t.Fatalf("unexpected merged variables: %+v", variables)
+	}
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, variables)
+	steps := []StepConfig{
+		{Name: "conditional", When: &WhenConfig{Variable: "collect_routes", Expected: true}, Message: "site={{site}} region={{region}}"},
+		{Name: "interfaces", Foreach: &ForeachConfig{
+			From: "interfaces", Item: "interface",
+			Steps: []StepConfig{{Message: "checking {{interface}}"}},
+		}},
+	}
+	if executeSteps(ctx, nil, steps) || *failed {
+		t.Fatalf("custom-variable workflow failed: %v", *failed)
+	}
+	for _, expected := range []string{"site=inline-site region=emea", "checking Loopback0", "checking Loopback1"} {
+		if !strings.Contains(log.String(), expected) {
+			t.Fatalf("missing %q in %s", expected, log.String())
+		}
+	}
+}
+
 func TestLoadConfigComposesImports(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")
@@ -1689,8 +1735,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 6 {
-		t.Fatalf("expected inventory plus five workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 7 {
+		t.Fatalf("expected inventory plus six workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1707,8 +1753,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 5 {
-		t.Fatalf("expected five loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 6 {
+		t.Fatalf("expected six loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1729,6 +1775,11 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	diff := loaded["05-pre-post-diff.yaml"]
 	if len(diff.Workflows) != 1 || len(diff.SSH) != 1 || len(diff.SSH[0].Steps) != 8 || diff.SSH[0].Steps[0].Parallel == nil || diff.SSH[0].Steps[2].Approval == nil || diff.SSH[0].Steps[6].Parallel == nil {
 		t.Fatalf("pre/post diff example is incomplete: %+v", diff)
+	}
+	custom := loaded["06-custom-variables.yaml"]
+	variables, err := configVariables(custom.Vars)
+	if err != nil || variables["site_name"] != "london-lab" || variables["change_reference"] != "CHG-2026-0042" || custom.SSH[0].Steps[2].Foreach == nil {
+		t.Fatalf("custom variable example is incomplete: variables=%+v config=%+v error=%v", variables, custom, err)
 	}
 }
 

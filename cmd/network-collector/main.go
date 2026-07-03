@@ -168,6 +168,7 @@ type Config struct {
 	LocalSteps    []StepConfig              `mapstructure:"local_steps" yaml:"local_steps"`
 	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
 	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
+	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
 }
 
 type ScheduleConfig struct {
@@ -2450,6 +2451,73 @@ func configImports(value interface{}) ([]string, error) {
 	}
 }
 
+func loadVariableFile(path string) (map[string]interface{}, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read variable file %q: %w", path, err)
+	}
+	values := map[string]interface{}{}
+	if err := yaml.Unmarshal(content, &values); err != nil {
+		return nil, fmt.Errorf("failed to parse variable file %q: %w", path, err)
+	}
+	if wrapped, ok := values["vars"].(map[string]interface{}); ok {
+		if len(values) != 1 {
+			return nil, fmt.Errorf("variable file %q cannot mix a vars wrapper with other keys", path)
+		}
+		values = wrapped
+	}
+	return values, nil
+}
+
+func mergeConfigVariables(current map[string]interface{}, configPath string) error {
+	files, err := configImports(current["vars_files"])
+	if err != nil {
+		return fmt.Errorf("vars_files: %w", err)
+	}
+	merged := map[string]interface{}{}
+	for _, configuredPath := range files {
+		paths, err := expandConfigImport(configPath, configuredPath)
+		if err != nil {
+			return fmt.Errorf("vars_files: %w", err)
+		}
+		for _, path := range paths {
+			values, err := loadVariableFile(path)
+			if err != nil {
+				return err
+			}
+			merged = mergeConfigMaps(merged, values)
+		}
+	}
+	if inline, exists := current["vars"]; exists {
+		inlineMap, ok := inline.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("vars must be a map")
+		}
+		merged = mergeConfigMaps(merged, inlineMap)
+	}
+	if len(merged) > 0 {
+		current["vars"] = merged
+	}
+	delete(current, "vars_files")
+	return nil
+}
+
+func configVariables(values map[string]interface{}) (map[string]string, error) {
+	variables := make(map[string]string, len(values))
+	validName := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	for name, value := range values {
+		if !validName.MatchString(name) {
+			return nil, fmt.Errorf("variable name %q must be a valid template variable", name)
+		}
+		text, err := variableString(value)
+		if err != nil {
+			return nil, fmt.Errorf("variable %q: %w", name, err)
+		}
+		variables[name] = text
+	}
+	return variables, nil
+}
+
 func expandConfigImport(importingFile, configuredPath string) ([]string, error) {
 	path := strings.TrimSpace(configuredPath)
 	if path == "" {
@@ -2495,6 +2563,9 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[
 	if err := yaml.Unmarshal(content, &current); err != nil {
 		return nil, fmt.Errorf("failed to parse config %q: %w", absolutePath, err)
 	}
+	if err := mergeConfigVariables(current, absolutePath); err != nil {
+		return nil, fmt.Errorf("config %q: %w", absolutePath, err)
+	}
 	imports, err := configImports(current["imports"])
 	if err != nil {
 		return nil, fmt.Errorf("config %q: %w", absolutePath, err)
@@ -2539,6 +2610,9 @@ func loadConfig(configFile string) (Config, bool, error) {
 	if err := settings.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 		stringToBoolDecodeHook,
 	))); err != nil {
+		return Config{}, false, err
+	}
+	if _, err := configVariables(config.Vars); err != nil {
 		return Config{}, false, err
 	}
 	return config, settings.GetBool("fail_on_fail"), nil
@@ -2798,7 +2872,7 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 	started := time.Now()
 	result = deviceRunResult{index: index, hostname: "local_steps"}
 	defer func() { result.duration = time.Since(started) }()
-	variables := map[string]string{}
+	variables, _ := configVariables(config.Vars)
 	ctx := stepExecutionContext{
 		hostname: "local_steps", jsonOut: jsonOut, sessionLog: io.Discard,
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
@@ -3000,11 +3074,12 @@ func main() {
 	}
 
 	variableStates := make(map[string]*deviceVariableState)
+	initialVariables, _ := configVariables(config.Vars)
 	for index, device := range sshDevices {
 		key := variableScopeKey(device.Hostname, device.IP)
 		state, exists := variableStates[key]
 		if !exists {
-			state = &deviceVariableState{variables: map[string]string{}}
+			state = &deviceVariableState{variables: cloneVariables(initialVariables)}
 			state.cond = sync.NewCond(&state.mu)
 			variableStates[key] = state
 		}
