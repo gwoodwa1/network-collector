@@ -2,6 +2,10 @@
 
 All notable changes to Network Collector are documented here.
 
+## Unreleased
+
+- Migrated the application to the maintained `go-viper/mapstructure/v2` configuration decoder.
+
 ## [1.0.1] - 2026-07-03
 
 - Added custom TextFSM parser templates and row-oriented regex record parsers.

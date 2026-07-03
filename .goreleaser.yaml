@@ -42,7 +42,6 @@ archives:
       - parsers.yaml
       - parser_templates/**/*
       - examples/modular/*
-      - examples/modular/**/*
       - skills.md
 
 checksum:
