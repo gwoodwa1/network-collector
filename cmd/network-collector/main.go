@@ -62,6 +62,14 @@ type StepConfig struct {
 	OnPass         *ValidationActionConfig `mapstructure:"on_pass" yaml:"on_pass"`
 	OnFail         *ValidationActionConfig `mapstructure:"on_fail" yaml:"on_fail"`
 	Output         *StepOutputConfig       `mapstructure:"output" yaml:"output"`
+	Repeat         *RepeatConfig           `mapstructure:"repeat" yaml:"repeat"`
+}
+
+type RepeatConfig struct {
+	Count           int          `mapstructure:"count" yaml:"count"`
+	IntervalSeconds int          `mapstructure:"interval_seconds" yaml:"interval_seconds"`
+	StopOnFailure   *bool        `mapstructure:"stop_on_failure" yaml:"stop_on_failure"`
+	Steps           []StepConfig `mapstructure:"steps" yaml:"steps"`
 }
 
 type DeviceConfig struct {
@@ -970,7 +978,94 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 	}
 }
 
+const (
+	maxRepeatCount = 1000
+	maxRepeatDepth = 3
+)
+
+func repeatStopsOnFailure(config RepeatConfig) bool {
+	return config.StopOnFailure == nil || *config.StopOnFailure
+}
+
+func validateRepeatConfig(config RepeatConfig, depth int) error {
+	if depth > maxRepeatDepth {
+		return fmt.Errorf("repeat nesting exceeds maximum depth of %d", maxRepeatDepth)
+	}
+	if config.Count < 1 {
+		return fmt.Errorf("repeat.count must be at least 1")
+	}
+	if config.Count > maxRepeatCount {
+		return fmt.Errorf("repeat.count must not exceed %d", maxRepeatCount)
+	}
+	if config.Count > 1 && config.IntervalSeconds < 1 {
+		return fmt.Errorf("repeat.interval_seconds must be at least 1 when count is greater than 1")
+	}
+	if config.IntervalSeconds < 0 {
+		return fmt.Errorf("repeat.interval_seconds must be greater than or equal to 0")
+	}
+	if len(config.Steps) == 0 {
+		return fmt.Errorf("repeat.steps must contain at least one step")
+	}
+	for _, step := range config.Steps {
+		if step.Retry != nil && step.Retry.UntilPass && step.Retry.MaxAttempts < 1 {
+			return fmt.Errorf("repeat step %q uses retry.until_pass without a finite max_attempts", strings.TrimSpace(step.Name))
+		}
+		if step.Repeat != nil {
+			if err := validateRepeatConfig(*step.Repeat, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func executeRepeat(ctx *stepExecutionContext, client **ssh.Client, config RepeatConfig, stepName string, depth int, sleep func(time.Duration)) bool {
+	if err := validateRepeatConfig(config, depth); err != nil {
+		*ctx.runFailed = true
+		slog.Error("invalid repeat step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+		recordStepFailure(ctx, stepName, fmt.Sprintf("invalid repeat step: %v", err))
+		return true
+	}
+
+	interval := time.Duration(config.IntervalSeconds) * time.Second
+	for iteration := 1; iteration <= config.Count; iteration++ {
+		slog.Info("starting repeat iteration", "hostname", ctx.hostname, "step", stepName, "iteration", iteration, "count", config.Count)
+		writeSessionf(ctx.sessionLog, "[step:%s] repeat iteration %d/%d\n", stepName, iteration, config.Count)
+
+		iterationFailed := false
+		iterationCtx := *ctx
+		iterationCtx.runFailed = &iterationFailed
+		iterationStopped := executeStepsAtDepth(&iterationCtx, client, config.Steps, depth)
+		ctx.artifactSeq = iterationCtx.artifactSeq
+		if iterationStopped {
+			if iterationFailed {
+				*ctx.runFailed = true
+			}
+			return true
+		}
+		if iterationFailed {
+			*ctx.runFailed = true
+			if repeatStopsOnFailure(config) {
+				slog.Warn("stopping repeat after failed iteration", "hostname", ctx.hostname, "step", stepName, "iteration", iteration)
+				writeSessionf(ctx.sessionLog, "[step:%s] repeat stopped after failed iteration %d/%d\n", stepName, iteration, config.Count)
+				break
+			}
+		}
+
+		if iteration < config.Count {
+			slog.Info("waiting between repeat iterations", "hostname", ctx.hostname, "step", stepName, "duration", interval)
+			writeSessionf(ctx.sessionLog, "[step:%s] waiting %s before repeat iteration %d/%d\n", stepName, interval, iteration+1, config.Count)
+			sleep(interval)
+		}
+	}
+	return false
+}
+
 func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepConfig) bool {
+	return executeStepsAtDepth(ctx, client, steps, 0)
+}
+
+func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps []StepConfig, depth int) bool {
 	stopDeviceSteps := false
 	for _, step := range steps {
 		stepName := strings.TrimSpace(step.Name)
@@ -983,6 +1078,22 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			slog.Error("error rendering step message", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 			writeSessionf(ctx.sessionLog, "[step:%s] message error: %v\n", stepName, err)
 			recordStepFailure(ctx, stepName, fmt.Sprintf("message error: %v", err))
+			continue
+		}
+
+		if step.Repeat != nil {
+			if strings.TrimSpace(step.Command) != "" || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+				*ctx.runFailed = true
+				stopDeviceSteps = true
+				err := fmt.Errorf("repeat step cannot also define cmd, wait_seconds, ssh_probe, or validations")
+				slog.Error("invalid repeat step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				recordStepFailure(ctx, stepName, err.Error())
+				break
+			}
+			if executeRepeat(ctx, client, *step.Repeat, stepName, depth+1, time.Sleep) {
+				stopDeviceSteps = true
+				break
+			}
 			continue
 		}
 

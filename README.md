@@ -570,6 +570,30 @@ Sensitive steps can override the global raw or parsed setting:
 
 Omit `output`, or leave all its settings disabled, to retain the previous session-log-only behaviour. `--json` continues to emit validation results to stdout and can be used independently of artifact output.
 
+### Bounded repeated step groups
+
+Use `repeat` to run a finite group of steps at a fixed interval. The first iteration runs immediately; the interval is applied only between iterations.
+
+```yaml
+ssh:
+  - host: xr-router-01
+    steps:
+      - name: monitor-ntp
+        repeat:
+          count: 10
+          interval_seconds: 120
+          stop_on_failure: true
+          steps:
+            - name: ntp-associations
+              cmd: show ntp associations
+              parser: xr_show_ntp_associations
+            - name: ntp-status
+              cmd: show ntp status
+              parser: xr_show_ntp_status
+```
+
+Safety constraints are enforced: `count` is required and limited to 1–1000, an interval of at least one second is required when `count` is greater than one, repeat nesting is limited to three levels, and an invalid repeat stops that device. Retries inside a repeat must set a positive `max_attempts`; an unbounded `until_pass` retry is rejected. `stop_on_failure` defaults to `true`; set it to `false` only when later iterations should continue after a failed command, parser, validation, or output write. A repeat step cannot also define its own command, wait, probe, or validation—those belong under its nested `steps`.
+
 Use `operation_timeout` on an SSH device to increase the scrapligo operation timeout for long-running commands. The value is seconds; for example, `operation_timeout: 120` gives commands up to two minutes to return to the prompt.
 
 Use `wait_seconds` on a step to pause while keeping the SSH connection open. A wait-only step does not require `cmd`; if both `wait_seconds` and `cmd` are set, the collector waits first and then runs the command.

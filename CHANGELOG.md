@@ -6,6 +6,7 @@ All notable changes to Network Collector are documented here.
 
 - Added custom TextFSM parser templates and row-oriented regex record parsers.
 - Added IOS-XR NTP association, status, and running-configuration parser templates.
+- Added safe bounded repeat blocks for running step groups a finite number of times at a configured interval.
 - Added atomic raw, parsed JSON, and run-summary output artifacts with per-step overrides.
 
 ## [1.0.0] - 2026-07-03

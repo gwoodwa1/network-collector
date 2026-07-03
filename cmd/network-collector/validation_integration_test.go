@@ -1233,6 +1233,80 @@ func TestStepOutputOverride(t *testing.T) {
 	}
 }
 
+func TestExecuteRepeatRunsFiniteCount(t *testing.T) {
+	var log bytes.Buffer
+	runFailed := false
+	ctx := &stepExecutionContext{
+		hostname: "router-01", ip: "192.0.2.10", jsonOut: true,
+		sessionLog: &log, variables: map[string]string{}, runFailed: &runFailed,
+	}
+	sleeps := 0
+	stopped := executeRepeat(ctx, nil, RepeatConfig{
+		Count: 3, IntervalSeconds: 10,
+		Steps: []StepConfig{{Name: "note", Message: "collecting"}},
+	}, "monitor", 1, func(duration time.Duration) {
+		if duration != 10*time.Second {
+			t.Fatalf("unexpected repeat interval: %s", duration)
+		}
+		sleeps++
+	})
+	if stopped || runFailed {
+		t.Fatalf("repeat unexpectedly stopped or failed: stopped=%v failed=%v", stopped, runFailed)
+	}
+	if sleeps != 2 {
+		t.Fatalf("expected two sleeps between three iterations, got %d", sleeps)
+	}
+	if got := strings.Count(log.String(), "[step:note] message: collecting"); got != 3 {
+		t.Fatalf("expected three iteration log entries, got %d: %s", got, log.String())
+	}
+}
+
+func TestExecuteRepeatStopsOnFailureByDefault(t *testing.T) {
+	var log bytes.Buffer
+	runFailed := false
+	ctx := &stepExecutionContext{
+		hostname: "router-01", ip: "192.0.2.10", jsonOut: true,
+		sessionLog: &log, failureLog: filepath.Join(t.TempDir(), "failures.txt"),
+		variables: map[string]string{}, runFailed: &runFailed,
+	}
+	sleeps := 0
+	stopped := executeRepeat(ctx, nil, RepeatConfig{
+		Count: 3, IntervalSeconds: 10,
+		Steps: []StepConfig{{Name: "invalid-empty-step"}},
+	}, "monitor", 1, func(time.Duration) { sleeps++ })
+	if stopped {
+		t.Fatal("failed iteration should stop the repeat block, not the whole device")
+	}
+	if !runFailed {
+		t.Fatal("expected failed iteration to mark the run failed")
+	}
+	if sleeps != 0 {
+		t.Fatalf("expected no wait after stopping on first failure, got %d", sleeps)
+	}
+}
+
+func TestValidateRepeatConfigSafetyLimits(t *testing.T) {
+	valid := RepeatConfig{Count: 10, IntervalSeconds: 120, Steps: []StepConfig{{Message: "collect"}}}
+	if err := validateRepeatConfig(valid, 1); err != nil {
+		t.Fatalf("valid repeat rejected: %v", err)
+	}
+	invalid := []RepeatConfig{
+		{Count: 0, IntervalSeconds: 1, Steps: []StepConfig{{Message: "collect"}}},
+		{Count: maxRepeatCount + 1, IntervalSeconds: 1, Steps: []StepConfig{{Message: "collect"}}},
+		{Count: 2, IntervalSeconds: 0, Steps: []StepConfig{{Message: "collect"}}},
+		{Count: 2, IntervalSeconds: 1},
+		{Count: 2, IntervalSeconds: 1, Steps: []StepConfig{{Name: "unbounded", Retry: &RetryConfig{UntilPass: true}}}},
+	}
+	for _, config := range invalid {
+		if err := validateRepeatConfig(config, 1); err == nil {
+			t.Fatalf("unsafe repeat config accepted: %+v", config)
+		}
+	}
+	if err := validateRepeatConfig(valid, maxRepeatDepth+1); err == nil {
+		t.Fatal("expected excessive repeat nesting to be rejected")
+	}
+}
+
 func toString(v interface{}) string {
 	if v == nil {
 		return ""

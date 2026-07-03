@@ -158,6 +158,7 @@ steps:
     validations: []
     register: variable_name
     retry: {}
+    repeat: {}
     output: {}
     on_pass: {}
     on_fail: {}
@@ -177,6 +178,7 @@ Supported step keys:
 - `ssh_probe`: close stale SSH, probe TCP, reconnect, then continue.
 - `return_to_prompt`: set `false` for commands expected to disconnect or reboot before returning a prompt.
 - `output`: optional per-step `save_raw` / `save_parsed` overrides for structured artifacts.
+- `repeat`: bounded repeated step group with `count`, `interval_seconds`, optional `stop_on_failure`, and nested `steps`.
 - `on_pass`: conditional action after validation passes.
 - `on_fail`: conditional action after validation fails or errors.
 
@@ -460,6 +462,29 @@ parsers:
         group: 5
         repeated: true
 ```
+
+## Bounded Repeat
+
+```yaml
+- name: monitor
+  repeat:
+    count: 10
+    interval_seconds: 120
+    stop_on_failure: true
+    steps:
+      - name: collect
+        cmd: show command
+```
+
+Rules:
+
+- `count` is required, finite, and must be between 1 and 1000.
+- `interval_seconds` must be at least 1 when `count` is greater than 1.
+- The first iteration starts immediately; waits occur only between iterations.
+- `stop_on_failure` defaults to `true`.
+- Nesting is limited to three repeat blocks.
+- `retry.until_pass` inside a repeat must have a positive `max_attempts`.
+- Put executable fields and validations on nested steps, not on the repeat container.
 
 ## Retry
 
