@@ -681,6 +681,30 @@ ssh:
 
 Each `inputs` key becomes a template variable containing the path to a private temporary file. Its value is the file content. Temporary inputs are removed when the program exits. The executable must already be installed and discoverable through `PATH`, or `command` must contain its path. A missing executable, timeout, or non-zero exit marks the device run as failed. Shell operators such as pipes and redirects are intentionally unsupported; call a script explicitly when orchestration is needed.
 
+For commands that should run once after every device workflow has completed, use the top-level `local_steps` phase:
+
+```yaml
+local_steps:
+  - name: summarize-results
+    local:
+      command: jq
+      args:
+        - .
+        - "{{results_file}}"
+      inputs:
+        results_file: '{"status":"complete"}'
+      timeout_seconds: 10
+    register: summary
+    validation:
+      extractor: gjson
+      json_path: status
+      condition: eq
+      expected: complete
+      expected_type: string
+```
+
+Top-level local steps execute sequentially and share registered variables with later top-level local steps. They run once per playbook, even when the playbook contains many devices, and also work in local-only playbooks without SSH credentials. Per-device registered variables are deliberately not merged into this phase because concurrent devices may use the same variable names; pass data through saved artifacts or a purpose-built local command instead. Top-level entries support `local`, `register`, `parser`, `validation`/`validations`, `retry`, and `output`.
+
 ### Validation semantics
 
 Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads, including parser output. Use `validation` for one rule, or `validations` for multiple rules. When multiple validations are configured, all rules must pass for the step to trigger `on_pass`; any failed or errored rule triggers `on_fail`.

@@ -34,6 +34,37 @@ func TestExecuteLocalCommandRejectsInvalidInputName(t *testing.T) {
 	}
 }
 
+func TestRunPlaybookLocalStepsRunsOnceAndSharesVariables(t *testing.T) {
+	helper := LocalCommandConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestLocalCommandHelper", "--", "{{input_file}}"},
+	}
+	result := runPlaybookLocalSteps([]StepConfig{
+		{
+			Name:     "produce",
+			Local:    &LocalCommandConfig{Command: helper.Command, Args: helper.Args, Inputs: map[string]string{"input_file": "baseline"}},
+			Register: "first_result",
+		},
+		{
+			Name:  "consume",
+			Local: &LocalCommandConfig{Command: helper.Command, Args: helper.Args, Inputs: map[string]string{"input_file": "{{first_result}}"}},
+			Validation: &ValidationConfig{
+				Extractor: "regex", Pattern: `(baseline)`, Condition: "eq", Expected: "baseline",
+			},
+		},
+	}, Config{}, true, nil, "", 0)
+
+	if result.failed {
+		t.Fatal("runPlaybookLocalSteps() unexpectedly failed")
+	}
+	if len(result.aggregated) != 1 || result.aggregated[0].Result.Status != "pass" {
+		t.Fatalf("runPlaybookLocalSteps() validations = %#v", result.aggregated)
+	}
+	if result.hostname != "local_steps" {
+		t.Fatalf("runPlaybookLocalSteps() hostname = %q", result.hostname)
+	}
+}
+
 func TestLocalCommandHelper(t *testing.T) {
 	separator := -1
 	for index, arg := range os.Args {

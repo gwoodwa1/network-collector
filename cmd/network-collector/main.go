@@ -117,6 +117,7 @@ type Config struct {
 	Execution     ExecutionConfig `mapstructure:"execution" yaml:"execution"`
 	Output        OutputConfig    `mapstructure:"output" yaml:"output"`
 	SSH           []DeviceConfig  `mapstructure:"ssh" yaml:"ssh"`
+	LocalSteps    []StepConfig    `mapstructure:"local_steps" yaml:"local_steps"`
 }
 
 type OutputConfig struct {
@@ -1470,6 +1471,11 @@ func outputEnabled(config Config, devices []DeviceConfig) bool {
 			}
 		}
 	}
+	for _, step := range config.LocalSteps {
+		if step.Output != nil && (step.Output.SaveRaw != nil || step.Output.SaveParsed != nil) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -2116,6 +2122,103 @@ func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner fun
 	return allResults, stopped
 }
 
+func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, parsers map[string]ParserModuleConfig, runDir string, index int) (result deviceRunResult) {
+	started := time.Now()
+	result = deviceRunResult{index: index, hostname: "local_steps"}
+	defer func() { result.duration = time.Since(started) }()
+	variables := map[string]string{}
+	ctx := stepExecutionContext{
+		hostname: "local_steps", jsonOut: jsonOut, sessionLog: io.Discard,
+		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
+		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
+	}
+
+	for _, step := range steps {
+		stepName := strings.TrimSpace(step.Name)
+		if stepName == "" {
+			stepName = "unnamed"
+		}
+		if step.Local == nil {
+			result.failed = true
+			slog.Error("invalid playbook local step", "step", stepName, "error", "local configuration is required")
+			continue
+		}
+		if strings.TrimSpace(step.Command) != "" || step.Repeat != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || step.OnPass != nil || step.OnFail != nil {
+			result.failed = true
+			slog.Error("invalid playbook local step", "step", stepName, "error", "cmd, repeat, ssh_probe, wait_seconds, on_pass, and on_fail are not supported")
+			continue
+		}
+
+		attempt := 0
+		for {
+			attempt++
+			output, commandDisplay, err := executeLocalCommand(*step.Local, variables)
+			if err != nil {
+				result.failed = true
+				slog.Error("playbook local step failed", "step", stepName, "command", commandDisplay, "error", err)
+				break
+			}
+			if !jsonOut {
+				fmt.Printf("local_step=%s command=%q\n%s\n", stepName, commandDisplay, output)
+			}
+			if err := saveStepArtifact(&ctx, step, stepName, attempt, "raw", output); err != nil {
+				result.failed = true
+				slog.Error("error saving playbook local output", "step", stepName, "error", err)
+			}
+
+			validationOutput := output
+			if strings.TrimSpace(step.Parser) != "" {
+				parsedOutput, err := parseOutputWithModule(output, step.Parser, parsers)
+				if err != nil {
+					result.failed = true
+					slog.Error("playbook local parser error", "step", stepName, "parser", step.Parser, "error", err)
+					break
+				}
+				validationOutput = parsedOutput
+				if err := saveStepArtifact(&ctx, step, stepName, attempt, "parsed", parsedOutput); err != nil {
+					result.failed = true
+					slog.Error("error saving parsed playbook local output", "step", stepName, "error", err)
+				}
+			}
+			if name := strings.TrimSpace(step.Register); name != "" {
+				variables[name] = validationOutput
+			}
+
+			validations := stepValidations(step)
+			if len(validations) == 0 {
+				break
+			}
+			validationResults, overall, validationErr := runStepValidations(validationOutput, validations, variables)
+			if validationErr != nil {
+				result.failed = true
+				slog.Error("playbook local validation error", "step", stepName, "error", validationErr)
+			}
+			for _, validationResult := range validationResults {
+				result.aggregated = append(result.aggregated, deviceValidation{Hostname: "local_steps", Result: validationResult})
+				if step.Register != "" && validationResult.RawExtract != "" {
+					variables[step.Register] = validationResult.RawExtract
+				}
+			}
+			if step.Retry != nil && step.Retry.UntilPass && overall.Status == "fail" {
+				if step.Retry.MaxAttempts > 0 && attempt >= step.Retry.MaxAttempts {
+					break
+				}
+				interval := time.Duration(step.Retry.IntervalSeconds) * time.Second
+				if interval <= 0 {
+					interval = 60 * time.Second
+				}
+				time.Sleep(interval)
+				continue
+			}
+			if isFailureResult(overall) {
+				result.failed = true
+			}
+			break
+		}
+	}
+	return result
+}
+
 func main() {
 	// CLI flags
 	var jsonOut bool
@@ -2154,14 +2257,17 @@ func main() {
 		}
 	})
 
-	username, password, err := credentials.ResolveCredentials(cliCredsInput, nil, nil)
-	if err != nil {
-		slog.Error("error reading credentials", "error", err)
-		os.Exit(1)
-	}
-	if username == "" || password == "" {
-		slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
-		os.Exit(1)
+	var username, password string
+	if len(config.SSH) > 0 {
+		username, password, err = credentials.ResolveCredentials(cliCredsInput, nil, nil)
+		if err != nil {
+			slog.Error("error reading credentials", "error", err)
+			os.Exit(1)
+		}
+		if username == "" || password == "" {
+			slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
+			os.Exit(1)
+		}
 	}
 
 	if strings.TrimSpace(cliInventoryFile) != "" {
@@ -2234,6 +2340,9 @@ func main() {
 		return result
 	}
 	deviceResults, schedulingStopped := runScheduledDevices(sshDevices, config.Execution, runner)
+	if len(config.LocalSteps) > 0 {
+		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, len(sshDevices)))
+	}
 	runFailed := schedulingStopped
 	resultsByIndex := make(map[int]deviceRunResult, len(deviceResults))
 	for _, result := range deviceResults {
