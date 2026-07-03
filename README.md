@@ -252,6 +252,53 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### Custom SSH platform definitions
+
+SSH platform definitions and command-output parsers solve different problems:
+
+- A ScrapliGo platform definition teaches the SSH driver how to recognise prompts, move between privilege levels, disable paging, and identify command errors.
+- `parsers.yaml` and TextFSM templates transform the output returned by a command into structured data.
+
+The device `type` is passed directly to ScrapliGo. It can be a bundled platform name such as `cisco_iosxe`, `cisco_iosxr`, `cisco_nxos`, `arista_eos`, `juniper_junos`, `nokia_srl`, `nokia_sros`, `huawei_vrp`, or `hp_comware`. For Ericsson, another vendor, or a non-network appliance with a recognisable CLI prompt, set `type` to a custom ScrapliGo YAML file:
+
+```yaml
+hosts:
+  - name: ericsson-router-01
+    ip: 192.0.2.40
+    type: ./platforms/ericsson_generic.yaml
+```
+
+A minimal network-driver platform definition looks like this:
+
+```yaml
+platform-type: ericsson_generic
+default:
+  driver-type: network
+  privilege-levels:
+    exec:
+      name: exec
+      pattern: '(?m)^[A-Za-z0-9_.@:/-]{1,80}[>#]\s?$'
+      not-contains: []
+      previous-priv: ''
+      deescalate: ''
+      escalate: ''
+      escalate-auth: false
+      escalate-prompt: ''
+  default-desired-privilege-level: exec
+  failed-when-contains:
+    - Error
+    - Invalid command
+    - Unknown command
+  network-on-open:
+    - operation: acquire-priv
+  network-on-close:
+    - operation: channel.write
+      input: exit
+    - operation: channel.return
+```
+
+Tune the prompt expression and open/close operations against captured sessions from the target system. Custom definitions must use `driver-type: network` because Network Collector requests ScrapliGo's network driver. Relative `type` paths currently resolve from the directory where `network-collector` is launched, not from `inventory.yaml`; use an absolute path when the working directory is uncertain.
+
 ### Modular playbook imports
 
 A master config can compose reusable partial YAML files with `imports`:

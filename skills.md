@@ -11,6 +11,7 @@ The primary generated files are:
 - `config.yaml`: playbook, SSH targets, commands, parsers, validations, variables, retries, and conditionals.
 - `parsers.yaml`: reusable regex parser modules that convert CLI text into JSON for `gjson` validation.
 - `inventory.yaml`: optional host and group inventory used by `config.yaml`.
+- Custom ScrapliGo platform YAML: optional SSH prompt, privilege, paging, and command-error behaviour for platforms not bundled with ScrapliGo.
 
 Prefer generating concise, explicit YAML. Do not invent unsupported keys.
 
@@ -95,7 +96,7 @@ Supported SSH device keys:
 
 - `hostname`: inline hostname or display name.
 - `ip`: inline management IP or DNS name.
-- `type`: SSH device type passed to the driver, for example `cisco_ios`, `cisco_nxos`, `juniper_junos`.
+- `type`: ScrapliGo platform name or custom platform YAML path passed directly to the SSH driver, for example `cisco_iosxe`, `cisco_nxos`, `juniper_junos`, or `./platforms/ericsson_generic.yaml`.
 - `host`: one inventory host name.
 - `hosts`: list of inventory host names.
 - `group`: one inventory group name.
@@ -114,6 +115,62 @@ Rules:
 - If using `cmd` at device level, do not also generate unrelated `steps`.
 - Inventory values may be overridden by the SSH device entry.
 - Variables are scoped per hostname/IP and can be reused by later SSH entries for the same device.
+
+## Custom ScrapliGo SSH Platforms
+
+Do not confuse SSH platform definitions with output parsers:
+
+- A ScrapliGo platform YAML recognises prompts, defines privilege levels, disables paging, runs connection open/close operations, and lists command-error strings.
+- `parsers.yaml` and TextFSM templates parse the command output returned after SSH prompt handling succeeds.
+
+Use a bundled ScrapliGo platform name when available. Common names include `cisco_iosxe`, `cisco_iosxr`, `cisco_nxos`, `arista_eos`, `juniper_junos`, `nokia_srl`, `nokia_sros`, `huawei_vrp`, and `hp_comware`.
+
+For an unbundled vendor or appliance, generate a custom file and reference it through the inventory `type`:
+
+```yaml
+hosts:
+  - name: ericsson-router-01
+    ip: 192.0.2.40
+    type: ./platforms/ericsson_generic.yaml
+```
+
+Minimal custom definition:
+
+```yaml
+platform-type: ericsson_generic
+default:
+  driver-type: network
+  privilege-levels:
+    exec:
+      name: exec
+      pattern: '(?m)^[A-Za-z0-9_.@:/-]{1,80}[>#]\s?$'
+      not-contains: []
+      previous-priv: ''
+      deescalate: ''
+      escalate: ''
+      escalate-auth: false
+      escalate-prompt: ''
+  default-desired-privilege-level: exec
+  failed-when-contains:
+    - Error
+    - Invalid command
+    - Unknown command
+  network-on-open:
+    - operation: acquire-priv
+  network-on-close:
+    - operation: channel.write
+      input: exit
+    - operation: channel.return
+```
+
+Rules:
+
+- Always use `driver-type: network`; Network Collector calls `GetNetworkDriver`.
+- Derive prompt patterns from captured prompts and keep them anchored and narrow enough to avoid matching command output.
+- Add vendor-specific paging-disable commands to `network-on-open` when required.
+- Relative platform paths resolve from the process working directory, not from `inventory.yaml`. Prefer an absolute path if launch location is not controlled.
+- Do not create an output parser merely to fix prompt detection; use a custom ScrapliGo platform definition.
+- Do not put output extraction rules in the platform YAML; use `parsers.yaml` or TextFSM.
 
 ## `inventory.yaml`
 
