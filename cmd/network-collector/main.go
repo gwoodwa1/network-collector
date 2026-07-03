@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
@@ -87,10 +88,18 @@ type ValidationConfig struct {
 }
 
 type Config struct {
-	NamePlaybook  string         `mapstructure:"name_playbook" yaml:"name_playbook"`
-	InventoryFile string         `mapstructure:"inventory_file" yaml:"inventory_file"`
-	ParsersFile   string         `mapstructure:"parsers_file" yaml:"parsers_file"`
-	SSH           []DeviceConfig `mapstructure:"ssh" yaml:"ssh"`
+	NamePlaybook  string          `mapstructure:"name_playbook" yaml:"name_playbook"`
+	InventoryFile string          `mapstructure:"inventory_file" yaml:"inventory_file"`
+	ParsersFile   string          `mapstructure:"parsers_file" yaml:"parsers_file"`
+	Execution     ExecutionConfig `mapstructure:"execution" yaml:"execution"`
+	SSH           []DeviceConfig  `mapstructure:"ssh" yaml:"ssh"`
+}
+
+type ExecutionConfig struct {
+	MaxParallel          int `mapstructure:"max_parallel" yaml:"max_parallel"`
+	StartIntervalSeconds int `mapstructure:"start_interval_seconds" yaml:"start_interval_seconds"`
+	CanaryCount          int `mapstructure:"canary_count" yaml:"canary_count"`
+	FailureThreshold     int `mapstructure:"failure_threshold" yaml:"failure_threshold"`
 }
 
 type InventoryHostConfig struct {
@@ -133,6 +142,22 @@ type deviceValidation struct {
 	IP       string                      `json:"ip"`
 	Result   validation.ValidationResult `json:"result"`
 }
+
+type deviceRunResult struct {
+	index      int
+	aggregated []deviceValidation
+	failed     bool
+}
+
+type deviceVariableState struct {
+	mu        sync.Mutex
+	cond      *sync.Cond
+	variables map[string]string
+	order     []int
+	next      int
+}
+
+var failureLogMu sync.Mutex
 
 type stepExecutionContext struct {
 	hostname   string
@@ -1177,6 +1202,9 @@ func formatFailureRecord(hostname, ip, stepName string, overall validation.Valid
 }
 
 func appendFailureRecord(path, hostname, ip, stepName, status, message string, results []validation.ValidationResult) error {
+	failureLogMu.Lock()
+	defer failureLogMu.Unlock()
+
 	if strings.TrimSpace(path) == "" {
 		path = failureLogPath()
 	}
@@ -1270,6 +1298,211 @@ func loadConfig(configFile string) {
 	}
 }
 
+func validateExecutionConfig(cfg ExecutionConfig) error {
+	if cfg.MaxParallel < 0 {
+		return fmt.Errorf("execution.max_parallel must be greater than or equal to 0")
+	}
+	if cfg.StartIntervalSeconds < 0 {
+		return fmt.Errorf("execution.start_interval_seconds must be greater than or equal to 0")
+	}
+	if cfg.CanaryCount < 0 {
+		return fmt.Errorf("execution.canary_count must be greater than or equal to 0")
+	}
+	if cfg.FailureThreshold < 0 {
+		return fmt.Errorf("execution.failure_threshold must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut bool, parsers map[string]ParserModuleConfig, variables map[string]string) deviceRunResult {
+	result := deviceRunResult{index: index}
+	hostname := strings.TrimSpace(device.Hostname)
+	ip := strings.TrimSpace(device.IP)
+	deviceType := strings.TrimSpace(device.Type)
+
+	if hostname == "" || ip == "" || deviceType == "" {
+		result.failed = true
+		slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
+		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping invalid SSH entry", nil); err != nil {
+			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
+		}
+		return result
+	}
+
+	steps := device.Steps
+	if len(steps) == 0 && strings.TrimSpace(device.Command) != "" {
+		steps = []StepConfig{{
+			Name: "default", Command: strings.TrimSpace(device.Command), Parser: strings.TrimSpace(device.Parser),
+			Validation: device.Validation, Validations: device.Validations,
+		}}
+	}
+	if len(steps) == 0 {
+		result.failed = true
+		slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
+		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping SSH device with no steps or command", nil); err != nil {
+			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
+		}
+		return result
+	}
+
+	started := time.Now()
+	sessionLog, sessionLogPath, err := openSessionLog(hostname, config.NamePlaybook, started)
+	if err != nil {
+		result.failed = true
+		slog.Error("error creating session log", "hostname", hostname, "ip", ip, "error", err)
+		return result
+	}
+	slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
+
+	opts := sshOptionsForDevice(device)
+	channelLog := io.Writer(sessionLog)
+	if !jsonOut {
+		channelLog = io.MultiWriter(os.Stdout, sessionLog)
+	}
+	opts = append(opts, ssh.WithChannelLog(channelLog))
+
+	client := ssh.NewClient(opts...)
+	if err := client.Connect(ip, username, password, deviceType); err != nil {
+		result.failed = true
+		slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
+		writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
+		if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to connect to %s (%s): %v", hostname, ip, err), nil); ferr != nil {
+			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+		}
+		_ = sessionLog.Close()
+		return result
+	}
+
+	ctx := stepExecutionContext{
+		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
+		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
+		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
+	}
+	if executeSteps(&ctx, &client, steps) {
+		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
+	}
+	for _, deviceValidation := range result.aggregated {
+		if deviceValidation.Result.Status == "fail" || deviceValidation.Result.Status == "error" {
+			result.failed = true
+			break
+		}
+	}
+	if err := closeSSHClient(client); err != nil {
+		result.failed = true
+		slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
+		writeSessionf(sessionLog, "ERROR: failed to close SSH connection: %v\n", err)
+		if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to close SSH connection: %v", err), nil); ferr != nil {
+			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+		}
+	}
+	writeSessionf(sessionLog, "\nSession complete: %s\n", time.Now().Format(time.RFC3339))
+	if err := sessionLog.Close(); err != nil {
+		result.failed = true
+		slog.Error("error closing session log", "hostname", hostname, "ip", ip, "path", sessionLogPath, "error", err)
+	}
+	return result
+}
+
+func runDeviceBatch(devices []DeviceConfig, offset int, cfg ExecutionConfig, lastStart *time.Time, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, int, bool) {
+	maxParallel := cfg.MaxParallel
+	if maxParallel == 0 {
+		maxParallel = 1
+	}
+	interval := time.Duration(cfg.StartIntervalSeconds) * time.Second
+	results := make([]deviceRunResult, 0, len(devices))
+	completed := make(chan deviceRunResult, len(devices))
+	active, failures, next := 0, 0, 0
+	stopped := false
+
+	receive := func() {
+		result := <-completed
+		active--
+		if result.failed {
+			failures++
+		}
+		results = append(results, result)
+	}
+
+	for next < len(devices) {
+		if cfg.FailureThreshold > 0 && failures >= cfg.FailureThreshold {
+			stopped = true
+			break
+		}
+		if active >= maxParallel {
+			receive()
+			continue
+		}
+
+		if !lastStart.IsZero() && interval > 0 {
+			wait := time.Until(lastStart.Add(interval))
+			if wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case result := <-completed:
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					active--
+					if result.failed {
+						failures++
+					}
+					results = append(results, result)
+					continue
+				case <-timer.C:
+				}
+			}
+		}
+
+		index := offset + next
+		device := devices[next]
+		next++
+		active++
+		*lastStart = time.Now()
+		slog.Info("starting scheduled device", "hostname", device.Hostname, "ip", device.IP, "active", active, "max_parallel", maxParallel)
+		go func() { completed <- runner(index, device) }()
+	}
+	for active > 0 {
+		receive()
+	}
+	return results, failures, stopped
+}
+
+func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, bool) {
+	canaryCount := cfg.CanaryCount
+	if canaryCount > len(devices) {
+		canaryCount = len(devices)
+	}
+	allResults := make([]deviceRunResult, 0, len(devices))
+	lastStart := time.Time{}
+	totalFailures := 0
+
+	if canaryCount > 0 {
+		canaryCfg := cfg
+		canaryCfg.FailureThreshold = 0
+		results, failures, _ := runDeviceBatch(devices[:canaryCount], 0, canaryCfg, &lastStart, runner)
+		allResults = append(allResults, results...)
+		totalFailures += failures
+		if failures > 0 {
+			slog.Error("canary stage failed; remaining devices will not be started", "canary_failures", failures)
+			return allResults, true
+		}
+	}
+
+	remainingCfg := cfg
+	if cfg.FailureThreshold > 0 {
+		remainingCfg.FailureThreshold = cfg.FailureThreshold - totalFailures
+	}
+	results, _, stopped := runDeviceBatch(devices[canaryCount:], canaryCount, remainingCfg, &lastStart, runner)
+	allResults = append(allResults, results...)
+	if stopped {
+		slog.Error("failure threshold reached; remaining devices will not be started", "failure_threshold", cfg.FailureThreshold)
+	}
+	return allResults, stopped
+}
+
 func main() {
 	// CLI flags
 	var jsonOut bool
@@ -1340,113 +1573,47 @@ func main() {
 		parsers = parserConfig.Parsers
 	}
 
+	if err := validateExecutionConfig(config.Execution); err != nil {
+		slog.Error("invalid execution configuration", "error", err)
+		os.Exit(1)
+	}
+
+	variableStates := make(map[string]*deviceVariableState)
+	for index, device := range sshDevices {
+		key := variableScopeKey(device.Hostname, device.IP)
+		state, exists := variableStates[key]
+		if !exists {
+			state = &deviceVariableState{variables: map[string]string{}}
+			state.cond = sync.NewCond(&state.mu)
+			variableStates[key] = state
+		}
+		state.order = append(state.order, index)
+	}
+	runner := func(index int, device DeviceConfig) deviceRunResult {
+		state := variableStates[variableScopeKey(device.Hostname, device.IP)]
+		state.mu.Lock()
+		for state.next < len(state.order) && state.order[state.next] != index {
+			state.cond.Wait()
+		}
+		result := runSSHDevice(index, device, config, username, password, jsonOut, parsers, state.variables)
+		state.next++
+		state.cond.Broadcast()
+		state.mu.Unlock()
+		return result
+	}
+	deviceResults, schedulingStopped := runScheduledDevices(sshDevices, config.Execution, runner)
+	runFailed := schedulingStopped
+	resultsByIndex := make(map[int]deviceRunResult, len(deviceResults))
+	for _, result := range deviceResults {
+		resultsByIndex[result.index] = result
+		if result.failed {
+			runFailed = true
+		}
+	}
 	var aggregated []deviceValidation
-	runFailed := false
-	deviceVariables := map[string]map[string]string{}
-
-	for _, device := range sshDevices {
-		hostname := strings.TrimSpace(device.Hostname)
-		ip := strings.TrimSpace(device.IP)
-		deviceType := strings.TrimSpace(device.Type)
-
-		if hostname == "" || ip == "" || deviceType == "" {
-			runFailed = true
-			slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
-			if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping invalid SSH entry", nil); err != nil {
-				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
-			}
-			continue
-		}
-
-		steps := device.Steps
-		if len(steps) == 0 && strings.TrimSpace(device.Command) != "" {
-			steps = []StepConfig{{
-				Name:        "default",
-				Command:     strings.TrimSpace(device.Command),
-				Parser:      strings.TrimSpace(device.Parser),
-				Validation:  device.Validation,
-				Validations: device.Validations,
-			}}
-		}
-
-		if len(steps) == 0 {
-			runFailed = true
-			slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
-			if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping SSH device with no steps or command", nil); err != nil {
-				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
-			}
-			continue
-		}
-
-		started := time.Now()
-		sessionLog, sessionLogPath, err := openSessionLog(hostname, config.NamePlaybook, started)
-		if err != nil {
-			runFailed = true
-			slog.Error("error creating session log", "hostname", hostname, "ip", ip, "error", err)
-			continue
-		}
-		slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
-
-		opts := sshOptionsForDevice(device)
-		channelLog := io.Writer(sessionLog)
-		if !jsonOut {
-			channelLog = io.MultiWriter(os.Stdout, sessionLog)
-		}
-		opts = append(opts, ssh.WithChannelLog(channelLog))
-
-		client := ssh.NewClient(opts...)
-		if err := client.Connect(ip, username, password, deviceType); err != nil {
-			runFailed = true
-			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
-			writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
-			if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to connect to %s (%s): %v", hostname, ip, err), nil); ferr != nil {
-				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
-				writeSessionf(sessionLog, "ERROR: failed to write failure log: %v\n", ferr)
-			}
-			_ = sessionLog.Close()
-			continue
-		}
-
-		variableKey := variableScopeKey(hostname, ip)
-		variables := deviceVariables[variableKey]
-		if variables == nil {
-			variables = map[string]string{}
-			deviceVariables[variableKey] = variables
-		}
-
-		ctx := stepExecutionContext{
-			hostname:   hostname,
-			ip:         ip,
-			deviceType: deviceType,
-			username:   username,
-			password:   password,
-			opts:       opts,
-			jsonOut:    jsonOut,
-			sessionLog: sessionLog,
-			failureLog: failureLogPath(),
-			variables:  variables,
-			aggregated: &aggregated,
-			runFailed:  &runFailed,
-			parsers:    parsers,
-		}
-		stopDeviceSteps := executeSteps(&ctx, &client, steps)
-		if stopDeviceSteps {
-			slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
-		}
-
-		if err := closeSSHClient(client); err != nil {
-			runFailed = true
-			slog.Error("error closing SSH connection", "hostname", hostname, "ip", ip, "error", err)
-			writeSessionf(sessionLog, "ERROR: failed to close SSH connection: %v\n", err)
-			if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to close SSH connection: %v", err), nil); ferr != nil {
-				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
-				writeSessionf(sessionLog, "ERROR: failed to write failure log: %v\n", ferr)
-			}
-		}
-		writeSessionf(sessionLog, "\nSession complete: %s\n", time.Now().Format(time.RFC3339))
-		if err := sessionLog.Close(); err != nil {
-			runFailed = true
-			slog.Error("error closing session log", "hostname", hostname, "ip", ip, "path", sessionLogPath, "error", err)
+	for index := range sshDevices {
+		if result, ok := resultsByIndex[index]; ok {
+			aggregated = append(aggregated, result.aggregated...)
 		}
 	}
 

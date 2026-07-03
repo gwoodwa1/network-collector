@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1101,6 +1103,80 @@ func TestWaitForSSHPort(t *testing.T) {
 	case <-accepted:
 	case <-time.After(time.Second):
 		t.Fatal("expected probe connection to be accepted")
+	}
+}
+
+func TestRunScheduledDevicesHonorsMaxParallel(t *testing.T) {
+	devices := make([]DeviceConfig, 8)
+	var active int32
+	var peak int32
+	runner := func(index int, device DeviceConfig) deviceRunResult {
+		current := atomic.AddInt32(&active, 1)
+		for {
+			seen := atomic.LoadInt32(&peak)
+			if current <= seen || atomic.CompareAndSwapInt32(&peak, seen, current) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		return deviceRunResult{index: index}
+	}
+
+	results, stopped := runScheduledDevices(devices, ExecutionConfig{MaxParallel: 3}, runner)
+	if stopped {
+		t.Fatal("scheduler unexpectedly stopped")
+	}
+	if len(results) != len(devices) {
+		t.Fatalf("expected %d results, got %d", len(devices), len(results))
+	}
+	if got := atomic.LoadInt32(&peak); got != 3 {
+		t.Fatalf("expected peak concurrency 3, got %d", got)
+	}
+}
+
+func TestRunScheduledDevicesStopsAfterCanaryFailure(t *testing.T) {
+	devices := make([]DeviceConfig, 5)
+	var mu sync.Mutex
+	var started []int
+	runner := func(index int, device DeviceConfig) deviceRunResult {
+		mu.Lock()
+		started = append(started, index)
+		mu.Unlock()
+		return deviceRunResult{index: index, failed: index == 0}
+	}
+
+	results, stopped := runScheduledDevices(devices, ExecutionConfig{MaxParallel: 2, CanaryCount: 1}, runner)
+	if !stopped {
+		t.Fatal("expected failed canary to stop scheduling")
+	}
+	if len(results) != 1 || len(started) != 1 || started[0] != 0 {
+		t.Fatalf("expected only canary device to start, results=%d started=%v", len(results), started)
+	}
+}
+
+func TestRunScheduledDevicesStopsAtFailureThreshold(t *testing.T) {
+	devices := make([]DeviceConfig, 5)
+	runner := func(index int, device DeviceConfig) deviceRunResult {
+		return deviceRunResult{index: index, failed: true}
+	}
+
+	results, stopped := runScheduledDevices(devices, ExecutionConfig{MaxParallel: 1, FailureThreshold: 2}, runner)
+	if !stopped {
+		t.Fatal("expected failure threshold to stop scheduling")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected two failed devices to run, got %d", len(results))
+	}
+}
+
+func TestValidateExecutionConfig(t *testing.T) {
+	valid := ExecutionConfig{MaxParallel: 4, StartIntervalSeconds: 120, CanaryCount: 1, FailureThreshold: 2}
+	if err := validateExecutionConfig(valid); err != nil {
+		t.Fatalf("valid execution config rejected: %v", err)
+	}
+	if err := validateExecutionConfig(ExecutionConfig{StartIntervalSeconds: -1}); err == nil {
+		t.Fatal("expected negative start interval to be rejected")
 	}
 }
 

@@ -3,6 +3,14 @@ name_playbook: Software Upgrade on Cisco IOS
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 
+# Stage SSH device runs: one canary, then up to three concurrent devices,
+# with at least two minutes between starts.
+execution:
+  max_parallel: 3
+  start_interval_seconds: 120
+  canary_count: 1
+  failure_threshold: 2
+
 restconf:
   - hostname: device-eos-02
     ip: 192.168.15.7

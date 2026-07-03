@@ -244,6 +244,44 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### Staged and concurrent SSH execution
+
+Use the top-level `execution` settings to run inventory devices concurrently while staggering when each device starts. This is useful for long-running software upgrades where devices should overlap without all beginning at once.
+
+```yaml
+inventory_file: inventory.yaml
+
+execution:
+  max_parallel: 3
+  start_interval_seconds: 120
+  canary_count: 1
+  failure_threshold: 2
+
+ssh:
+  - group: ios_upgrade
+    steps:
+      - name: perform-upgrade
+        cmd: install replace harddisk:/8000-x64.iso
+        return_to_prompt: false
+      - name: wait-for-router
+        ssh_probe:
+          port: 22
+          interval_seconds: 30
+          max_attempts: 40
+          post_wait_seconds: 120
+```
+
+- `max_parallel` is the maximum number of active SSH device runs. `0` or an omitted value preserves the default of one device at a time.
+- `start_interval_seconds` is the minimum delay between device starts. The first device starts immediately, and a free concurrency slot does not bypass the delay.
+- `canary_count` runs that many devices from the resolved inventory order as a separate first stage. All canaries must succeed before remaining devices are started.
+- `failure_threshold` stops launching new devices after that many device runs have failed. Devices already running are allowed to finish. `0` disables the threshold.
+
+For the example above, the canary runs first. If it succeeds, another device may start immediately when the canary took longer than two minutes; subsequent starts remain two minutes apart, with no more than three active devices. A failed canary stops the main stage regardless of `failure_threshold`.
+
+Validation failures, connection errors, step errors, and session setup or shutdown errors count as device failures. Results are aggregated in inventory order even though devices may complete in a different order. Each device continues to write its own session log; live terminal output from simultaneously active devices may be interleaved.
+
+Separate SSH entries targeting the same hostname/IP remain serialized and share their registered variables. This preserves playbooks that capture a value in one entry and consume it in a later entry.
+
 ### Regex parser modules
 
 You can define reusable regex parser modules in `parsers.yaml`, reference them from a step with `parser`, and validate the generated JSON with the existing `gjson` extractor.

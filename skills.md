@@ -23,6 +23,11 @@ name_playbook: Human readable playbook title
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 fail_on_fail: false
+execution:
+  max_parallel: 3
+  start_interval_seconds: 120
+  canary_count: 1
+  failure_threshold: 2
 ssh: []
 ```
 
@@ -32,6 +37,11 @@ Rules:
 - `inventory_file` is optional; default behavior is to look for `inventory.yaml`.
 - `parsers_file` is optional; default behavior is to look for `parsers.yaml`.
 - `fail_on_fail` is optional. Use `true` when the process should exit non-zero if any validation fails or errors.
+- `execution` is optional. Without it, SSH devices run serially as before.
+- `execution.max_parallel` limits active device runs; `0` means the serial default of one.
+- `execution.start_interval_seconds` sets the minimum delay between device starts.
+- `execution.canary_count` requires the first resolved devices to succeed before remaining devices start.
+- `execution.failure_threshold` stops new starts after the configured number of observed device failures; `0` disables it.
 - For this CLI, generate SSH playbooks under `ssh`. Other protocols may appear in sample configs, but the step engine, parsers, variables, retries, and actions described here apply to SSH.
 
 ## SSH Device Entries
