@@ -7,6 +7,8 @@ SECURITY_AUDIT.md
 # Local build artifacts
 /network-collector
 /dist/
+/artifacts/
+/session_logs/
 
 # Repository-local Go caches
 /.gocache/

@@ -8,6 +8,7 @@ require (
 	github.com/openconfig/gnmic v0.46.0
 	github.com/openconfig/gnmic/pkg/api v0.1.11
 	github.com/scrapli/scrapligo v1.4.0
+	github.com/sirikothe/gotextfsm v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/tidwall/gjson v1.19.0
 	golang.org/x/term v0.44.0
@@ -48,7 +49,6 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
-	github.com/sirikothe/gotextfsm v1.1.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect

@@ -20,6 +20,7 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 	"github.com/mitchellh/mapstructure"
+	"github.com/sirikothe/gotextfsm"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -39,10 +40,11 @@ type SSHProbeConfig struct {
 }
 
 type ValidationActionConfig struct {
-	Action  string       `mapstructure:"action" yaml:"action"`
-	Command string       `mapstructure:"cmd" yaml:"cmd"`
-	Message string       `mapstructure:"message" yaml:"message"`
-	Steps   []StepConfig `mapstructure:"steps" yaml:"steps"`
+	Action  string            `mapstructure:"action" yaml:"action"`
+	Command string            `mapstructure:"cmd" yaml:"cmd"`
+	Message string            `mapstructure:"message" yaml:"message"`
+	Steps   []StepConfig      `mapstructure:"steps" yaml:"steps"`
+	Output  *StepOutputConfig `mapstructure:"output" yaml:"output"`
 }
 
 type StepConfig struct {
@@ -59,6 +61,7 @@ type StepConfig struct {
 	Register       string                  `mapstructure:"register" yaml:"register"`
 	OnPass         *ValidationActionConfig `mapstructure:"on_pass" yaml:"on_pass"`
 	OnFail         *ValidationActionConfig `mapstructure:"on_fail" yaml:"on_fail"`
+	Output         *StepOutputConfig       `mapstructure:"output" yaml:"output"`
 }
 
 type DeviceConfig struct {
@@ -92,7 +95,20 @@ type Config struct {
 	InventoryFile string          `mapstructure:"inventory_file" yaml:"inventory_file"`
 	ParsersFile   string          `mapstructure:"parsers_file" yaml:"parsers_file"`
 	Execution     ExecutionConfig `mapstructure:"execution" yaml:"execution"`
+	Output        OutputConfig    `mapstructure:"output" yaml:"output"`
 	SSH           []DeviceConfig  `mapstructure:"ssh" yaml:"ssh"`
+}
+
+type OutputConfig struct {
+	Directory   string `mapstructure:"directory" yaml:"directory"`
+	SaveRaw     bool   `mapstructure:"save_raw" yaml:"save_raw"`
+	SaveParsed  bool   `mapstructure:"save_parsed" yaml:"save_parsed"`
+	SummaryFile string `mapstructure:"summary_file" yaml:"summary_file"`
+}
+
+type StepOutputConfig struct {
+	SaveRaw    *bool `mapstructure:"save_raw" yaml:"save_raw"`
+	SaveParsed *bool `mapstructure:"save_parsed" yaml:"save_parsed"`
 }
 
 type ExecutionConfig struct {
@@ -129,8 +145,12 @@ type ParserFieldConfig struct {
 }
 
 type ParserModuleConfig struct {
-	Type   string                       `yaml:"type"`
-	Fields map[string]ParserFieldConfig `yaml:"fields"`
+	Type     string                       `yaml:"type"`
+	Pattern  string                       `yaml:"pattern"`
+	Template string                       `yaml:"template"`
+	Root     string                       `yaml:"root"`
+	Fields   map[string]ParserFieldConfig `yaml:"fields"`
+	baseDir  string
 }
 
 type ParsersConfig struct {
@@ -146,7 +166,27 @@ type deviceValidation struct {
 type deviceRunResult struct {
 	index      int
 	aggregated []deviceValidation
+	artifacts  []outputArtifact
 	failed     bool
+}
+
+type outputArtifact struct {
+	Hostname string `json:"hostname"`
+	IP       string `json:"ip"`
+	Step     string `json:"step"`
+	Attempt  int    `json:"attempt"`
+	Kind     string `json:"kind"`
+	Path     string `json:"path"`
+}
+
+type runSummary struct {
+	RunID       string             `json:"run_id"`
+	Playbook    string             `json:"playbook,omitempty"`
+	StartedAt   time.Time          `json:"started_at"`
+	CompletedAt time.Time          `json:"completed_at"`
+	Failed      bool               `json:"failed"`
+	Validations []deviceValidation `json:"validations"`
+	Artifacts   []outputArtifact   `json:"artifacts"`
 }
 
 type deviceVariableState struct {
@@ -163,19 +203,24 @@ var failureLogMu sync.Mutex
 var version = "dev"
 
 type stepExecutionContext struct {
-	hostname   string
-	ip         string
-	deviceType string
-	username   string
-	password   string
-	opts       []ssh.Option
-	jsonOut    bool
-	sessionLog io.Writer
-	failureLog string
-	variables  map[string]string
-	aggregated *[]deviceValidation
-	runFailed  *bool
-	parsers    map[string]ParserModuleConfig
+	hostname    string
+	ip          string
+	deviceType  string
+	username    string
+	password    string
+	opts        []ssh.Option
+	jsonOut     bool
+	sessionLog  io.Writer
+	failureLog  string
+	variables   map[string]string
+	aggregated  *[]deviceValidation
+	runFailed   *bool
+	parsers     map[string]ParserModuleConfig
+	output      OutputConfig
+	runDir      string
+	deviceIndex int
+	artifacts   *[]outputArtifact
+	artifactSeq int
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -324,6 +369,11 @@ func loadParsers(parsersFile, configFile string) (*ParsersConfig, error) {
 	if err := yaml.Unmarshal(b, &parsers); err != nil {
 		return nil, err
 	}
+	baseDir := filepath.Dir(path)
+	for name, parser := range parsers.Parsers {
+		parser.baseDir = baseDir
+		parsers.Parsers[name] = parser
+	}
 	return &parsers, nil
 }
 
@@ -418,6 +468,76 @@ func parseWithRegexModule(output string, parser ParserModuleConfig) (string, err
 	return string(b), nil
 }
 
+func parseWithRegexRecords(output string, parser ParserModuleConfig) (string, error) {
+	if strings.TrimSpace(parser.Pattern) == "" {
+		return "", fmt.Errorf("regex_records parser missing pattern")
+	}
+	re, err := regexp.Compile(parser.Pattern)
+	if err != nil {
+		return "", fmt.Errorf("regex_records parser has invalid regex: %w", err)
+	}
+
+	records := make([]map[string]interface{}, 0)
+	for _, match := range re.FindAllStringSubmatch(output, -1) {
+		record := make(map[string]interface{}, len(parser.Fields))
+		for fieldName, field := range parser.Fields {
+			group := parserGroupIndex(field, len(match))
+			if group >= len(match) {
+				return "", fmt.Errorf("parser field %q group %d not found", fieldName, group)
+			}
+			value, err := coerceParsedValue(match[group], field.Type)
+			if err != nil {
+				return "", fmt.Errorf("parser field %q failed to coerce value: %w", fieldName, err)
+			}
+			record[fieldName] = value
+		}
+		records = append(records, record)
+	}
+
+	root := strings.TrimSpace(parser.Root)
+	if root == "" {
+		root = "records"
+	}
+	encoded, err := json.Marshal(map[string]interface{}{root: records})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func parseWithTextFSM(output string, parser ParserModuleConfig) (string, error) {
+	templatePath := strings.TrimSpace(parser.Template)
+	if templatePath == "" {
+		return "", fmt.Errorf("textfsm parser missing template")
+	}
+	if !filepath.IsAbs(templatePath) {
+		templatePath = filepath.Join(parser.baseDir, templatePath)
+	}
+	templateBytes, err := os.ReadFile(templatePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read TextFSM template %q: %w", templatePath, err)
+	}
+
+	var fsm gotextfsm.TextFSM
+	if err := fsm.ParseString(string(templateBytes)); err != nil {
+		return "", fmt.Errorf("invalid TextFSM template %q: %w", templatePath, err)
+	}
+	var parsed gotextfsm.ParserOutput
+	if err := parsed.ParseTextString(output, fsm, true); err != nil {
+		return "", fmt.Errorf("TextFSM parse failed with template %q: %w", templatePath, err)
+	}
+
+	root := strings.TrimSpace(parser.Root)
+	if root == "" {
+		root = "records"
+	}
+	encoded, err := json.Marshal(map[string]interface{}{root: parsed.Dict})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func parseOutputWithModule(output, parserName string, parsers map[string]ParserModuleConfig) (string, error) {
 	parserName = strings.TrimSpace(parserName)
 	if parserName == "" {
@@ -431,6 +551,10 @@ func parseOutputWithModule(output, parserName string, parsers map[string]ParserM
 	switch strings.ToLower(strings.TrimSpace(parser.Type)) {
 	case "", "regex":
 		return parseWithRegexModule(output, parser)
+	case "regex_records":
+		return parseWithRegexRecords(output, parser)
+	case "textfsm":
+		return parseWithTextFSM(output, parser)
 	default:
 		return "", fmt.Errorf("unsupported parser type %q for parser %q", parser.Type, parserName)
 	}
@@ -826,6 +950,9 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 		if !ctx.jsonOut {
 			fmt.Printf("device=%s step=%s action_command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
 		}
+		if err := saveStepArtifact(ctx, StepConfig{Output: action.Output}, stepName+"-action", 1, "raw", output); err != nil {
+			return validationActionOutcome{}, err
+		}
 		if len(action.Steps) == 0 {
 			return validationActionOutcome{}, nil
 		}
@@ -972,6 +1099,11 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 			if !ctx.jsonOut {
 				fmt.Printf("device=%s step=%s command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
 			}
+			if err := saveStepArtifact(ctx, step, stepName, attempt, "raw", output); err != nil {
+				*ctx.runFailed = true
+				slog.Error("error saving raw command output", "hostname", ctx.hostname, "step", stepName, "error", err)
+				writeSessionf(ctx.sessionLog, "[step:%s] output error: %v\n", stepName, err)
+			}
 
 			validationOutput := output
 			if strings.TrimSpace(step.Parser) != "" {
@@ -985,6 +1117,11 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 				}
 				validationOutput = parsedOutput
 				writeSessionf(ctx.sessionLog, "[step:%s] parser %q output:\n%s\n", stepName, step.Parser, parsedOutput)
+				if err := saveStepArtifact(ctx, step, stepName, attempt, "parsed", parsedOutput); err != nil {
+					*ctx.runFailed = true
+					slog.Error("error saving parsed command output", "hostname", ctx.hostname, "step", stepName, "error", err)
+					writeSessionf(ctx.sessionLog, "[step:%s] output error: %v\n", stepName, err)
+				}
 				if !ctx.jsonOut {
 					fmt.Printf("parser output for %s step=%s parser=%s:\n%s\n", ctx.hostname, stepName, step.Parser, parsedOutput)
 				}
@@ -1101,6 +1238,115 @@ func sanitizeLogName(value string) string {
 		return "unknown"
 	}
 	return sanitized
+}
+
+func outputEnabled(config Config, devices []DeviceConfig) bool {
+	if config.Output.SaveRaw || config.Output.SaveParsed || strings.TrimSpace(config.Output.SummaryFile) != "" {
+		return true
+	}
+	for _, device := range devices {
+		for _, step := range device.Steps {
+			if step.Output != nil && (step.Output.SaveRaw != nil || step.Output.SaveParsed != nil) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func prepareRunOutput(config OutputConfig, runID string) (string, error) {
+	directory := strings.TrimSpace(config.Directory)
+	if directory == "" {
+		directory = "artifacts"
+	}
+	runDir := filepath.Join(directory, runID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+	return runDir, nil
+}
+
+func stepOutputEnabled(global bool, override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return global
+}
+
+func atomicWriteFile(path string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".network-collector-*")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if _, err := temp.Write(content); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempName, path)
+}
+
+func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName string, attempt int, kind, content string) error {
+	if ctx == nil || strings.TrimSpace(ctx.runDir) == "" {
+		return nil
+	}
+	enabled := ctx.output.SaveRaw
+	extension := "raw.txt"
+	var override *bool
+	if step.Output != nil {
+		override = step.Output.SaveRaw
+	}
+	if kind == "parsed" {
+		enabled = ctx.output.SaveParsed
+		extension = "parsed.json"
+		if step.Output != nil {
+			override = step.Output.SaveParsed
+		}
+	}
+	if !stepOutputEnabled(enabled, override) {
+		return nil
+	}
+
+	deviceDir := fmt.Sprintf("%03d-%s", ctx.deviceIndex+1, sanitizeLogName(ctx.hostname))
+	ctx.artifactSeq++
+	filename := fmt.Sprintf("%s.artifact-%03d.attempt-%03d.%s", sanitizeLogName(stepName), ctx.artifactSeq, attempt, extension)
+	path := filepath.Join(ctx.runDir, deviceDir, filename)
+	if err := atomicWriteFile(path, []byte(content)); err != nil {
+		return fmt.Errorf("failed to save %s output: %w", kind, err)
+	}
+	if ctx.artifacts != nil {
+		*ctx.artifacts = append(*ctx.artifacts, outputArtifact{
+			Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Attempt: attempt, Kind: kind, Path: path,
+		})
+	}
+	return nil
+}
+
+func writeRunSummary(config OutputConfig, runDir string, summary runSummary) (string, error) {
+	filename := strings.TrimSpace(config.SummaryFile)
+	if filename == "" {
+		return "", nil
+	}
+	path := filename
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(runDir, path)
+	}
+	encoded, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	encoded = append(encoded, '\n')
+	if err := atomicWriteFile(path, encoded); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func formatSessionBanner(playbookName, hostname string, started time.Time) string {
@@ -1317,7 +1563,7 @@ func validateExecutionConfig(cfg ExecutionConfig) error {
 	return nil
 }
 
-func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut bool, parsers map[string]ParserModuleConfig, variables map[string]string) deviceRunResult {
+func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut bool, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) deviceRunResult {
 	result := deviceRunResult{index: index}
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
@@ -1380,6 +1626,7 @@ func runSSHDevice(index int, device DeviceConfig, config Config, username, passw
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
+		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
 	}
 	if executeSteps(&ctx, &client, steps) {
 		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
@@ -1582,6 +1829,18 @@ func main() {
 		parsers = parserConfig.Parsers
 	}
 
+	runStarted := time.Now()
+	runID := "run-" + runStarted.Format("20060102T150405.000000000")
+	runDir := ""
+	if outputEnabled(config, sshDevices) {
+		runDir, err = prepareRunOutput(config.Output, runID)
+		if err != nil {
+			slog.Error("error preparing structured output", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("recording structured output", "run_id", runID, "directory", runDir)
+	}
+
 	if err := validateExecutionConfig(config.Execution); err != nil {
 		slog.Error("invalid execution configuration", "error", err)
 		os.Exit(1)
@@ -1604,7 +1863,7 @@ func main() {
 		for state.next < len(state.order) && state.order[state.next] != index {
 			state.cond.Wait()
 		}
-		result := runSSHDevice(index, device, config, username, password, jsonOut, parsers, state.variables)
+		result := runSSHDevice(index, device, config, username, password, jsonOut, parsers, state.variables, runDir)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()
@@ -1620,9 +1879,23 @@ func main() {
 		}
 	}
 	var aggregated []deviceValidation
+	var artifacts []outputArtifact
 	for index := range sshDevices {
 		if result, ok := resultsByIndex[index]; ok {
 			aggregated = append(aggregated, result.aggregated...)
+			artifacts = append(artifacts, result.artifacts...)
+		}
+	}
+	if runDir != "" {
+		summaryPath, err := writeRunSummary(config.Output, runDir, runSummary{
+			RunID: runID, Playbook: config.NamePlaybook, StartedAt: runStarted, CompletedAt: time.Now(),
+			Failed: runFailed, Validations: aggregated, Artifacts: artifacts,
+		})
+		if err != nil {
+			runFailed = true
+			slog.Error("error writing run summary", "error", err)
+		} else if summaryPath != "" {
+			slog.Info("wrote run summary", "path", summaryPath)
 		}
 	}
 

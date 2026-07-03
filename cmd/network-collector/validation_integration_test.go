@@ -1180,6 +1180,59 @@ func TestValidateExecutionConfig(t *testing.T) {
 	}
 }
 
+func TestStructuredOutputArtifactsAndSummary(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "run-test")
+	artifacts := []outputArtifact{}
+	ctx := &stepExecutionContext{
+		hostname: "router-01", ip: "192.0.2.10", deviceIndex: 0, runDir: runDir,
+		output: OutputConfig{SaveRaw: true, SaveParsed: true}, artifacts: &artifacts,
+	}
+	step := StepConfig{Name: "show-interfaces"}
+	if err := saveStepArtifact(ctx, step, step.Name, 1, "raw", "raw output\n"); err != nil {
+		t.Fatalf("failed to save raw artifact: %v", err)
+	}
+	if err := saveStepArtifact(ctx, step, step.Name, 1, "parsed", `{"records":[]}`); err != nil {
+		t.Fatalf("failed to save parsed artifact: %v", err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("expected two artifacts, got %d", len(artifacts))
+	}
+	for _, artifact := range artifacts {
+		if _, err := os.Stat(artifact.Path); err != nil {
+			t.Fatalf("artifact %q was not written: %v", artifact.Path, err)
+		}
+	}
+
+	summaryPath, err := writeRunSummary(OutputConfig{SummaryFile: "results.json"}, runDir, runSummary{
+		RunID: "run-test", StartedAt: time.Now(), CompletedAt: time.Now(), Artifacts: artifacts,
+	})
+	if err != nil {
+		t.Fatalf("failed to write summary: %v", err)
+	}
+	content, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("failed to read summary: %v", err)
+	}
+	if !strings.Contains(string(content), `"run_id": "run-test"`) {
+		t.Fatalf("unexpected summary: %s", content)
+	}
+}
+
+func TestStepOutputOverride(t *testing.T) {
+	disabled := false
+	artifacts := []outputArtifact{}
+	ctx := &stepExecutionContext{
+		hostname: "router-01", runDir: t.TempDir(), output: OutputConfig{SaveRaw: true}, artifacts: &artifacts,
+	}
+	step := StepConfig{Output: &StepOutputConfig{SaveRaw: &disabled}}
+	if err := saveStepArtifact(ctx, step, "secret", 1, "raw", "sensitive"); err != nil {
+		t.Fatalf("saveStepArtifact returned error: %v", err)
+	}
+	if len(artifacts) != 0 {
+		t.Fatalf("expected step override to suppress raw artifact, got %+v", artifacts)
+	}
+}
+
 func toString(v interface{}) string {
 	if v == nil {
 		return ""

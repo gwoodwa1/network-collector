@@ -40,6 +40,7 @@ archives:
       - config.yaml
       - inventory.yaml
       - parsers.yaml
+      - parser_templates/**/*
       - skills.md
 
 checksum:

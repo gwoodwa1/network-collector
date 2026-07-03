@@ -1,0 +1,4 @@
+Interface                  Status                 Protocol Description
+GigabitEthernet0/0/0/0     up                     up       Core uplink
+GigabitEthernet0/0/0/1     administratively down  down     Spare port
+Loopback0                  up                     up       Router ID

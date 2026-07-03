@@ -32,3 +32,20 @@ parsers:
         pattern: '(?m)^(\S+)\s+(Major|Minor|Critical)\s+(\S+)\s+(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+\S+)\s+(.+)$'
         group: 5
         repeated: true
+  xr_show_interfaces_brief_records:
+    type: regex_records
+    root: interfaces
+    pattern: '(?m)^(\S+)\s+(up|down|administratively down)\s+(up|down)\s+(.+)$'
+    fields:
+      interface:
+        group: 1
+      status:
+        group: 2
+      protocol:
+        group: 3
+      description:
+        group: 4
+  xr_show_interfaces_brief_textfsm:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_interfaces_brief.textfsm
+    root: interfaces

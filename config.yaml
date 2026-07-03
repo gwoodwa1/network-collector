@@ -11,6 +11,14 @@ execution:
   canary_count: 1
   failure_threshold: 2
 
+# Optional machine-readable artifacts. Each run gets its own timestamped
+# directory containing raw CLI text, parsed JSON, and a run summary.
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+
 restconf:
   - hostname: device-eos-02
     ip: 192.168.15.7

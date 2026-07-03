@@ -1,0 +1,7 @@
+Value Required INTERFACE (\S+)
+Value Required STATUS (up|down|administratively down)
+Value Required PROTOCOL (up|down)
+Value DESCRIPTION (.*)
+
+Start
+  ^${INTERFACE}\s+${STATUS}\s+${PROTOCOL}\s+${DESCRIPTION} -> Record

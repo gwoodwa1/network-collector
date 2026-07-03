@@ -54,3 +54,33 @@ ssh:
           condition: eq
           expected: '{{baseline_alarms}}'
           expected_type: string
+
+      - name: parse-interface-records
+        cmd: show interfaces brief
+        parser: xr_show_interfaces_brief_records
+        validations:
+          - extractor: gjson
+            json_path: interfaces.#
+            condition: eq
+            expected: 3
+            expected_type: int
+          - extractor: gjson
+            json_path: interfaces.1.status
+            condition: eq
+            expected: administratively down
+            expected_type: string
+
+      - name: parse-interfaces-textfsm
+        cmd: show interfaces brief
+        parser: xr_show_interfaces_brief_textfsm
+        validations:
+          - extractor: gjson
+            json_path: interfaces.#
+            condition: eq
+            expected: 3
+            expected_type: int
+          - extractor: gjson
+            json_path: interfaces.0.INTERFACE
+            condition: eq
+            expected: GigabitEthernet0/0/0/0
+            expected_type: string

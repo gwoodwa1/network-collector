@@ -28,6 +28,11 @@ execution:
   start_interval_seconds: 120
   canary_count: 1
   failure_threshold: 2
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
 ssh: []
 ```
 
@@ -42,6 +47,10 @@ Rules:
 - `execution.start_interval_seconds` sets the minimum delay between device starts.
 - `execution.canary_count` requires the first resolved devices to succeed before remaining devices start.
 - `execution.failure_threshold` stops new starts after the configured number of observed device failures; `0` disables it.
+- `output` is optional. It writes per-run raw, parsed JSON, and summary artifacts separately from session logs.
+- `output.directory` defaults to `artifacts` when structured output is enabled.
+- `output.save_raw` and `output.save_parsed` control per-step attempt artifacts.
+- `output.summary_file` writes a run summary relative to the timestamped run directory unless it is absolute.
 - For this CLI, generate SSH playbooks under `ssh`. Other protocols may appear in sample configs, but the step engine, parsers, variables, retries, and actions described here apply to SSH.
 
 ## SSH Device Entries
@@ -149,6 +158,7 @@ steps:
     validations: []
     register: variable_name
     retry: {}
+    output: {}
     on_pass: {}
     on_fail: {}
 ```
@@ -166,6 +176,7 @@ Supported step keys:
 - `wait_seconds`: wait before running the command, or wait-only if no `cmd`.
 - `ssh_probe`: close stale SSH, probe TCP, reconnect, then continue.
 - `return_to_prompt`: set `false` for commands expected to disconnect or reboot before returning a prompt.
+- `output`: optional per-step `save_raw` / `save_parsed` overrides for structured artifacts.
 - `on_pass`: conditional action after validation passes.
 - `on_fail`: conditional action after validation fails or errors.
 
@@ -363,7 +374,7 @@ Rules for full-document comparison:
 - Use `expected_type: string`.
 - This compares serialized JSON. It is strict: array order and field values must match.
 
-## Regex Parser Modules
+## Parser Modules
 
 `parsers.yaml` format:
 
@@ -379,10 +390,19 @@ parsers:
         type: string
 ```
 
+Supported parser types:
+
+- `regex`: independent scalar fields and arrays; backward compatible with existing parsers.
+- `regex_records`: one regex match becomes one object in an array.
+- `textfsm`: records produced by a user-supplied TextFSM template.
+
 Supported parser module keys:
 
-- `type`: only `regex` is supported. Omit or set to `regex`.
+- `type`: `regex`, `regex_records`, or `textfsm`. Omitted means `regex`.
 - `fields`: map of output JSON field names.
+- `pattern`: required at module level for `regex_records`.
+- `template`: required for `textfsm`; relative paths resolve from `parsers.yaml`.
+- `root`: JSON array key for `regex_records` and `textfsm`; defaults to `records`.
 
 Supported parser field keys:
 
@@ -398,6 +418,8 @@ Parser behavior:
 - If no non-repeated match is found, the field value is an empty string.
 - If no repeated matches are found, the field value is an empty array.
 - Parser output is JSON and can be validated with `gjson`.
+- `regex_records` applies its module pattern once and maps each match's capture groups into a record object.
+- `textfsm` preserves template value names as JSON keys and supports normal TextFSM state and value options.
 
 Rules:
 

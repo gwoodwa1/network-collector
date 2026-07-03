@@ -34,3 +34,15 @@ cases:
       ssh_index: 0
       step: compare-final-alarms
     expect_pass: false
+
+  - name: xr-interface-regex-records
+    input: cli/xr_show_interfaces_brief.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-interface-records
+
+  - name: xr-interfaces-custom-textfsm
+    input: cli/xr_show_interfaces_brief.txt
+    config_ref:
+      ssh_index: 0
+      step: parse-interfaces-textfsm

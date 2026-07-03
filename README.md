@@ -290,9 +290,9 @@ Validation failures, connection errors, step errors, and session setup or shutdo
 
 Separate SSH entries targeting the same hostname/IP remain serialized and share their registered variables. This preserves playbooks that capture a value in one entry and consume it in a later entry.
 
-### Regex parser modules
+### Pluggable parser modules
 
-You can define reusable regex parser modules in `parsers.yaml`, reference them from a step with `parser`, and validate the generated JSON with the existing `gjson` extractor.
+You can define reusable parser modules in `parsers.yaml`, reference them from a step with `parser`, and validate the generated JSON with the existing `gjson` extractor. Parser definitions are data files: adding a regex parser or custom TextFSM template does not require recompiling Network Collector.
 
 Example `parsers.yaml`:
 
@@ -336,6 +336,39 @@ ssh:
 
 Parser fields support `pattern`, optional capture `group` (defaults to the first capture group when present), `repeated: true` for arrays, and `type: int` for numeric coercion. Parsed JSON is written to the session log before validation.
 
+The original `regex` parser is best for independent scalar values and simple arrays. Use `regex_records` when each CLI row should become one JSON object, which preserves the relationship between columns:
+
+```yaml
+parsers:
+  xr_show_interfaces_brief_records:
+    type: regex_records
+    root: interfaces
+    pattern: '(?m)^(\S+)\s+(up|down|administratively down)\s+(up|down)\s+(.+)$'
+    fields:
+      interface: {group: 1}
+      status: {group: 2}
+      protocol: {group: 3}
+      description: {group: 4}
+```
+
+This produces:
+
+```json
+{"interfaces":[{"interface":"GigabitEthernet0/0/0/0","status":"up","protocol":"up","description":"Core uplink"}]}
+```
+
+Use `textfsm` for stateful, multi-line, or multi-section CLI output. Templates are completely user supplied and their paths are resolved relative to `parsers.yaml`:
+
+```yaml
+parsers:
+  xr_show_interfaces_brief_textfsm:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_interfaces_brief.textfsm
+    root: interfaces
+```
+
+TextFSM value names are preserved as JSON keys. For example, `Value INTERFACE ...` produces an `INTERFACE` key. The `root` setting defaults to `records` for both record-oriented parser types.
+
 ### Offline parser fixture tests
 
 Parser and validation changes can be tested without logging into a network device. Add captured command output as plain text under `cmd/network-collector/testdata/cli/`, then add a case to `cmd/network-collector/testdata/parser-fixtures.yaml`.
@@ -358,6 +391,8 @@ go test ./cmd/network-collector -run TestParserFixtures
 ```
 
 The fixture runner loads `parsers.yaml`, parses the CLI text file, applies the referenced config step's `validation` or `validations`, and fails the test if parsing or validation does not pass.
+
+Fixtures support `regex`, `regex_records`, and `textfsm`, so custom templates can be tested against captured CLI text without connecting to a router.
 
 For baseline/final comparisons, provide both `baseline_input` and `input`. The baseline output is parsed, registered into the variable named by the baseline config step's `register`, and then the final output is parsed and validated.
 
@@ -483,6 +518,32 @@ Validation steps can also run conditional actions after the final validation res
 Use `on_pass` or `on_fail` on a step with `validation`. Supported actions are `exit`/`stop` to stop the remaining steps for the current device without failing, `fail` to stop and mark the run failed, `cmd` to run another SSH command, `steps` to run a nested list of normal SSH steps, and `none`/`noop` to take no control-flow action. If an action block contains only `message`, the collector logs the message and continues. If it contains only `cmd`, `action: cmd` is implied. If it contains only `steps`, `action: steps` is implied. Nested steps support the same fields as top-level steps, including `validation`, `retry`, `register`, `ssh_probe`, `return_to_prompt`, and their own `on_pass` / `on_fail` actions. Action `message` and `cmd` values support registered variables such as `{{install_id}}`.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
+
+### Structured output files
+
+Session logs remain the human-readable transcript. To additionally save command output and JSON as machine-readable artifacts, configure:
+
+```yaml
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+```
+
+Each invocation creates a timestamped run directory. Raw and parsed output is stored per inventory entry, step, and attempt, so concurrent devices and retries never overwrite one another. `results.json` contains run timestamps, overall failure state, validations, and the paths of all saved artifacts. Files are written atomically.
+
+Sensitive steps can override the global raw or parsed setting:
+
+```yaml
+- name: sensitive-command
+  cmd: show sensitive-data
+  output:
+    save_raw: false
+    save_parsed: true
+```
+
+Omit `output`, or leave all its settings disabled, to retain the previous session-log-only behaviour. `--json` continues to emit validation results to stdout and can be used independently of artifact output.
 
 Use `operation_timeout` on an SSH device to increase the scrapligo operation timeout for long-running commands. The value is seconds; for example, `operation_timeout: 120` gives commands up to two minutes to return to the prompt.
 
