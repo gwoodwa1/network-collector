@@ -1,0 +1,17 @@
+imports:
+  - roles/*.yaml
+
+name_playbook: Modular IOS-XR health collection
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+execution:
+  max_parallel: 2
+  start_interval_seconds: 30
+
+output:
+  directory: artifacts
+  save_raw: false
+  save_parsed: true
+  summary_file: results.json

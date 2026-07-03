@@ -252,6 +252,40 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### Modular playbook imports
+
+A master config can compose reusable partial YAML files with `imports`:
+
+```yaml
+imports:
+  - roles/10-platform-health.yaml
+  - roles/20-ntp-monitor.yaml
+  # Globs are supported and expanded in lexical order:
+  # - roles/*.yaml
+
+name_playbook: Modular IOS-XR collection
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+
+execution:
+  max_parallel: 2
+```
+
+Each imported file is an ordinary partial config. A reusable role commonly contains only SSH workflows:
+
+```yaml
+ssh:
+  - group: xr
+    steps:
+      - name: ntp-status
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+```
+
+Imports are recursive and paths are relative to the file containing the import. Imported files are merged in declared order, then the importing file is applied. Maps merge recursively, lists such as `ssh` append, and later scalar values override earlier ones. Keep shared settings such as `inventory_file`, `parsers_file`, credentials policy, execution, and output in the master config; put reusable workflows in role files.
+
+The loader rejects import cycles, duplicate inclusion, unmatched glob patterns, invalid entries, and nesting deeper than 20 files. This prevents the same upgrade role from silently running twice. See [`examples/modular`](examples/modular) for a complete master, inventory, and role layout.
+
 ### Staged and concurrent SSH execution
 
 Use the top-level `execution` settings to run inventory devices concurrently while staggering when each device starts. This is useful for long-running software upgrades where devices should overlap without all beginning at once.

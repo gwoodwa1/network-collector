@@ -1,0 +1,8 @@
+ssh:
+  - group: xr
+    steps:
+      - name: show-version
+        cmd: show version
+
+      - name: show-platform
+        cmd: show platform

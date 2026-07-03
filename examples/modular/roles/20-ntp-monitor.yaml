@@ -1,0 +1,16 @@
+ssh:
+  - group: xr
+    steps:
+      - name: monitor-ntp
+        repeat:
+          count: 3
+          interval_seconds: 120
+          stop_on_failure: true
+          steps:
+            - name: ntp-associations
+              cmd: show ntp associations
+              parser: xr_show_ntp_associations
+
+            - name: ntp-status
+              cmd: show ntp status
+              parser: xr_show_ntp_status

@@ -41,6 +41,8 @@ archives:
       - inventory.yaml
       - parsers.yaml
       - parser_templates/**/*
+      - examples/modular/*
+      - examples/modular/**/*
       - skills.md
 
 checksum:
@@ -52,6 +54,6 @@ changelog:
 release:
   prerelease: auto
   header: |
-    Network Collector v{{ .Version }} is the first stable release.
+    Network Collector v{{ .Version }}
 
     See `CHANGELOG.md` for highlights and the included example configuration files for a complete starting point.

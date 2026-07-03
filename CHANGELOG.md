@@ -2,12 +2,13 @@
 
 All notable changes to Network Collector are documented here.
 
-## Unreleased
+## [1.0.1] - 2026-07-03
 
 - Added custom TextFSM parser templates and row-oriented regex record parsers.
 - Added IOS-XR NTP association, status, and running-configuration parser templates.
 - Added safe bounded repeat blocks for running step groups a finite number of times at a configured interval.
 - Added atomic raw, parsed JSON, and run-summary output artifacts with per-step overrides.
+- Added recursive modular YAML imports with deterministic merging, glob support, and cycle and duplicate protection.
 
 ## [1.0.0] - 2026-07-03
 
@@ -23,3 +24,4 @@ First stable release.
 - Environment-based or interactive credential input.
 
 [1.0.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.0
+[1.0.1]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.1

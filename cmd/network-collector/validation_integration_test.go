@@ -1307,6 +1307,108 @@ func TestValidateRepeatConfigSafetyLimits(t *testing.T) {
 	}
 }
 
+func TestLoadConfigComposesImports(t *testing.T) {
+	dir := t.TempDir()
+	rolesDir := filepath.Join(dir, "roles")
+	if err := os.MkdirAll(rolesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(rolesDir, "10-ntp.yaml"): `
+execution:
+  max_parallel: 2
+  start_interval_seconds: 30
+ssh:
+  - host: router-01
+    cmd: show ntp status
+`,
+		filepath.Join(rolesDir, "20-platform.yaml"): `
+ssh:
+  - host: router-02
+    cmd: show platform
+`,
+		filepath.Join(dir, "config.yaml"): `
+imports:
+  - roles/*.yaml
+name_playbook: composed playbook
+inventory_file: inventory.yaml
+execution:
+  max_parallel: 4
+ssh:
+  - host: router-03
+    cmd: show version
+`,
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	config, failOnFail, err := loadConfig(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if failOnFail {
+		t.Fatal("fail_on_fail unexpectedly enabled")
+	}
+	if config.NamePlaybook != "composed playbook" || config.Execution.MaxParallel != 4 || config.Execution.StartIntervalSeconds != 30 {
+		t.Fatalf("unexpected merged config: %+v", config)
+	}
+	if len(config.SSH) != 3 || config.SSH[0].Host != "router-01" || config.SSH[1].Host != "router-02" || config.SSH[2].Host != "router-03" {
+		t.Fatalf("unexpected imported SSH order: %+v", config.SSH)
+	}
+}
+
+func TestLoadConfigRejectsImportCycle(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.yaml")
+	b := filepath.Join(dir, "b.yaml")
+	if err := os.WriteFile(a, []byte("imports: [b.yaml]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("imports: [a.yaml]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig(a); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("expected import cycle error, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsDuplicateImport(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared.yaml")
+	root := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(shared, []byte("ssh: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("imports: [shared.yaml, shared.yaml]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("expected duplicate import error, got %v", err)
+	}
+}
+
+func TestModularExampleLoads(t *testing.T) {
+	configPath := filepath.Join("..", "..", "examples", "modular", "config.yaml")
+	config, _, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatalf("failed to load modular example: %v", err)
+	}
+	if len(config.SSH) != 2 || config.SSH[0].Group != "xr" || config.SSH[1].Group != "xr" {
+		t.Fatalf("unexpected modular example workflows: %+v", config.SSH)
+	}
+	inventory, err := loadOptionalInventory(config.InventoryFile, configPath)
+	if err != nil || inventory == nil || len(inventory.Hosts) != 1 {
+		t.Fatalf("failed to load modular example inventory: inventory=%+v error=%v", inventory, err)
+	}
+	parsers, err := loadOptionalParsers(config.ParsersFile, configPath)
+	if err != nil || parsers == nil || parsers.Parsers["xr_show_ntp_status"].Template == "" {
+		t.Fatalf("failed to load modular example parsers: parsers=%+v error=%v", parsers, err)
+	}
+}
+
 func toString(v interface{}) string {
 	if v == nil {
 		return ""

@@ -19,6 +19,8 @@ Prefer generating concise, explicit YAML. Do not invent unsupported keys.
 Supported top-level keys for `network-collector`:
 
 ```yaml
+imports:
+  - roles/*.yaml
 name_playbook: Human readable playbook title
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
@@ -38,6 +40,10 @@ ssh: []
 
 Rules:
 
+- `imports` is optional and accepts one path or a list of paths relative to the importing file. Globs are expanded lexically.
+- Imports are recursive. Maps merge, lists append, and later/importing scalar values override earlier values.
+- Cycles, duplicate files, unmatched globs, and import depth over 20 are errors.
+- Keep shared inventory, parser, execution, and output settings in the master; imported role files should normally contain reusable `ssh` workflows.
 - `name_playbook` is optional and appears in session logs.
 - `inventory_file` is optional; default behavior is to look for `inventory.yaml`.
 - `parsers_file` is optional; default behavior is to look for `parsers.yaml`.

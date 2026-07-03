@@ -99,6 +99,7 @@ type ValidationConfig struct {
 }
 
 type Config struct {
+	Imports       []string        `mapstructure:"imports" yaml:"imports"`
 	NamePlaybook  string          `mapstructure:"name_playbook" yaml:"name_playbook"`
 	InventoryFile string          `mapstructure:"inventory_file" yaml:"inventory_file"`
 	ParsersFile   string          `mapstructure:"parsers_file" yaml:"parsers_file"`
@@ -1651,11 +1652,153 @@ func init() {
 	}
 }
 
-func loadConfig(configFile string) {
-	viper.SetConfigFile(configFile)
-	if err := viper.ReadInConfig(); err != nil {
-		slog.Warn("unable to read config file", "config_file", configFile, "error", err)
+const maxConfigImportDepth = 20
+
+func mergeConfigMaps(destination, source map[string]interface{}) map[string]interface{} {
+	if destination == nil {
+		destination = map[string]interface{}{}
 	}
+	for key, sourceValue := range source {
+		if key == "imports" {
+			continue
+		}
+		destinationValue, exists := destination[key]
+		if !exists {
+			destination[key] = sourceValue
+			continue
+		}
+
+		sourceMap, sourceIsMap := sourceValue.(map[string]interface{})
+		destinationMap, destinationIsMap := destinationValue.(map[string]interface{})
+		if sourceIsMap && destinationIsMap {
+			destination[key] = mergeConfigMaps(destinationMap, sourceMap)
+			continue
+		}
+		sourceSlice, sourceIsSlice := sourceValue.([]interface{})
+		destinationSlice, destinationIsSlice := destinationValue.([]interface{})
+		if sourceIsSlice && destinationIsSlice {
+			destination[key] = append(destinationSlice, sourceSlice...)
+			continue
+		}
+		destination[key] = sourceValue
+	}
+	return destination
+}
+
+func configImports(value interface{}) ([]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch imports := value.(type) {
+	case string:
+		return []string{imports}, nil
+	case []interface{}:
+		result := make([]string, 0, len(imports))
+		for _, item := range imports {
+			path, ok := item.(string)
+			if !ok || strings.TrimSpace(path) == "" {
+				return nil, fmt.Errorf("imports entries must be non-empty file paths")
+			}
+			result = append(result, path)
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("imports must be a file path or list of file paths")
+	}
+}
+
+func expandConfigImport(importingFile, configuredPath string) ([]string, error) {
+	path := strings.TrimSpace(configuredPath)
+	if path == "" {
+		return nil, fmt.Errorf("import path cannot be empty")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(importingFile), path)
+	}
+	if strings.ContainsAny(path, "*?[") {
+		matches, err := filepath.Glob(path)
+		if err != nil {
+			return nil, fmt.Errorf("invalid import pattern %q: %w", configuredPath, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("import pattern %q matched no files", configuredPath)
+		}
+		return matches, nil
+	}
+	return []string{path}, nil
+}
+
+func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[string]interface{}, error) {
+	if depth > maxConfigImportDepth {
+		return nil, fmt.Errorf("config imports exceed maximum depth of %d", maxConfigImportDepth)
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	absolutePath = filepath.Clean(absolutePath)
+	if active[absolutePath] {
+		return nil, fmt.Errorf("config import cycle detected at %q", absolutePath)
+	}
+	if loaded[absolutePath] {
+		return nil, fmt.Errorf("config file imported more than once: %q", absolutePath)
+	}
+
+	content, err := os.ReadFile(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config %q: %w", absolutePath, err)
+	}
+	current := map[string]interface{}{}
+	if err := yaml.Unmarshal(content, &current); err != nil {
+		return nil, fmt.Errorf("failed to parse config %q: %w", absolutePath, err)
+	}
+	imports, err := configImports(current["imports"])
+	if err != nil {
+		return nil, fmt.Errorf("config %q: %w", absolutePath, err)
+	}
+
+	active[absolutePath] = true
+	defer delete(active, absolutePath)
+	merged := map[string]interface{}{}
+	for _, configuredImport := range imports {
+		paths, err := expandConfigImport(absolutePath, configuredImport)
+		if err != nil {
+			return nil, fmt.Errorf("config %q: %w", absolutePath, err)
+		}
+		for _, importPath := range paths {
+			imported, err := loadConfigMap(importPath, depth+1, loaded, active)
+			if err != nil {
+				return nil, err
+			}
+			merged = mergeConfigMaps(merged, imported)
+		}
+	}
+	delete(current, "imports")
+	merged = mergeConfigMaps(merged, current)
+	loaded[absolutePath] = true
+	return merged, nil
+}
+
+func loadConfig(configFile string) (Config, bool, error) {
+	configMap, err := loadConfigMap(configFile, 0, map[string]bool{}, map[string]bool{})
+	if err != nil {
+		return Config{}, false, err
+	}
+	settings := viper.New()
+	settings.AutomaticEnv()
+	if err := settings.BindEnv("fail_on_fail", "FAIL_ON_FAIL"); err != nil {
+		return Config{}, false, err
+	}
+	if err := settings.MergeConfigMap(configMap); err != nil {
+		return Config{}, false, err
+	}
+	var config Config
+	if err := settings.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		stringToBoolDecodeHook,
+	))); err != nil {
+		return Config{}, false, err
+	}
+	return config, settings.GetBool("fail_on_fail"), nil
 }
 
 func validateExecutionConfig(cfg ExecutionConfig) error {
@@ -1886,8 +2029,11 @@ func main() {
 		return
 	}
 
-	loadConfig(configFile)
-	failOnFail := viper.GetBool("fail_on_fail")
+	config, failOnFail, err := loadConfig(configFile)
+	if err != nil {
+		slog.Error("error reading config", "config_file", configFile, "error", err)
+		os.Exit(1)
+	}
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "fail-on-fail" {
 			failOnFail = cliFailOnFail
@@ -1904,13 +2050,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	var config Config
-	if err := viper.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
-		stringToBoolDecodeHook,
-	))); err != nil {
-		slog.Error("error reading config", "error", err)
-		os.Exit(1)
-	}
 	if strings.TrimSpace(cliInventoryFile) != "" {
 		config.InventoryFile = cliInventoryFile
 	}
