@@ -1,0 +1,38 @@
+name_playbook: Approved parallel collection
+inventory_file: inventory.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: operator-approval
+        approval:
+          message: Start the high-volume diagnostic collection?
+          timeout_seconds: 300
+
+      # Every branch opens its own SSH session. Branches must not depend on
+      # shared CLI mode or on values registered by another branch.
+      - name: parallel-diagnostics
+        parallel:
+          max_parallel: 3
+          steps:
+            - name: collect-routes
+              cmd: show route summary
+              register: route_summary
+
+            - name: collect-interfaces
+              cmd: show interfaces summary
+              register: interface_summary
+
+            - name: collect-alarms
+              cmd: show alarms brief system active
+              register: alarm_summary
+
+      - name: collection-summary
+        message: parallel route, interface, and alarm collections completed
+

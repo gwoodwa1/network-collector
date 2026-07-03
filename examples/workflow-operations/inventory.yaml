@@ -1,0 +1,12 @@
+hosts:
+  - name: xr-lab-01
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    timeout: 30
+    operation_timeout: 120
+
+groups:
+  xr-lab:
+    hosts:
+      - xr-lab-01
+

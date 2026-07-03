@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -25,6 +27,7 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 	"github.com/sirikothe/gotextfsm"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,6 +77,51 @@ type StepConfig struct {
 	OnFail         *ValidationActionConfig `mapstructure:"on_fail" yaml:"on_fail"`
 	Output         *StepOutputConfig       `mapstructure:"output" yaml:"output"`
 	Repeat         *RepeatConfig           `mapstructure:"repeat" yaml:"repeat"`
+	When           *WhenConfig             `mapstructure:"when" yaml:"when"`
+	Foreach        *ForeachConfig          `mapstructure:"foreach" yaml:"foreach"`
+	Use            string                  `mapstructure:"use" yaml:"use"`
+	With           map[string]interface{}  `mapstructure:"with" yaml:"with"`
+	Block          *BlockConfig            `mapstructure:"block" yaml:"block"`
+	Approval       *ApprovalConfig         `mapstructure:"approval" yaml:"approval"`
+	Parallel       *ParallelConfig         `mapstructure:"parallel" yaml:"parallel"`
+}
+
+type ApprovalConfig struct {
+	Message        string `mapstructure:"message" yaml:"message"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+}
+
+type ParallelConfig struct {
+	MaxParallel int          `mapstructure:"max_parallel" yaml:"max_parallel"`
+	Steps       []StepConfig `mapstructure:"steps" yaml:"steps"`
+}
+
+type WhenConfig struct {
+	Variable     string      `mapstructure:"variable" yaml:"variable"`
+	Condition    string      `mapstructure:"condition" yaml:"condition"`
+	Expected     interface{} `mapstructure:"expected" yaml:"expected"`
+	ExpectedType string      `mapstructure:"expected_type" yaml:"expected_type"`
+}
+
+type ForeachConfig struct {
+	Items         []interface{} `mapstructure:"items" yaml:"items"`
+	From          string        `mapstructure:"from" yaml:"from"`
+	Item          string        `mapstructure:"item" yaml:"item"`
+	Index         string        `mapstructure:"index" yaml:"index"`
+	StopOnFailure *bool         `mapstructure:"stop_on_failure" yaml:"stop_on_failure"`
+	Steps         []StepConfig  `mapstructure:"steps" yaml:"steps"`
+}
+
+type BlockConfig struct {
+	Steps    []StepConfig `mapstructure:"steps" yaml:"steps"`
+	Rescue   []StepConfig `mapstructure:"rescue" yaml:"rescue"`
+	Rollback []StepConfig `mapstructure:"rollback" yaml:"rollback"`
+	Always   []StepConfig `mapstructure:"always" yaml:"always"`
+}
+
+type WorkflowConfig struct {
+	Parameters []string     `mapstructure:"parameters" yaml:"parameters"`
+	Steps      []StepConfig `mapstructure:"steps" yaml:"steps"`
 }
 
 type RepeatConfig struct {
@@ -110,14 +158,21 @@ type ValidationConfig struct {
 }
 
 type Config struct {
-	Imports       []string        `mapstructure:"imports" yaml:"imports"`
-	NamePlaybook  string          `mapstructure:"name_playbook" yaml:"name_playbook"`
-	InventoryFile string          `mapstructure:"inventory_file" yaml:"inventory_file"`
-	ParsersFile   string          `mapstructure:"parsers_file" yaml:"parsers_file"`
-	Execution     ExecutionConfig `mapstructure:"execution" yaml:"execution"`
-	Output        OutputConfig    `mapstructure:"output" yaml:"output"`
-	SSH           []DeviceConfig  `mapstructure:"ssh" yaml:"ssh"`
-	LocalSteps    []StepConfig    `mapstructure:"local_steps" yaml:"local_steps"`
+	Imports       []string                  `mapstructure:"imports" yaml:"imports"`
+	NamePlaybook  string                    `mapstructure:"name_playbook" yaml:"name_playbook"`
+	InventoryFile string                    `mapstructure:"inventory_file" yaml:"inventory_file"`
+	ParsersFile   string                    `mapstructure:"parsers_file" yaml:"parsers_file"`
+	Execution     ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
+	Output        OutputConfig              `mapstructure:"output" yaml:"output"`
+	SSH           []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
+	LocalSteps    []StepConfig              `mapstructure:"local_steps" yaml:"local_steps"`
+	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
+	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
+}
+
+type ScheduleConfig struct {
+	Count           int `mapstructure:"count" yaml:"count"`
+	IntervalSeconds int `mapstructure:"interval_seconds" yaml:"interval_seconds"`
 }
 
 type OutputConfig struct {
@@ -179,9 +234,10 @@ type ParsersConfig struct {
 }
 
 type deviceValidation struct {
-	Hostname string                      `json:"hostname"`
-	IP       string                      `json:"ip"`
-	Result   validation.ValidationResult `json:"result"`
+	Hostname  string                      `json:"hostname"`
+	IP        string                      `json:"ip"`
+	Result    validation.ValidationResult `json:"result"`
+	Recovered bool                        `json:"recovered,omitempty"`
 }
 
 type deviceRunResult struct {
@@ -227,24 +283,55 @@ var failureLogMu sync.Mutex
 var version = "dev"
 
 type stepExecutionContext struct {
-	hostname    string
-	ip          string
-	deviceType  string
-	username    string
-	password    string
-	opts        []ssh.Option
-	jsonOut     bool
-	sessionLog  io.Writer
-	failureLog  string
-	variables   map[string]string
-	aggregated  *[]deviceValidation
-	runFailed   *bool
-	parsers     map[string]ParserModuleConfig
-	output      OutputConfig
-	runDir      string
-	deviceIndex int
-	artifacts   *[]outputArtifact
-	artifactSeq int
+	hostname       string
+	ip             string
+	deviceType     string
+	username       string
+	password       string
+	opts           []ssh.Option
+	jsonOut        bool
+	sessionLog     io.Writer
+	failureLog     string
+	variables      map[string]string
+	aggregated     *[]deviceValidation
+	runFailed      *bool
+	parsers        map[string]ParserModuleConfig
+	output         OutputConfig
+	runDir         string
+	deviceIndex    int
+	artifacts      *[]outputArtifact
+	artifactSeq    int
+	workflows      map[string]WorkflowConfig
+	approveAll     bool
+	approvalInput  *approvalInput
+	approvalWriter io.Writer
+	artifactPrefix string
+}
+
+type approvalAnswer struct {
+	text string
+	err  error
+}
+type approvalInput struct {
+	mu      sync.Mutex
+	answers chan approvalAnswer
+	expired bool
+}
+
+func newApprovalInput(reader io.Reader) *approvalInput {
+	input := &approvalInput{answers: make(chan approvalAnswer, 1)}
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			input.answers <- approvalAnswer{text: scanner.Text()}
+		}
+		err := scanner.Err()
+		if err == nil {
+			err = io.EOF
+		}
+		input.answers <- approvalAnswer{err: err}
+	}()
+	return input
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -285,6 +372,138 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 		return rendered, nil
 	}
 	return expected, nil
+}
+
+func evaluateWhen(config *WhenConfig, vars map[string]string) (bool, error) {
+	if config == nil {
+		return true, nil
+	}
+	name := strings.TrimSpace(config.Variable)
+	if name == "" {
+		return false, fmt.Errorf("when.variable cannot be empty")
+	}
+	actual, ok := vars[name]
+	if !ok {
+		return false, fmt.Errorf("when references undefined variable %q", name)
+	}
+	expected, err := renderExpectedValue(config.Expected, vars)
+	if err != nil {
+		return false, fmt.Errorf("render when.expected: %w", err)
+	}
+	condition := strings.TrimSpace(config.Condition)
+	if condition == "" {
+		condition = "eq"
+	}
+	result, err := validation.ValidateOutput(actual, validation.ValidationRule{
+		Extractor: "regex", Pattern: `(?s)^(.*)$`, Condition: condition,
+		Expected: expected, ExpectedType: config.ExpectedType,
+	})
+	if err != nil {
+		return false, err
+	}
+	if result.Status == "error" {
+		return false, fmt.Errorf("invalid when condition: %s", result.Message)
+	}
+	return result.Pass, nil
+}
+
+func variableString(value interface{}) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	if text, ok := value.(string); ok {
+		return text, nil
+	}
+	switch value.(type) {
+	case map[string]interface{}, []interface{}, map[interface{}]interface{}:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	default:
+		return fmt.Sprintf("%v", value), nil
+	}
+}
+
+func scopedVariables(vars map[string]string, values map[string]string, run func() bool) bool {
+	type previous struct {
+		value  string
+		exists bool
+	}
+	saved := make(map[string]previous, len(values))
+	for name, value := range values {
+		old, ok := vars[name]
+		saved[name] = previous{old, ok}
+		vars[name] = value
+	}
+	stopped := run()
+	for name, old := range saved {
+		if old.exists {
+			vars[name] = old.value
+		} else {
+			delete(vars, name)
+		}
+	}
+	return stopped
+}
+
+func cloneVariables(vars map[string]string) map[string]string {
+	cloned := make(map[string]string, len(vars))
+	for key, value := range vars {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func requestApproval(ctx *stepExecutionContext, config ApprovalConfig, stepName string) (bool, error) {
+	if config.TimeoutSeconds < 0 {
+		return false, fmt.Errorf("approval.timeout_seconds must be greater than or equal to 0")
+	}
+	message, err := renderTemplate(strings.TrimSpace(config.Message), ctx.variables)
+	if err != nil {
+		return false, err
+	}
+	if message == "" {
+		message = "Approve this workflow step?"
+	}
+	if ctx.approveAll {
+		writeSessionf(ctx.sessionLog, "[step:%s] approval granted by --approve-all: %s\n", stepName, message)
+		return true, nil
+	}
+	if ctx.approvalInput == nil {
+		return false, fmt.Errorf("approval requires an interactive terminal or --approve-all")
+	}
+	ctx.approvalInput.mu.Lock()
+	defer ctx.approvalInput.mu.Unlock()
+	if ctx.approvalInput.expired {
+		return false, fmt.Errorf("approval input disabled after a previous timeout")
+	}
+	writer := ctx.approvalWriter
+	if writer == nil {
+		writer = io.Discard
+	}
+	fmt.Fprintf(writer, "device=%s step=%s %s [y/N] ", ctx.hostname, stepName, message)
+	var response approvalAnswer
+	if config.TimeoutSeconds > 0 {
+		select {
+		case response = <-ctx.approvalInput.answers:
+		case <-time.After(time.Duration(config.TimeoutSeconds) * time.Second):
+			ctx.approvalInput.expired = true
+			return false, fmt.Errorf("approval timed out after %d seconds", config.TimeoutSeconds)
+		}
+	} else {
+		response = <-ctx.approvalInput.answers
+	}
+	if response.err != nil && response.err != io.EOF {
+		return false, fmt.Errorf("read approval: %w", response.err)
+	}
+	approved := strings.EqualFold(strings.TrimSpace(response.text), "y") || strings.EqualFold(strings.TrimSpace(response.text), "yes")
+	if !approved {
+		return false, fmt.Errorf("approval denied")
+	}
+	writeSessionf(ctx.sessionLog, "[step:%s] approval granted: %s\n", stepName, message)
+	return true, nil
 }
 
 func executeLocalCommand(config LocalCommandConfig, vars map[string]string) (string, string, error) {
@@ -1064,8 +1283,9 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 }
 
 const (
-	maxRepeatCount = 1000
-	maxRepeatDepth = 3
+	maxRepeatCount   = 1000
+	maxRepeatDepth   = 3
+	maxWorkflowDepth = 20
 )
 
 func repeatStopsOnFailure(config RepeatConfig) bool {
@@ -1150,6 +1370,341 @@ func executeSteps(ctx *stepExecutionContext, client **ssh.Client, steps []StepCo
 	return executeStepsAtDepth(ctx, client, steps, 0)
 }
 
+func foreachItems(config ForeachConfig, vars map[string]string) ([]interface{}, error) {
+	if len(config.Items) > 0 && strings.TrimSpace(config.From) != "" {
+		return nil, fmt.Errorf("foreach cannot define both items and from")
+	}
+	if strings.TrimSpace(config.From) != "" {
+		raw, ok := vars[strings.TrimSpace(config.From)]
+		if !ok {
+			return nil, fmt.Errorf("foreach.from references undefined variable %q", config.From)
+		}
+		var items []interface{}
+		if err := json.Unmarshal([]byte(raw), &items); err != nil {
+			return nil, fmt.Errorf("foreach.from variable %q must contain a JSON array: %w", config.From, err)
+		}
+		return items, nil
+	}
+	if config.Items == nil {
+		return nil, fmt.Errorf("foreach requires items or from")
+	}
+	return config.Items, nil
+}
+
+func executeForeach(ctx *stepExecutionContext, client **ssh.Client, config ForeachConfig, stepName string, depth int) bool {
+	if len(config.Steps) == 0 {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, "foreach.steps must contain at least one step")
+		return false
+	}
+	items, err := foreachItems(config, ctx.variables)
+	if err != nil {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, err.Error())
+		return false
+	}
+	itemName, indexName := strings.TrimSpace(config.Item), strings.TrimSpace(config.Index)
+	if itemName == "" {
+		itemName = "item"
+	}
+	if indexName == "" {
+		indexName = "index"
+	}
+	validName := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	if !validName.MatchString(itemName) || !validName.MatchString(indexName) || itemName == indexName {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, "foreach item and index must be distinct valid variable names")
+		return false
+	}
+	stopOnFailure := config.StopOnFailure == nil || *config.StopOnFailure
+	for index, item := range items {
+		value, err := variableString(item)
+		if err != nil {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, err.Error())
+			break
+		}
+		iterationFailed := false
+		iterationCtx := *ctx
+		iterationCtx.runFailed = &iterationFailed
+		stopped := scopedVariables(ctx.variables, map[string]string{itemName: value, indexName: strconv.Itoa(index)}, func() bool {
+			return executeStepsAtDepth(&iterationCtx, client, config.Steps, depth)
+		})
+		ctx.artifactSeq = iterationCtx.artifactSeq
+		if iterationFailed {
+			*ctx.runFailed = true
+		}
+		if stopped {
+			return true
+		}
+		if iterationFailed && stopOnFailure {
+			break
+		}
+	}
+	return false
+}
+
+func executeWorkflow(ctx *stepExecutionContext, client **ssh.Client, step StepConfig, stepName string, depth int) bool {
+	name := strings.TrimSpace(step.Use)
+	workflow, ok := ctx.workflows[name]
+	if !ok {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, fmt.Sprintf("unknown workflow %q", name))
+		return false
+	}
+	if depth > maxWorkflowDepth {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, fmt.Sprintf("workflow nesting exceeds %d", maxWorkflowDepth))
+		return true
+	}
+	bindings := map[string]string{}
+	allowed := map[string]bool{}
+	for _, parameter := range workflow.Parameters {
+		parameter = strings.TrimSpace(parameter)
+		allowed[parameter] = true
+		value, exists := step.With[parameter]
+		if !exists {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, fmt.Sprintf("workflow %q missing parameter %q", name, parameter))
+			return false
+		}
+		text, err := variableString(value)
+		if err != nil {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, err.Error())
+			return false
+		}
+		text, err = renderTemplate(text, ctx.variables)
+		if err != nil {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, err.Error())
+			return false
+		}
+		bindings[parameter] = text
+	}
+	for parameter := range step.With {
+		if !allowed[parameter] {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, fmt.Sprintf("workflow %q has no parameter %q", name, parameter))
+			return false
+		}
+	}
+	return scopedVariables(ctx.variables, bindings, func() bool { return executeStepsAtDepth(ctx, client, workflow.Steps, depth) })
+}
+
+func stepsNeedSSH(steps []StepConfig, workflows map[string]WorkflowConfig, seen map[string]bool) bool {
+	for _, step := range steps {
+		if step.Local == nil && strings.TrimSpace(step.Command) != "" {
+			return true
+		}
+		if step.SSHProbe != nil {
+			return true
+		}
+		if step.Repeat != nil && stepsNeedSSH(step.Repeat.Steps, workflows, seen) {
+			return true
+		}
+		if step.Foreach != nil && stepsNeedSSH(step.Foreach.Steps, workflows, seen) {
+			return true
+		}
+		if step.Block != nil && (stepsNeedSSH(step.Block.Steps, workflows, seen) || stepsNeedSSH(step.Block.Rescue, workflows, seen) || stepsNeedSSH(step.Block.Rollback, workflows, seen) || stepsNeedSSH(step.Block.Always, workflows, seen)) {
+			return true
+		}
+		if step.Parallel != nil && stepsNeedSSH(step.Parallel.Steps, workflows, seen) {
+			return true
+		}
+		name := strings.TrimSpace(step.Use)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			workflow, ok := workflows[name]
+			if ok && stepsNeedSSH(workflow.Steps, workflows, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type parallelBranchResult struct {
+	index           int
+	failed, stopped bool
+	variables       map[string]string
+	validations     []deviceValidation
+	artifacts       []outputArtifact
+	log             string
+}
+
+func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName string, depth int) bool {
+	if depth > maxWorkflowDepth {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, fmt.Sprintf("parallel nesting exceeds %d control levels", maxWorkflowDepth))
+		return true
+	}
+	if len(config.Steps) == 0 {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, "parallel.steps must contain at least one step")
+		return false
+	}
+	limit := config.MaxParallel
+	if limit == 0 || limit > len(config.Steps) {
+		limit = len(config.Steps)
+	}
+	if limit < 1 || limit > 16 {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, stepName, "parallel.max_parallel must be between 1 and 16")
+		return false
+	}
+	base := cloneVariables(ctx.variables)
+	results := make(chan parallelBranchResult, len(config.Steps))
+	semaphore := make(chan struct{}, limit)
+	for index, branch := range config.Steps {
+		go func(index int, branch StepConfig) {
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			failed := false
+			validations := []deviceValidation{}
+			artifacts := []outputArtifact{}
+			var log bytes.Buffer
+			branchCtx := *ctx
+			branchCtx.variables = cloneVariables(base)
+			branchCtx.runFailed = &failed
+			branchCtx.aggregated = &validations
+			branchCtx.artifacts = &artifacts
+			branchCtx.sessionLog = &log
+			branchCtx.artifactSeq = 0
+			branchCtx.artifactPrefix = fmt.Sprintf("parallel-%02d", index+1)
+			var client *ssh.Client
+			if stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{}) {
+				client = ssh.NewClient(ctx.opts...)
+				if err := client.Connect(ctx.ip, ctx.username, ctx.password, ctx.deviceType); err != nil {
+					failed = true
+					writeSessionf(&log, "parallel SSH connection failed: %v\n", err)
+				}
+			}
+			stopped := false
+			if !failed {
+				stopped = executeStepsAtDepth(&branchCtx, &client, []StepConfig{branch}, depth)
+			}
+			if client != nil {
+				if err := closeSSHClient(client); err != nil {
+					failed = true
+					writeSessionf(&log, "parallel SSH close failed: %v\n", err)
+				}
+			}
+			if hasUnrecoveredValidationFailure(&validations, 0) {
+				failed = true
+			}
+			results <- parallelBranchResult{index: index, failed: failed, stopped: stopped, variables: branchCtx.variables, validations: validations, artifacts: artifacts, log: log.String()}
+		}(index, branch)
+	}
+	ordered := make([]parallelBranchResult, len(config.Steps))
+	for range config.Steps {
+		result := <-results
+		ordered[result.index] = result
+	}
+	changed := map[string]string{}
+	stop := false
+	for _, result := range ordered {
+		writeSessionf(ctx.sessionLog, "[step:%s] parallel branch %d\n%s", stepName, result.index+1, result.log)
+		*ctx.aggregated = append(*ctx.aggregated, result.validations...)
+		if ctx.artifacts != nil {
+			*ctx.artifacts = append(*ctx.artifacts, result.artifacts...)
+		}
+		if result.failed {
+			*ctx.runFailed = true
+		}
+		stop = stop || result.stopped
+		for key, value := range result.variables {
+			if original, exists := base[key]; exists && original == value {
+				continue
+			}
+			if prior, exists := changed[key]; exists && prior != value {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, fmt.Sprintf("parallel branches produced conflicting values for %q", key))
+				continue
+			}
+			changed[key] = value
+		}
+	}
+	for key, value := range changed {
+		ctx.variables[key] = value
+	}
+	return stop
+}
+
+func hasUnrecoveredValidationFailure(validations *[]deviceValidation, start int) bool {
+	if validations == nil {
+		return false
+	}
+	for index := start; index < len(*validations); index++ {
+		if !(*validations)[index].Recovered && isFailureResult((*validations)[index].Result) {
+			return true
+		}
+	}
+	return false
+}
+
+func executeBlock(ctx *stepExecutionContext, client **ssh.Client, config BlockConfig, depth int) bool {
+	if len(config.Rescue) > 0 && len(config.Rollback) > 0 {
+		*ctx.runFailed = true
+		recordStepFailure(ctx, "block", "block cannot define both rescue and rollback")
+		return false
+	}
+	validationStart := 0
+	if ctx.aggregated != nil {
+		validationStart = len(*ctx.aggregated)
+	}
+	blockFailed := false
+	blockCtx := *ctx
+	blockCtx.runFailed = &blockFailed
+	stopped := executeStepsAtDepth(&blockCtx, client, config.Steps, depth)
+	ctx.artifactSeq = blockCtx.artifactSeq
+	blockFailed = blockFailed || hasUnrecoveredValidationFailure(ctx.aggregated, validationStart)
+	recovery := config.Rescue
+	if len(config.Rollback) > 0 {
+		recovery = config.Rollback
+		writeSessionf(ctx.sessionLog, "[block] starting rollback\n")
+	}
+	if blockFailed && len(recovery) > 0 {
+		validationEnd := validationStart
+		if ctx.aggregated != nil {
+			validationEnd = len(*ctx.aggregated)
+		}
+		rescueFailed := false
+		rescueCtx := *ctx
+		rescueCtx.runFailed = &rescueFailed
+		rescueStopped := executeStepsAtDepth(&rescueCtx, client, recovery, depth)
+		ctx.artifactSeq = rescueCtx.artifactSeq
+		rescueFailed = rescueFailed || hasUnrecoveredValidationFailure(ctx.aggregated, validationEnd)
+		blockFailed = rescueFailed
+		if !rescueFailed && ctx.aggregated != nil {
+			for index := validationStart; index < validationEnd; index++ {
+				if isFailureResult((*ctx.aggregated)[index].Result) {
+					(*ctx.aggregated)[index].Recovered = true
+				}
+			}
+		}
+		stopped = stopped || rescueStopped
+	}
+	if len(config.Always) > 0 {
+		alwaysStart := 0
+		if ctx.aggregated != nil {
+			alwaysStart = len(*ctx.aggregated)
+		}
+		alwaysFailed := false
+		alwaysCtx := *ctx
+		alwaysCtx.runFailed = &alwaysFailed
+		alwaysStopped := executeStepsAtDepth(&alwaysCtx, client, config.Always, depth)
+		ctx.artifactSeq = alwaysCtx.artifactSeq
+		alwaysFailed = alwaysFailed || hasUnrecoveredValidationFailure(ctx.aggregated, alwaysStart)
+		blockFailed = blockFailed || alwaysFailed
+		stopped = stopped || alwaysStopped
+	}
+	if blockFailed {
+		*ctx.runFailed = true
+	}
+	return stopped
+}
+
 func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps []StepConfig, depth int) bool {
 	stopDeviceSteps := false
 	for _, step := range steps {
@@ -1158,11 +1713,82 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			stepName = "unnamed"
 		}
 
+		run, err := evaluateWhen(step.When, ctx.variables)
+		if err != nil {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, err.Error())
+			continue
+		}
+		if !run {
+			writeSessionf(ctx.sessionLog, "[step:%s] skipped by when condition\n", stepName)
+			continue
+		}
+
 		if err := logStepMessage(ctx, stepName, step.Message); err != nil {
 			*ctx.runFailed = true
 			slog.Error("error rendering step message", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 			writeSessionf(ctx.sessionLog, "[step:%s] message error: %v\n", stepName, err)
 			recordStepFailure(ctx, stepName, fmt.Sprintf("message error: %v", err))
+			continue
+		}
+
+		if step.Approval != nil {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, "approval step cannot define executable or other control fields")
+				continue
+			}
+			if _, err := requestApproval(ctx, *step.Approval, stepName); err != nil {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, err.Error())
+				return true
+			}
+			continue
+		}
+
+		controlCount := 0
+		if step.Repeat != nil {
+			controlCount++
+		}
+		if step.Foreach != nil {
+			controlCount++
+		}
+		if strings.TrimSpace(step.Use) != "" {
+			controlCount++
+		}
+		if step.Block != nil {
+			controlCount++
+		}
+		if step.Parallel != nil {
+			controlCount++
+		}
+		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, "control step must define exactly one of repeat, foreach, use, block, or parallel and no executable fields")
+			continue
+		}
+		if step.Foreach != nil {
+			if executeForeach(ctx, client, *step.Foreach, stepName, depth+1) {
+				return true
+			}
+			continue
+		}
+		if strings.TrimSpace(step.Use) != "" {
+			if executeWorkflow(ctx, client, step, stepName, depth+1) {
+				return true
+			}
+			continue
+		}
+		if step.Block != nil {
+			if executeBlock(ctx, client, *step.Block, depth+1) {
+				return true
+			}
+			continue
+		}
+		if step.Parallel != nil {
+			if executeParallel(ctx, *step.Parallel, stepName, depth+1) {
+				return true
+			}
 			continue
 		}
 
@@ -1541,7 +2167,11 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 
 	deviceDir := fmt.Sprintf("%03d-%s", ctx.deviceIndex+1, sanitizeLogName(ctx.hostname))
 	ctx.artifactSeq++
-	filename := fmt.Sprintf("%s.artifact-%03d.attempt-%03d.%s", sanitizeLogName(stepName), ctx.artifactSeq, attempt, extension)
+	prefix := ""
+	if ctx.artifactPrefix != "" {
+		prefix = sanitizeLogName(ctx.artifactPrefix) + "."
+	}
+	filename := fmt.Sprintf("%s%s.artifact-%03d.attempt-%03d.%s", prefix, sanitizeLogName(stepName), ctx.artifactSeq, attempt, extension)
 	path := filepath.Join(ctx.runDir, deviceDir, filename)
 	if err := atomicWriteFile(path, []byte(content)); err != nil {
 		return fmt.Errorf("failed to save %s output: %w", kind, err)
@@ -1930,7 +2560,23 @@ func validateExecutionConfig(cfg ExecutionConfig) error {
 	return nil
 }
 
-func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut, pretty bool, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) (result deviceRunResult) {
+func validateScheduleConfig(cfg ScheduleConfig) error {
+	if cfg.Count < 0 {
+		return fmt.Errorf("schedule.count must be greater than or equal to 0")
+	}
+	if cfg.IntervalSeconds < 0 {
+		return fmt.Errorf("schedule.interval_seconds must be greater than or equal to 0")
+	}
+	if cfg.Count > 1000 {
+		return fmt.Errorf("schedule.count must not exceed 1000")
+	}
+	if cfg.Count > 1 && cfg.IntervalSeconds < 1 {
+		return fmt.Errorf("schedule.interval_seconds must be at least 1 when count is greater than 1")
+	}
+	return nil
+}
+
+func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) (result deviceRunResult) {
 	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
@@ -1994,14 +2640,16 @@ func runSSHDevice(index int, device DeviceConfig, config Config, username, passw
 	ctx := stepExecutionContext{
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
-		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
+		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers, workflows: config.Workflows,
 		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
+		approveAll: approveAll, approvalInput: approvals, approvalWriter: approvalWriter,
+		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
 	}
 	if executeSteps(&ctx, &client, steps) {
 		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
 	}
 	for _, deviceValidation := range result.aggregated {
-		if deviceValidation.Result.Status == "fail" || deviceValidation.Result.Status == "error" {
+		if !deviceValidation.Recovered && (deviceValidation.Result.Status == "fail" || deviceValidation.Result.Status == "error") {
 			result.failed = true
 			break
 		}
@@ -2122,6 +2770,30 @@ func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner fun
 	return allResults, stopped
 }
 
+func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, schedule ScheduleConfig, runner func(int, int, DeviceConfig) deviceRunResult, sleep func(time.Duration)) ([]deviceRunResult, bool) {
+	count := schedule.Count
+	if count == 0 {
+		count = 1
+	}
+	all := make([]deviceRunResult, 0, len(devices)*count)
+	stopped := false
+	for occurrence := 0; occurrence < count; occurrence++ {
+		results, occurrenceStopped := runScheduledDevices(devices, execution, func(index int, device DeviceConfig) deviceRunResult { return runner(occurrence, index, device) })
+		for index := range results {
+			results[index].index += occurrence * len(devices)
+		}
+		all = append(all, results...)
+		if occurrenceStopped {
+			stopped = true
+			break
+		}
+		if occurrence+1 < count {
+			sleep(time.Duration(schedule.IntervalSeconds) * time.Second)
+		}
+	}
+	return all, stopped
+}
+
 func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, parsers map[string]ParserModuleConfig, runDir string, index int) (result deviceRunResult) {
 	started := time.Now()
 	result = deviceRunResult{index: index, hostname: "local_steps"}
@@ -2226,6 +2898,7 @@ func main() {
 	var cliFailOnFail bool
 	var cliCredsInput bool
 	var prettyOut bool
+	var approveAll bool
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -2237,6 +2910,7 @@ func main() {
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.BoolVar(&cliCredsInput, "creds_input", false, "prompt for username and password interactively")
 	flag.BoolVar(&prettyOut, "pretty", false, "show a coloured human-readable run summary")
+	flag.BoolVar(&approveAll, "approve-all", false, "approve all manual workflow gates non-interactively")
 	flag.Parse()
 	if jsonOut {
 		prettyOut = false
@@ -2315,6 +2989,15 @@ func main() {
 		slog.Error("invalid execution configuration", "error", err)
 		os.Exit(1)
 	}
+	if err := validateScheduleConfig(config.Schedule); err != nil {
+		slog.Error("invalid schedule configuration", "error", err)
+		os.Exit(1)
+	}
+	var approvals *approvalInput
+	var approvalWriter io.Writer
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		approvals, approvalWriter = newApprovalInput(os.Stdin), os.Stdout
+	}
 
 	variableStates := make(map[string]*deviceVariableState)
 	for index, device := range sshDevices {
@@ -2327,21 +3010,26 @@ func main() {
 		}
 		state.order = append(state.order, index)
 	}
-	runner := func(index int, device DeviceConfig) deviceRunResult {
+	runner := func(occurrence, index int, device DeviceConfig) deviceRunResult {
 		state := variableStates[variableScopeKey(device.Hostname, device.IP)]
 		state.mu.Lock()
 		for state.next < len(state.order) && state.order[state.next] != index {
 			state.cond.Wait()
 		}
-		result := runSSHDevice(index, device, config, username, password, jsonOut, prettyOut, parsers, state.variables, runDir)
+		result := runSSHDevice(index, occurrence, device, config, username, password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()
 		return result
 	}
-	deviceResults, schedulingStopped := runScheduledDevices(sshDevices, config.Execution, runner)
+	deviceResults, schedulingStopped := runRecurringSchedule(sshDevices, config.Execution, config.Schedule, runner, time.Sleep)
+	occurrences := config.Schedule.Count
+	if occurrences == 0 {
+		occurrences = 1
+	}
+	deviceResultCount := len(sshDevices) * occurrences
 	if len(config.LocalSteps) > 0 {
-		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, len(sshDevices)))
+		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, deviceResultCount))
 	}
 	runFailed := schedulingStopped
 	resultsByIndex := make(map[int]deviceRunResult, len(deviceResults))
@@ -2353,7 +3041,11 @@ func main() {
 	}
 	var aggregated []deviceValidation
 	var artifacts []outputArtifact
-	for index := range sshDevices {
+	resultCount := deviceResultCount
+	if len(config.LocalSteps) > 0 {
+		resultCount++
+	}
+	for index := 0; index < resultCount; index++ {
 		if result, ok := resultsByIndex[index]; ok {
 			aggregated = append(aggregated, result.aggregated...)
 			artifacts = append(artifacts, result.artifacts...)
@@ -2386,7 +3078,7 @@ func main() {
 			os.Exit(2)
 		}
 		for _, dv := range aggregated {
-			if dv.Result.Status == "fail" || dv.Result.Status == "error" {
+			if !dv.Recovered && (dv.Result.Status == "fail" || dv.Result.Status == "error") {
 				os.Exit(2)
 			}
 		}

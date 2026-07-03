@@ -222,6 +222,13 @@ steps:
     register: variable_name
     retry: {}
     repeat: {}
+    when: {}
+    foreach: {}
+    use: workflow_name
+    with: {}
+    block: {}
+    approval: {}
+    parallel: {}
     output: {}
     on_pass: {}
     on_fail: {}
@@ -242,6 +249,12 @@ Supported step keys:
 - `return_to_prompt`: set `false` for commands expected to disconnect or reboot before returning a prompt.
 - `output`: optional per-step `save_raw` / `save_parsed` overrides for structured artifacts.
 - `repeat`: bounded repeated step group with `count`, `interval_seconds`, optional `stop_on_failure`, and nested `steps`.
+- `when`: direct typed comparison against a registered variable; a false result skips the step.
+- `foreach`: iterate over literal `items` or a registered JSON array named by `from`.
+- `use` / `with`: call a named top-level workflow with scoped parameter values.
+- `block`: run `steps` with optional `rescue` and `always` recovery lists.
+- `approval`: fail-closed manual operator gate; `--approve-all` authorizes unattended continuation.
+- `parallel`: independent branches using separate SSH sessions and isolated variables.
 - `on_pass`: conditional action after validation passes.
 - `on_fail`: conditional action after validation fails or errors.
 
@@ -525,6 +538,128 @@ parsers:
         group: 5
         repeated: true
 ```
+
+## Direct Conditions
+
+```yaml
+- name: platform-only-step
+  when:
+    variable: platform
+    condition: eq
+    expected: iosxr
+  cmd: show platform
+```
+
+- `variable` must name an existing registered variable.
+- `condition` defaults to `eq` and accepts `eq`, `neq`, `contains`, `not_contains`, `matches`, `gt`, `gte`, `lt`, or `lte`.
+- Use `expected_type: int` for numeric comparisons.
+- `expected` supports template variables.
+- A false comparison skips the complete step, including its message or control operation. An invalid condition or missing variable fails the step.
+
+## Foreach
+
+```yaml
+- name: inspect-vlans
+  foreach:
+    items: [10, 20, 30]
+    item: vlan
+    index: vlan_index
+    stop_on_failure: true
+    steps:
+      - cmd: show vlan id {{vlan}}
+```
+
+- Define exactly one of `items` or `from`.
+- `from` names a registered variable containing a JSON array.
+- `item` defaults to `item`; `index` defaults to `index` and is zero-based.
+- Item and index variables are scoped to each iteration and restored afterward.
+- `stop_on_failure` defaults to `true`; false continues with later items while retaining the run failure.
+
+## Parameterized Workflows
+
+```yaml
+workflows:
+  inspect-interface:
+    parameters: [interface]
+    steps:
+      - cmd: show interfaces {{interface}}
+
+ssh:
+  - host: router-01
+    steps:
+      - use: inspect-interface
+        with:
+          interface: GigabitEthernet0/0
+```
+
+- Every declared parameter is required and unknown `with` keys are errors.
+- String argument values support variables from the caller.
+- Parameters are scoped to the call and previous values are restored afterward.
+- Workflow maps merge through normal modular imports, so definitions can live in role files.
+- Nested workflow/control execution is limited to 20 levels.
+
+## Recovery Blocks
+
+```yaml
+- name: guarded-change
+  block:
+    steps:
+      - cmd: configure replace disk0:/candidate.cfg
+    rescue:
+      - cmd: rollback configuration last 1
+    always:
+      - cmd: show configuration commit list 1
+```
+
+- `rescue` runs only after a failure in `steps`.
+- A successful rescue recovers the block failure; a rescue failure keeps the run failed.
+- `always` runs after the normal or rescue path and can fail the run.
+- Explicit stop actions propagate. Original failures remain in the failure log for auditability.
+- Use `rollback` instead of `rescue` for explicit reversion steps. They are mutually exclusive.
+- A control step defines only one of `repeat`, `foreach`, `use`, `block`, or `parallel`; put executable fields in nested steps.
+
+## Approval Gates
+
+```yaml
+- name: authorize-change
+  approval:
+    message: Apply the change?
+    timeout_seconds: 300
+```
+
+- Approval accepts `y` or `yes`; every other answer denies.
+- Denial, timeout, EOF, and non-interactive stdin fail closed and stop the device.
+- `timeout_seconds: 0` waits indefinitely. `--approve-all` approves and logs every gate.
+- Approval is a standalone step.
+
+## Parallel Branches
+
+```yaml
+- name: collect-independent-state
+  parallel:
+    max_parallel: 2
+    steps:
+      - {name: routes, cmd: show route, register: routes}
+      - {name: interfaces, cmd: show interfaces, register: interfaces}
+```
+
+- Each branch uses a separate SSH session and isolated variables.
+- Results merge in declaration order; conflicting values for one variable fail the run.
+- `max_parallel` defaults to the branch count and must be between 1 and 16.
+- Branch failure fails the parallel operation; explicit stop actions propagate.
+
+## Bounded Scheduling
+
+```yaml
+schedule:
+  count: 4
+  interval_seconds: 900
+```
+
+- Omitted or zero `count` means one occurrence; the maximum is 1000.
+- Multiple occurrences require an interval of at least one second.
+- Per-device variables persist, artifacts are occurrence-prefixed, and `local_steps` run once afterward.
+- Use an external scheduler for indefinite or calendar-based operation.
 
 ## Bounded Repeat
 

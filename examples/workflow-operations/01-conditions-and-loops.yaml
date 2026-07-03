@@ -1,0 +1,67 @@
+name_playbook: Conditions and loops
+inventory_file: inventory.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: detect-platform
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: '(IOS XR)'
+          condition: eq
+          expected: IOS XR
+        register: platform_family
+
+      - name: xr-only-platform-check
+        when:
+          variable: platform_family
+          condition: eq
+          expected: IOS XR
+        cmd: show platform
+
+      - name: selected-interfaces
+        foreach:
+          items:
+            - Loopback0
+            - MgmtEth0/RP0/CPU0/0
+          item: interface
+          index: interface_index
+          stop_on_failure: false
+          steps:
+            - name: announce-interface
+              message: collecting interface {{interface}} at index {{interface_index}}
+            - name: collect-interface
+              cmd: show interfaces {{interface}}
+
+      # A safe local step creates a JSON array, matching parser output that was
+      # registered from a previous device command.
+      - name: build-vlan-list
+        local:
+          command: printf
+          args: ['[100,200,300]']
+        register: discovered_vlans
+
+      - name: discovered-vlans
+        foreach:
+          from: discovered_vlans
+          item: vlan
+          steps:
+            - name: collect-vlan
+              cmd: show l2vpn bridge-domain | include {{vlan}}
+
+      - name: bounded-health-sampling
+        repeat:
+          count: 3
+          interval_seconds: 30
+          stop_on_failure: true
+          steps:
+            - name: sample-cpu
+              cmd: show processes cpu | include one.minute
+

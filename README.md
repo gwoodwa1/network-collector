@@ -331,7 +331,7 @@ ssh:
 
 Imports are recursive and paths are relative to the file containing the import. Imported files are merged in declared order, then the importing file is applied. Maps merge recursively, lists such as `ssh` append, and later scalar values override earlier ones. Keep shared settings such as `inventory_file`, `parsers_file`, credentials policy, execution, and output in the master config; put reusable workflows in role files.
 
-The loader rejects import cycles, duplicate inclusion, unmatched glob patterns, invalid entries, and nesting deeper than 20 files. This prevents the same upgrade role from silently running twice. See [`examples/modular`](examples/modular) for a complete master, inventory, and role layout.
+The loader rejects import cycles, duplicate inclusion, unmatched glob patterns, invalid entries, and nesting deeper than 20 files. This prevents the same upgrade role from silently running twice. See [`examples/modular`](examples/modular) for a complete master, inventory, and role layout. The [`workflow operation examples`](examples/workflow-operations) provide full playbooks for every control operation described below.
 
 ### Staged and concurrent SSH execution
 
@@ -364,6 +364,18 @@ ssh:
 - `start_interval_seconds` is the minimum delay between device starts. The first device starts immediately, and a free concurrency slot does not bypass the delay.
 - `canary_count` runs that many devices from the resolved inventory order as a separate first stage. All canaries must succeed before remaining devices are started.
 - `failure_threshold` stops launching new devices after that many device runs have failed. Devices already running are allowed to finish. `0` disables the threshold.
+
+### Bounded recurring schedules
+
+Use a finite top-level schedule when collection must recur within one invocation:
+
+```yaml
+schedule:
+  count: 4
+  interval_seconds: 900
+```
+
+`count` defaults to one and is limited to 1000. Multiple occurrences require an interval of at least one second. The first starts immediately; registered per-device variables persist between occurrences, artifacts are uniquely prefixed, and `local_steps` run once after the schedule. A stopped occurrence ends the schedule. Continue using cron, systemd, CI, or Kubernetes CronJobs for indefinite calendar scheduling.
 
 For the example above, the canary runs first. If it succeeds, another device may start immediately when the canary took longer than two minutes; subsequent starts remain two minutes apart, with no more than three active devices. A failed canary stops the main stage regardless of `failure_threshold`.
 
@@ -622,6 +634,115 @@ Validation steps can also run conditional actions after the final validation res
 ```
 
 Use `on_pass` or `on_fail` on a step with `validation`. Supported actions are `exit`/`stop` to stop the remaining steps for the current device without failing, `fail` to stop and mark the run failed, `cmd` to run another SSH command, `steps` to run a nested list of normal SSH steps, and `none`/`noop` to take no control-flow action. If an action block contains only `message`, the collector logs the message and continues. If it contains only `cmd`, `action: cmd` is implied. If it contains only `steps`, `action: steps` is implied. Nested steps support the same fields as top-level steps, including `validation`, `retry`, `register`, `ssh_probe`, `return_to_prompt`, and their own `on_pass` / `on_fail` actions. Action `message` and `cmd` values support registered variables such as `{{install_id}}`.
+
+### Workflow control operations
+
+Use `when` to skip a step without running a validation command. It compares a registered variable using the same conditions as validation (`eq`, `neq`, `contains`, `not_contains`, `matches`, `gt`, `gte`, `lt`, or `lte`):
+
+```yaml
+- name: collect-xr-state
+  when:
+    variable: platform
+    condition: eq
+    expected: iosxr
+  cmd: show platform
+```
+
+The variable must exist. `condition` defaults to `eq`; set `expected_type: int` for numeric comparisons.
+
+Use `foreach` for a literal list or a registered JSON array. The item and zero-based index variables exist only inside the nested steps:
+
+```yaml
+- name: collect-interfaces
+  foreach:
+    items: [GigabitEthernet0/0, GigabitEthernet0/1]
+    item: interface
+    index: interface_index
+    stop_on_failure: true
+    steps:
+      - cmd: show interfaces {{interface}}
+
+- name: collect-discovered-interfaces
+  foreach:
+    from: discovered_interfaces
+    steps:
+      - cmd: show interfaces {{item}}
+```
+
+`stop_on_failure` defaults to `true`. Set it to `false` to continue later items after a failed iteration. `from` must name a variable containing a JSON array, such as parser output registered from a JSON array.
+
+Reusable parameterized workflows are defined at the top level and invoked with `use` and `with`. Parameters are required, unknown arguments are rejected, and parameter values are restored after the call:
+
+```yaml
+workflows:
+  inspect-interface:
+    parameters: [interface, expected_state]
+    steps:
+      - name: inspect
+        cmd: show interfaces {{interface}}
+        validation:
+          extractor: regex
+          pattern: 'line protocol is (\S+)'
+          condition: eq
+          expected: '{{expected_state}}'
+
+ssh:
+  - host: router-01
+    steps:
+      - name: inspect-uplink
+        use: inspect-interface
+        with:
+          interface: GigabitEthernet0/0
+          expected_state: up
+```
+
+Workflow definitions can live in imported YAML files. Recursive calls are stopped after 20 nested control levels.
+
+Use `block`, `rescue`, and `always` for structured recovery:
+
+```yaml
+- name: guarded-change
+  block:
+    steps:
+      - name: apply-change
+        cmd: configure replace disk0:/candidate.cfg
+      - name: verify
+        cmd: show configuration commit changes last 1
+        validation: {}
+    rescue:
+      - name: rollback
+        cmd: rollback configuration last 1
+    always:
+      - name: collect-final-state
+        cmd: show configuration commit list 1
+```
+
+`rescue` runs only when a step in `steps` fails. A successful rescue recovers that block for the overall run; a failed rescue keeps it failed. `always` runs after either path and can itself fail the run. Explicit stop actions still propagate after recovery, and the failure log retains the original event for auditability.
+
+Use `rollback` instead of `rescue` when recovery explicitly reverts a change. They are mutually exclusive; rollback runs automatically after a command, parser, output, or validation failure, and successful rollback marks failed validations as recovered.
+
+Manual approval gates fail closed for non-interactive stdin, denial, EOF, or timeout. Use `--approve-all` only for an explicitly authorized unattended run:
+
+```yaml
+- name: authorize-change
+  approval:
+    message: Apply the software upgrade?
+    timeout_seconds: 300
+```
+
+Use `parallel` for independent same-device branches. Each branch gets a separate SSH session and isolated variables. Results merge in declared order; conflicting registered values fail the run. `max_parallel` defaults to the branch count and is capped at 16:
+
+```yaml
+- name: independent-collection
+  parallel:
+    max_parallel: 3
+    steps:
+      - {name: routes, cmd: show route, register: routes}
+      - {name: interfaces, cmd: show interfaces, register: interfaces}
+      - {name: alarms, cmd: show alarms, register: alarms}
+```
+
+A control step may define one of `repeat`, `foreach`, `use`, `block`, or `parallel`; executable fields belong in its nested steps. An `approval` gate is a standalone step. `when` may guard any normal or control step.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 

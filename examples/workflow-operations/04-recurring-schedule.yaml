@@ -1,0 +1,47 @@
+name_playbook: Recurring health sample
+inventory_file: inventory.yaml
+fail_on_fail: true
+
+schedule:
+  count: 3
+  interval_seconds: 300
+
+execution:
+  max_parallel: 2
+  start_interval_seconds: 5
+  failure_threshold: 1
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: ntp-health
+        cmd: show ntp status
+        retry:
+          until_pass: true
+          interval_seconds: 15
+          max_attempts: 3
+        validation:
+          extractor: regex
+          pattern: '(Clock is synchronized)'
+          condition: eq
+          expected: Clock is synchronized
+        on_fail:
+          message: NTP remained unhealthy after retries
+
+      - name: memory-health
+        cmd: show memory summary
+
+      - name: occurrence-complete
+        message: health-sample occurrence completed
+
+local_steps:
+  - name: schedule-finished
+    local:
+      command: printf
+      args: ['All scheduled device occurrences completed\n']
+

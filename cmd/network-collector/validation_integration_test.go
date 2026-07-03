@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"io/ioutil"
 	"net"
 	"os"
@@ -1307,6 +1308,279 @@ func TestValidateRepeatConfigSafetyLimits(t *testing.T) {
 	}
 }
 
+func newControlTestContext(t *testing.T, log *bytes.Buffer, variables map[string]string) (*stepExecutionContext, *bool) {
+	t.Helper()
+	failed := false
+	aggregated := []deviceValidation{}
+	ctx := &stepExecutionContext{
+		hostname: "router-01", ip: "192.0.2.10", jsonOut: true, sessionLog: log,
+		failureLog: filepath.Join(t.TempDir(), "failures.txt"), variables: variables,
+		aggregated: &aggregated, runFailed: &failed, workflows: map[string]WorkflowConfig{},
+	}
+	return ctx, &failed
+}
+
+func TestWhenSkipsAndRunsSteps(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{"platform": "iosxr", "count": "4"})
+	steps := []StepConfig{
+		{Name: "skip", Message: "wrong platform", When: &WhenConfig{Variable: "platform", Condition: "eq", Expected: "junos"}},
+		{Name: "run", Message: "right platform", When: &WhenConfig{Variable: "count", Condition: "gte", Expected: 3, ExpectedType: "int"}},
+	}
+	if executeSteps(ctx, nil, steps) || *failed {
+		t.Fatalf("conditional steps unexpectedly stopped or failed: failed=%v", *failed)
+	}
+	if strings.Contains(log.String(), "wrong platform") || !strings.Contains(log.String(), "right platform") {
+		t.Fatalf("unexpected conditional output: %s", log.String())
+	}
+}
+
+func TestForeachLiteralAndRegisteredJSONItems(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{"interfaces": `["Gi0/0","Gi0/1"]`, "item": "outer"})
+	steps := []StepConfig{
+		{Name: "literal", Foreach: &ForeachConfig{
+			Items: []interface{}{"10", "20"}, Item: "vlan",
+			Steps: []StepConfig{{Message: "vlan={{vlan}} index={{index}}"}},
+		}},
+		{Name: "registered", Foreach: &ForeachConfig{
+			From: "interfaces", Steps: []StepConfig{{Message: "interface={{item}}"}},
+		}},
+	}
+	if executeSteps(ctx, nil, steps) || *failed {
+		t.Fatalf("foreach unexpectedly stopped or failed: failed=%v", *failed)
+	}
+	for _, expected := range []string{"vlan=10 index=0", "vlan=20 index=1", "interface=Gi0/0", "interface=Gi0/1"} {
+		if !strings.Contains(log.String(), expected) {
+			t.Fatalf("missing %q in %s", expected, log.String())
+		}
+	}
+	if ctx.variables["item"] != "outer" {
+		t.Fatalf("foreach did not restore item scope: %+v", ctx.variables)
+	}
+	if _, exists := ctx.variables["index"]; exists {
+		t.Fatalf("foreach leaked index variable: %+v", ctx.variables)
+	}
+}
+
+func TestParameterizedWorkflowScopesArguments(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{"target": "edge", "interface": "original"})
+	ctx.workflows["check-interface"] = WorkflowConfig{
+		Parameters: []string{"interface", "state"},
+		Steps:      []StepConfig{{Message: "checking {{interface}} state={{state}}"}},
+	}
+	step := StepConfig{Name: "call", Use: "check-interface", With: map[string]interface{}{"interface": "{{target}}-0/0", "state": "up"}}
+	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
+		t.Fatalf("workflow unexpectedly stopped or failed: %v", *failed)
+	}
+	if !strings.Contains(log.String(), "checking edge-0/0 state=up") {
+		t.Fatalf("unexpected workflow output: %s", log.String())
+	}
+	if ctx.variables["interface"] != "original" {
+		t.Fatalf("workflow did not restore parameter scope: %+v", ctx.variables)
+	}
+	if _, exists := ctx.variables["state"]; exists {
+		t.Fatalf("workflow leaked parameter scope: %+v", ctx.variables)
+	}
+}
+
+func TestBlockRescueRecoversAndAlwaysRuns(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{})
+	step := StepConfig{Name: "guarded-change", Block: &BlockConfig{
+		Steps:  []StepConfig{{Name: "broken"}},
+		Rescue: []StepConfig{{Name: "recover", Message: "rollback complete"}},
+		Always: []StepConfig{{Name: "cleanup", Message: "cleanup complete"}},
+	}}
+	if executeSteps(ctx, nil, []StepConfig{step}) {
+		t.Fatal("recovered block unexpectedly stopped")
+	}
+	if *failed {
+		t.Fatal("successful rescue should recover the block failure")
+	}
+	if !strings.Contains(log.String(), "rollback complete") || !strings.Contains(log.String(), "cleanup complete") {
+		t.Fatalf("rescue or always did not run: %s", log.String())
+	}
+}
+
+func TestBlockMarksRescuedValidationRecovered(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{})
+	step := StepConfig{Name: "guarded-check", Block: &BlockConfig{
+		Steps: []StepConfig{{
+			Name: "failing-check", Local: &LocalCommandConfig{Command: "printf", Args: []string{"down"}},
+			Validation: &ValidationConfig{Extractor: "regex", Pattern: `(.*)`, Condition: "eq", Expected: "up"},
+		}},
+		Rescue: []StepConfig{{Message: "failure accepted"}},
+	}}
+	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
+		t.Fatalf("rescued validation unexpectedly stopped or failed: failed=%v", *failed)
+	}
+	if len(*ctx.aggregated) != 1 || !(*ctx.aggregated)[0].Recovered {
+		t.Fatalf("rescued validation was not retained as recovered: %+v", *ctx.aggregated)
+	}
+}
+
+func TestLoadConfigDecodesWorkflowOperations(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+workflows:
+  inspect:
+    parameters: [interface]
+    steps:
+      - message: inspecting {{interface}}
+ssh:
+  - hostname: router-01
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    steps:
+      - use: inspect
+        with:
+          interface: Gi0/0
+      - foreach:
+          items: [10, 20]
+          item: vlan
+          steps:
+            - message: vlan {{vlan}}
+      - block:
+          steps: [{message: change}]
+          rescue: [{message: rollback}]
+          always: [{message: cleanup}]
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if len(config.Workflows["inspect"].Steps) != 1 || len(config.SSH) != 1 || len(config.SSH[0].Steps) != 3 {
+		t.Fatalf("workflow operations did not decode: %+v", config)
+	}
+}
+
+func TestApprovalGateInteractiveAndNonInteractive(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{"change": "upgrade"})
+	ctx.approvalInput = newApprovalInput(strings.NewReader("yes\n"))
+	ctx.approvalWriter = io.Discard
+	step := StepConfig{Name: "approve", Approval: &ApprovalConfig{Message: "approve {{change}}"}}
+	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
+		t.Fatalf("approved gate stopped or failed: %v", *failed)
+	}
+
+	ctx, failed = newControlTestContext(t, &log, map[string]string{})
+	if !executeSteps(ctx, nil, []StepConfig{step}) || !*failed {
+		t.Fatal("non-interactive approval must fail closed and stop")
+	}
+
+	ctx, failed = newControlTestContext(t, &log, map[string]string{})
+	ctx.approveAll = true
+	if executeSteps(ctx, nil, []StepConfig{{Name: "approve", Approval: &ApprovalConfig{Message: "approved by flag"}}}) || *failed {
+		t.Fatal("approve-all gate unexpectedly failed")
+	}
+}
+
+func TestExplicitRollbackRecoversFailedBlock(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{})
+	step := StepConfig{Name: "change", Block: &BlockConfig{
+		Steps:    []StepConfig{{Name: "broken"}},
+		Rollback: []StepConfig{{Name: "rollback", Message: "configuration restored"}},
+	}}
+	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
+		t.Fatalf("rollback did not recover block: %v", *failed)
+	}
+	if !strings.Contains(log.String(), "starting rollback") || !strings.Contains(log.String(), "configuration restored") {
+		t.Fatalf("rollback was not recorded: %s", log.String())
+	}
+}
+
+func TestParallelBranchesMergeVariablesDeterministically(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{"existing": "kept"})
+	step := StepConfig{Name: "collect", Parallel: &ParallelConfig{MaxParallel: 2, Steps: []StepConfig{
+		{Name: "left", Local: &LocalCommandConfig{Command: "printf", Args: []string{"alpha"}}, Register: "left_value"},
+		{Name: "right", Local: &LocalCommandConfig{Command: "printf", Args: []string{"beta"}}, Register: "right_value"},
+	}}}
+	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
+		t.Fatalf("parallel block stopped or failed: %v", *failed)
+	}
+	if ctx.variables["left_value"] != "alpha" || ctx.variables["right_value"] != "beta" || ctx.variables["existing"] != "kept" {
+		t.Fatalf("parallel variables merged incorrectly: %+v", ctx.variables)
+	}
+}
+
+func TestParallelVariableConflictFails(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{})
+	step := StepConfig{Name: "collect", Parallel: &ParallelConfig{Steps: []StepConfig{
+		{Name: "left", Local: &LocalCommandConfig{Command: "printf", Args: []string{"alpha"}}, Register: "value"},
+		{Name: "right", Local: &LocalCommandConfig{Command: "printf", Args: []string{"beta"}}, Register: "value"},
+	}}}
+	executeSteps(ctx, nil, []StepConfig{step})
+	if !*failed || ctx.variables["value"] != "alpha" {
+		t.Fatalf("parallel conflict not handled deterministically: failed=%v vars=%+v", *failed, ctx.variables)
+	}
+}
+
+func TestRecurringScheduleIsFinite(t *testing.T) {
+	devices := []DeviceConfig{{Hostname: "router-01"}}
+	runs, sleeps := 0, 0
+	results, stopped := runRecurringSchedule(devices, ExecutionConfig{}, ScheduleConfig{Count: 3, IntervalSeconds: 5}, func(occurrence, index int, device DeviceConfig) deviceRunResult {
+		runs++
+		return deviceRunResult{index: index, hostname: device.Hostname}
+	}, func(duration time.Duration) {
+		if duration != 5*time.Second {
+			t.Fatalf("unexpected schedule interval: %s", duration)
+		}
+		sleeps++
+	})
+	if stopped || runs != 3 || sleeps != 2 || len(results) != 3 {
+		t.Fatalf("unexpected recurring schedule result: stopped=%v runs=%d sleeps=%d results=%d", stopped, runs, sleeps, len(results))
+	}
+	for index, result := range results {
+		if result.index != index {
+			t.Fatalf("occurrence index %d, want %d", result.index, index)
+		}
+	}
+	if err := validateScheduleConfig(ScheduleConfig{Count: 2}); err == nil {
+		t.Fatal("accepted recurring schedule without interval")
+	}
+}
+
+func TestLoadConfigDecodesApprovalParallelRollbackAndSchedule(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+schedule: {count: 2, interval_seconds: 60}
+ssh:
+  - hostname: router-01
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    steps:
+      - approval: {message: proceed, timeout_seconds: 30}
+      - parallel:
+          max_parallel: 2
+          steps: [{message: one}, {message: two}]
+      - block:
+          steps: [{message: change}]
+          rollback: [{message: restore}]
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Schedule.Count != 2 || config.SSH[0].Steps[0].Approval == nil || config.SSH[0].Steps[1].Parallel == nil || len(config.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("new workflow operations did not decode: %+v", config)
+	}
+}
+
 func TestLoadConfigComposesImports(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")
@@ -1406,6 +1680,51 @@ func TestModularExampleLoads(t *testing.T) {
 	parsers, err := loadOptionalParsers(config.ParsersFile, configPath)
 	if err != nil || parsers == nil || parsers.Parsers["xr_show_ntp_status"].Template == "" {
 		t.Fatalf("failed to load modular example parsers: parsers=%+v error=%v", parsers, err)
+	}
+}
+
+func TestWorkflowOperationExamplesLoad(t *testing.T) {
+	directory := filepath.Join("..", "..", "examples", "workflow-operations")
+	paths, err := filepath.Glob(filepath.Join(directory, "*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 5 {
+		t.Fatalf("expected inventory plus four workflow examples, got %d: %v", len(paths), paths)
+	}
+	loaded := map[string]Config{}
+	for _, path := range paths {
+		if filepath.Base(path) == "inventory.yaml" {
+			continue
+		}
+		config, _, err := loadConfig(path)
+		if err != nil {
+			t.Fatalf("failed to load workflow example %s: %v", path, err)
+		}
+		inventory, err := loadOptionalInventory(config.InventoryFile, path)
+		if err != nil || inventory == nil || len(inventory.Hosts) != 1 {
+			t.Fatalf("invalid inventory for %s: inventory=%+v error=%v", path, inventory, err)
+		}
+		loaded[filepath.Base(path)] = config
+	}
+	if len(loaded) != 4 {
+		t.Fatalf("expected four loaded playbooks, got %d", len(loaded))
+	}
+	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
+	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
+		t.Fatalf("conditions example is missing workflow operations: %+v", conditions)
+	}
+	recovery := loaded["02-reuse-and-recovery.yaml"]
+	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {
+		t.Fatalf("recovery example is incomplete: %+v", recovery)
+	}
+	approval := loaded["03-approval-and-parallel.yaml"].SSH[0].Steps
+	if approval[0].Approval == nil || approval[1].Parallel == nil {
+		t.Fatalf("approval example is incomplete: %+v", approval)
+	}
+	scheduled := loaded["04-recurring-schedule.yaml"]
+	if scheduled.Schedule.Count != 3 || len(scheduled.LocalSteps) != 1 {
+		t.Fatalf("schedule example is incomplete: %+v", scheduled)
 	}
 }
 

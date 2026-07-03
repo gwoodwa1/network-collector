@@ -1,0 +1,73 @@
+name_playbook: Reusable workflows and recovery
+inventory_file: inventory.yaml
+fail_on_fail: true
+
+workflows:
+  inspect-interface:
+    parameters: [interface, expected_state]
+    steps:
+      - name: inspect-interface
+        cmd: show interfaces {{interface}}
+        validation:
+          extractor: regex
+          pattern: 'line protocol is (\S+)'
+          condition: contains
+          expected: '{{expected_state}}'
+
+  collect-change-evidence:
+    parameters: [label]
+    steps:
+      - name: evidence-note
+        message: collecting {{label}} evidence
+      - name: running-configuration
+        cmd: show running-config
+        output:
+          save_raw: true
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: call-interface-workflow
+        use: inspect-interface
+        with:
+          interface: Loopback0
+          expected_state: up
+
+      - name: recover-optional-collection
+        block:
+          steps:
+            - name: optional-operational-command
+              cmd: show optional-feature status
+          rescue:
+            - name: record-unavailable-feature
+              message: optional feature is unavailable; continuing safely
+          always:
+            - name: collect-post-check-evidence
+              use: collect-change-evidence
+              with:
+                label: post-check
+
+      # LAB TEMPLATE: replace these commands with the atomic change and
+      # rollback syntax for the target platform.
+      - name: guarded-configuration-change
+        block:
+          steps:
+            - name: capture-pre-change
+              cmd: show running-config interface Loopback123
+              register: loopback_123_before
+            - name: apply-lab-change
+              cmd: configure terminal ; interface Loopback123 ; description workflow-example ; commit
+            - name: verify-lab-change
+              cmd: show running-config interface Loopback123
+              validation:
+                extractor: regex
+                pattern: '(description workflow-example)'
+                condition: eq
+                expected: description workflow-example
+          rollback:
+            - name: rollback-last-commit
+              cmd: rollback configuration last 1
+          always:
+            - name: final-interface-state
+              cmd: show running-config interface Loopback123
+
