@@ -159,6 +159,9 @@ type deviceVariableState struct {
 
 var failureLogMu sync.Mutex
 
+// version is replaced at release build time with the Git tag.
+var version = "dev"
+
 type stepExecutionContext struct {
 	hostname   string
 	ip         string
@@ -1506,6 +1509,7 @@ func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner fun
 func main() {
 	// CLI flags
 	var jsonOut bool
+	var showVersion bool
 	var cliFailOnFail bool
 	var cliCredsInput bool
 	var configFile string
@@ -1515,9 +1519,14 @@ func main() {
 	flag.StringVar(&cliInventoryFile, "inventory", "", "path to inventory file")
 	flag.StringVar(&cliParsersFile, "parsers", "", "path to parser module file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.BoolVar(&cliCredsInput, "creds_input", false, "prompt for username and password interactively")
 	flag.Parse()
+	if showVersion {
+		fmt.Printf("network-collector %s\n", version)
+		return
+	}
 
 	loadConfig(configFile)
 	failOnFail := viper.GetBool("fail_on_fail")

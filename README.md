@@ -12,6 +12,14 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 
 ## Installation
 
+Download a platform archive from the [GitHub releases page](https://github.com/gwoodwa1/network-collector/releases), extract it, and run:
+
+```bash
+./network-collector --version
+```
+
+To build from source instead:
+
 1. **Clone the repository:**
 
     ```bash

@@ -1,0 +1,56 @@
+version: 2
+
+project_name: network-collector
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: network-collector
+    main: ./cmd/network-collector
+    binary: network-collector
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: network-collector
+    ids:
+      - network-collector
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - VERSION
+      - config.yaml
+      - inventory.yaml
+      - parsers.yaml
+      - skills.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  prerelease: auto
+  header: |
+    Network Collector v{{ .Version }} is the first stable release.
+
+    See `CHANGELOG.md` for highlights and the included example configuration files for a complete starting point.
