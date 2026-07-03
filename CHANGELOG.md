@@ -6,6 +6,7 @@ All notable changes to Network Collector are documented here.
 
 - Migrated the application to the maintained `go-viper/mapstructure/v2` configuration decoder.
 - Added weekly dependency update pull requests with automatic dependency-file and test verification.
+- Added safe local CLI steps with templated arguments, temporary file inputs, timeouts, output registration, and validation support.
 
 ## [1.0.1] - 2026-07-03
 

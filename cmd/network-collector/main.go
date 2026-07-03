@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,9 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +42,13 @@ type SSHProbeConfig struct {
 	PostWaitSeconds int `mapstructure:"post_wait_seconds" yaml:"post_wait_seconds"`
 }
 
+type LocalCommandConfig struct {
+	Command        string            `mapstructure:"command" yaml:"command"`
+	Args           []string          `mapstructure:"args" yaml:"args"`
+	Inputs         map[string]string `mapstructure:"inputs" yaml:"inputs"`
+	TimeoutSeconds int               `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+}
+
 type ValidationActionConfig struct {
 	Action  string            `mapstructure:"action" yaml:"action"`
 	Command string            `mapstructure:"cmd" yaml:"cmd"`
@@ -55,6 +65,7 @@ type StepConfig struct {
 	WaitSeconds    int                     `mapstructure:"wait_seconds" yaml:"wait_seconds"`
 	ReturnToPrompt *bool                   `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
 	SSHProbe       *SSHProbeConfig         `mapstructure:"ssh_probe" yaml:"ssh_probe"`
+	Local          *LocalCommandConfig     `mapstructure:"local" yaml:"local"`
 	Validation     *ValidationConfig       `mapstructure:"validation" yaml:"validation"`
 	Validations    []ValidationConfig      `mapstructure:"validations" yaml:"validations"`
 	Retry          *RetryConfig            `mapstructure:"retry" yaml:"retry"`
@@ -273,6 +284,75 @@ func renderExpectedValue(expected interface{}, vars map[string]string) (interfac
 		return rendered, nil
 	}
 	return expected, nil
+}
+
+func executeLocalCommand(config LocalCommandConfig, vars map[string]string) (string, string, error) {
+	if config.TimeoutSeconds < 0 {
+		return "", "", fmt.Errorf("local.timeout_seconds must be greater than or equal to 0")
+	}
+	tempDir, err := os.MkdirTemp("", "network-collector-local-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create local command workspace: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	localVars := make(map[string]string, len(vars)+len(config.Inputs))
+	for key, value := range vars {
+		localVars[key] = value
+	}
+	inputNames := make([]string, 0, len(config.Inputs))
+	for name := range config.Inputs {
+		inputNames = append(inputNames, name)
+	}
+	sort.Strings(inputNames)
+	validName := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	for _, name := range inputNames {
+		if !validName.MatchString(name) {
+			return "", "", fmt.Errorf("local input name %q must be a valid template variable", name)
+		}
+		content, err := renderTemplate(config.Inputs[name], vars)
+		if err != nil {
+			return "", "", fmt.Errorf("render local input %q: %w", name, err)
+		}
+		path := filepath.Join(tempDir, name+".input")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			return "", "", fmt.Errorf("write local input %q: %w", name, err)
+		}
+		localVars[name] = path
+	}
+
+	command, err := renderTemplate(strings.TrimSpace(config.Command), localVars)
+	if err != nil {
+		return "", "", fmt.Errorf("render local command: %w", err)
+	}
+	if command == "" {
+		return "", "", fmt.Errorf("local.command cannot be empty")
+	}
+	args := make([]string, len(config.Args))
+	for index, arg := range config.Args {
+		args[index], err = renderTemplate(arg, localVars)
+		if err != nil {
+			return "", "", fmt.Errorf("render local argument %d: %w", index+1, err)
+		}
+	}
+
+	timeout := time.Duration(config.TimeoutSeconds) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = tempDir
+	output, runErr := cmd.CombinedOutput()
+	display := strings.Join(append([]string{command}, args...), " ")
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(output), display, fmt.Errorf("local command timed out after %s", timeout)
+	}
+	if runErr != nil {
+		return string(output), display, fmt.Errorf("local command failed: %w", runErr)
+	}
+	return string(output), display, nil
 }
 
 func cloneDeviceConfig(device DeviceConfig) DeviceConfig {
@@ -1086,10 +1166,10 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Repeat != nil {
-			if strings.TrimSpace(step.Command) != "" || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				stopDeviceSteps = true
-				err := fmt.Errorf("repeat step cannot also define cmd, wait_seconds, ssh_probe, or validations")
+				err := fmt.Errorf("repeat step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
 				slog.Error("invalid repeat step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				recordStepFailure(ctx, stepName, err.Error())
 				break
@@ -1160,14 +1240,24 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			writeSessionf(ctx.sessionLog, "[step:%s] SSH session re-established\n", stepName)
 		}
 
-		cmd, err := renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
-		if err != nil {
+		if step.Local != nil && strings.TrimSpace(step.Command) != "" {
 			*ctx.runFailed = true
-			slog.Error("error rendering command", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
-			recordStepFailure(ctx, stepName, fmt.Sprintf("command render error: %v", err))
+			err := fmt.Errorf("step cannot define both cmd and local")
+			slog.Error("invalid step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+			recordStepFailure(ctx, stepName, err.Error())
 			continue
 		}
-		if cmd == "" {
+		cmd := ""
+		if step.Local == nil {
+			cmd, err = renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
+			if err != nil {
+				*ctx.runFailed = true
+				slog.Error("error rendering command", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
+				recordStepFailure(ctx, stepName, fmt.Sprintf("command render error: %v", err))
+				continue
+			}
+		}
+		if cmd == "" && step.Local == nil {
 			if wait > 0 || step.SSHProbe != nil || strings.TrimSpace(step.Message) != "" {
 				continue
 			}
@@ -1183,7 +1273,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		for {
 			attempt++
 
-			if client == nil || *client == nil {
+			if step.Local == nil && (client == nil || *client == nil) {
 				*ctx.runFailed = true
 				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
@@ -1191,9 +1281,16 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				break
 			}
 
-			output, err := (*client).Execute(cmd)
+			var output string
+			var commandDisplay string
+			if step.Local != nil {
+				output, commandDisplay, err = executeLocalCommand(*step.Local, ctx.variables)
+			} else {
+				commandDisplay = cmd
+				output, err = (*client).Execute(cmd)
+			}
 			if err != nil {
-				if !shouldReturnToPrompt(step.ReturnToPrompt) {
+				if step.Local == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
 					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
 					if err := closeSSHClient(*client); err != nil {
@@ -1205,14 +1302,18 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				}
 				*ctx.runFailed = true
 				slog.Error("error executing step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
-				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n", stepName, err)
+				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n%s", stepName, err, output)
 				recordStepFailure(ctx, stepName, fmt.Sprintf("command error: %v", err))
 				break
 			}
 
-			writeSessionf(ctx.sessionLog, "\n[step:%s] device=%s command=%q\n%s\n", stepName, ctx.hostname, cmd, output)
+			commandKind := "device"
+			if step.Local != nil {
+				commandKind = "local"
+			}
+			writeSessionf(ctx.sessionLog, "\n[step:%s] %s command=%q\n%s\n", stepName, commandKind, commandDisplay, output)
 			if !ctx.jsonOut {
-				fmt.Printf("device=%s step=%s command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
+				fmt.Printf("device=%s step=%s %s_command=%q\n%s\n", ctx.hostname, stepName, commandKind, commandDisplay, output)
 			}
 			if err := saveStepArtifact(ctx, step, stepName, attempt, "raw", output); err != nil {
 				*ctx.runFailed = true
@@ -1221,6 +1322,9 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 
 			validationOutput := output
+			if strings.TrimSpace(step.Register) != "" && strings.TrimSpace(step.Parser) == "" {
+				ctx.variables[strings.TrimSpace(step.Register)] = output
+			}
 			if strings.TrimSpace(step.Parser) != "" {
 				parsedOutput, err := parseOutputWithModule(output, step.Parser, ctx.parsers)
 				if err != nil {

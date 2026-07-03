@@ -640,6 +640,47 @@ Use `return_to_prompt: false` for commands that intentionally reboot or disconne
 
 You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
 
+### Running local tools
+
+A step can run an installed local CLI with `local`. Commands are executed directly as an argument list, without a shell. This avoids shell expansion and quoting surprises. Local commands default to a 30-second timeout, and their output can be registered, parsed, validated, and saved like SSH command output.
+
+This example captures Junos routing XML before and after a change, materializes both registered values as temporary files, and passes those files to [route-compare](https://github.com/gwoodwa1/route-compare):
+
+```yaml
+ssh:
+  - host: junos-router-01
+    steps:
+      - name: routes-before
+        cmd: show route | display xml
+        register: routes_before
+
+      # Perform and validate the network change here.
+
+      - name: routes-after
+        cmd: show route | display xml
+        register: routes_after
+
+      - name: compare-routes
+        local:
+          command: routecompare
+          args:
+            - -pre
+            - "{{pre_file}}"
+            - -post
+            - "{{post_file}}"
+            - -vrf
+            - ALL
+          inputs:
+            pre_file: "{{routes_before}}"
+            post_file: "{{routes_after}}"
+          timeout_seconds: 60
+        register: route_comparison
+        output:
+          save_raw: true
+```
+
+Each `inputs` key becomes a template variable containing the path to a private temporary file. Its value is the file content. Temporary inputs are removed when the program exits. The executable must already be installed and discoverable through `PATH`, or `command` must contain its path. A missing executable, timeout, or non-zero exit marks the device run as failed. Shell operators such as pipes and redirects are intentionally unsupported; call a script explicitly when orchestration is needed.
+
 ### Validation semantics
 
 Validation steps in `config.yaml` support extractors and typed comparisons. Use `extractor: regex` for CLI text output and `extractor: gjson` for JSON payloads, including parser output. Use `validation` for one rule, or `validations` for multiple rules. When multiple validations are configured, all rules must pass for the step to trigger `on_pass`; any failed or errored rule triggers `on_fail`.
