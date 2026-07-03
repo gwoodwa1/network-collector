@@ -174,9 +174,12 @@ type deviceValidation struct {
 
 type deviceRunResult struct {
 	index      int
+	hostname   string
+	ip         string
 	aggregated []deviceValidation
 	artifacts  []outputArtifact
 	failed     bool
+	duration   time.Duration
 }
 
 type outputArtifact struct {
@@ -1817,10 +1820,12 @@ func validateExecutionConfig(cfg ExecutionConfig) error {
 	return nil
 }
 
-func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut bool, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) deviceRunResult {
-	result := deviceRunResult{index: index}
+func runSSHDevice(index int, device DeviceConfig, config Config, username, password string, jsonOut, pretty bool, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) (result deviceRunResult) {
+	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
+	result = deviceRunResult{index: index, hostname: hostname, ip: ip}
+	defer func() { result.duration = time.Since(startedAt) }()
 	deviceType := strings.TrimSpace(device.Type)
 
 	if hostname == "" || ip == "" || deviceType == "" {
@@ -1859,7 +1864,7 @@ func runSSHDevice(index int, device DeviceConfig, config Config, username, passw
 
 	opts := sshOptionsForDevice(device)
 	channelLog := io.Writer(sessionLog)
-	if !jsonOut {
+	if !jsonOut && !pretty {
 		channelLog = io.MultiWriter(os.Stdout, sessionLog)
 	}
 	opts = append(opts, ssh.WithChannelLog(channelLog))
@@ -2013,6 +2018,7 @@ func main() {
 	var showVersion bool
 	var cliFailOnFail bool
 	var cliCredsInput bool
+	var prettyOut bool
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -2023,7 +2029,11 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.BoolVar(&cliCredsInput, "creds_input", false, "prompt for username and password interactively")
+	flag.BoolVar(&prettyOut, "pretty", false, "show a coloured human-readable run summary")
 	flag.Parse()
+	if jsonOut {
+		prettyOut = false
+	}
 	if showVersion {
 		fmt.Printf("network-collector %s\n", version)
 		return
@@ -2113,7 +2123,7 @@ func main() {
 		for state.next < len(state.order) && state.order[state.next] != index {
 			state.cond.Wait()
 		}
-		result := runSSHDevice(index, device, config, username, password, jsonOut, parsers, state.variables, runDir)
+		result := runSSHDevice(index, device, config, username, password, jsonOut, prettyOut, parsers, state.variables, runDir)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()
@@ -2153,6 +2163,8 @@ func main() {
 	if jsonOut {
 		out, _ := json.MarshalIndent(aggregated, "", "  ")
 		fmt.Println(string(out))
+	} else if prettyOut {
+		fmt.Print(renderPrettyResults(deviceResults, runFailed, time.Since(runStarted), prettyColourEnabled(os.Stdout)))
 	}
 
 	// Exit non-zero if any validation failed or errored and flag set
