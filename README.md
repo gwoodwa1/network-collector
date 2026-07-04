@@ -252,6 +252,28 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+Inventory hosts may also carry arbitrary labels for runtime targeting:
+
+```yaml
+hosts:
+  - name: core-lon-01
+    address: 192.0.2.10
+    type: cisco_iosxr
+    labels:
+      site: london
+      role: core
+      environment: production
+```
+
+Use `--limit` and `--exclude` to select resolved SSH devices. Expressions support `and`, `or`, `not`, parentheses, `=` and `!=`; label names and the built-in fields `hostname`, `name`, `ip`, `address`, `type`, and `platform` are case-insensitive. Quote values containing spaces.
+
+```bash
+network-collector --limit 'site=london and (role=core or role=edge)'
+network-collector --limit 'environment=production' --exclude 'maintenance=true'
+```
+
+When structured output includes `results.json`, each result records whether its device failed. Use `--rerun-failed artifacts/run-.../results.json` to select only those failed devices on a subsequent run. It may be combined with `--limit` and `--exclude`. Older summaries without device outcomes fall back to hosts with failed or errored validations; connection-only failures require a newly generated summary.
+
 ### SSH security profiles
 
 Existing configurations remain compatible. When `ssh_security` is omitted, Network Collector uses the previous behavior: the `compatibility` algorithm profile with host-key verification disabled. This avoids breaking legacy device estates. At startup, one inventory-wide security summary reports profile and host-key-policy counts instead of repeating warnings for every connection.
@@ -831,9 +853,44 @@ output:
   save_raw: true
   save_parsed: true
   summary_file: results.json
+  events_file: events.jsonl
 ```
 
 Each invocation creates a timestamped run directory. Raw and parsed output is stored per inventory entry, step, and attempt, so concurrent devices and retries never overwrite one another. `results.json` contains run timestamps, overall failure state, validations, and the paths of all saved artifacts. Files are written atomically.
+
+When `events_file` is set, lifecycle events are appended as JSON Lines. Relative paths are placed in the run directory. Events include `run.started`, `device.started`, `step.started`, `validation.completed`, `artifact.written`, `device.completed`, and `run.completed`. Event-sink errors are logged as warnings and do not interrupt device work. `--events-jsonl PATH` overrides the configured event file for one invocation.
+
+### Reusable orchestration package
+
+The CLI's inventory targeting and device scheduling are available to other Go programs through `pkg/orchestrator`. The package provides:
+
+- Generic bounded execution with canary staging, start intervals, failure thresholds, and context cancellation
+- Compiled inventory selectors over standard target fields and arbitrary labels
+- Lifecycle `Event` and `EventSink` contracts plus a concurrency-safe JSONL sink
+- Shared target and device-outcome types
+
+The scheduler is generic, so an embedding application keeps its own task and result types:
+
+```go
+policy := orchestrator.Policy{
+    MaxParallel:      5,
+    CanaryCount:      1,
+    FailureThreshold: 2,
+}
+
+results, stopped := orchestrator.Run(ctx, devices, policy,
+    func(ctx context.Context, index int, device Device) orchestrator.Outcome[Result] {
+        result, err := collect(ctx, device)
+        return orchestrator.Outcome[Result]{
+            Index: index,
+            Value: result,
+            Failed: err != nil,
+        }
+    },
+)
+```
+
+The package deliberately owns orchestration policy rather than transport or workflow syntax. Embedders can use Network Collector's drivers, their own device clients, or test executors without coupling the scheduler to the CLI configuration model.
 
 Sensitive steps can override the global raw or parsed setting:
 

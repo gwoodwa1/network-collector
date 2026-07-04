@@ -41,7 +41,7 @@ func sanitizeLogName(value string) string {
 }
 
 func outputEnabled(config Config, devices []DeviceConfig) bool {
-	if config.Output.SaveRaw || config.Output.SaveParsed || strings.TrimSpace(config.Output.SummaryFile) != "" {
+	if config.Output.SaveRaw || config.Output.SaveParsed || strings.TrimSpace(config.Output.SummaryFile) != "" || strings.TrimSpace(config.Output.EventsFile) != "" {
 		return true
 	}
 	for _, device := range devices {
@@ -135,6 +135,7 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 			Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Attempt: attempt, Kind: kind, Path: path,
 		})
 	}
+	ctx.events.emit(lifecycleEvent{Type: "artifact.written", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"attempt": attempt, "kind": kind, "path": path}})
 	return nil
 }
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
+	"github.com/gwoodwa1/network-collector/pkg/orchestrator"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 	"github.com/sirikothe/gotextfsm"
 	"golang.org/x/term"
@@ -152,6 +153,7 @@ type DeviceConfig struct {
 	Validation       *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
 	Validations      []ValidationConfig `mapstructure:"validations" yaml:"validations"`
 	SSHSecurity      *SSHSecurityConfig `mapstructure:"ssh_security" yaml:"ssh_security"`
+	Labels           map[string]string  `mapstructure:"labels" yaml:"labels"`
 }
 
 type SSHSecurityConfig struct {
@@ -201,6 +203,7 @@ type OutputConfig struct {
 	SaveRaw     bool   `mapstructure:"save_raw" yaml:"save_raw"`
 	SaveParsed  bool   `mapstructure:"save_parsed" yaml:"save_parsed"`
 	SummaryFile string `mapstructure:"summary_file" yaml:"summary_file"`
+	EventsFile  string `mapstructure:"events_file" yaml:"events_file"`
 }
 
 type StepOutputConfig struct {
@@ -224,6 +227,7 @@ type InventoryHostConfig struct {
 	Timeout          int                `yaml:"timeout"`
 	OperationTimeout int                `yaml:"operation_timeout"`
 	SSHSecurity      *SSHSecurityConfig `yaml:"ssh_security"`
+	Labels           map[string]string  `yaml:"labels"`
 }
 
 type InventoryGroupConfig struct {
@@ -289,7 +293,10 @@ type runSummary struct {
 	Failed      bool               `json:"failed"`
 	Validations []deviceValidation `json:"validations"`
 	Artifacts   []outputArtifact   `json:"artifacts"`
+	Devices     []deviceOutcome    `json:"devices,omitempty"`
 }
+
+type deviceOutcome = orchestrator.DeviceOutcome
 
 type deviceVariableState struct {
 	mu        sync.Mutex
@@ -329,6 +336,7 @@ type stepExecutionContext struct {
 	approvalWriter io.Writer
 	artifactPrefix string
 	factsDefaults  FactsDefaultsConfig
+	events         *eventDispatcher
 }
 
 type approvalAnswer struct {
@@ -644,7 +652,19 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 		copied := *host.SSHSecurity
 		resolved.SSHSecurity = &copied
 	}
+	resolved.Labels = cloneLabels(host.Labels)
+	for key, value := range device.Labels {
+		resolved.Labels[key] = value
+	}
 	return resolved
+}
+
+func cloneLabels(labels map[string]string) map[string]string {
+	cloned := make(map[string]string, len(labels))
+	for key, value := range labels {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func resolveInventoryPath(inventoryFile, configFile string) string {
@@ -1742,6 +1762,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if stepName == "" {
 			stepName = "unnamed"
 		}
+		ctx.events.emit(lifecycleEvent{Type: "step.started", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName})
 
 		run, err := evaluateWhen(step.When, ctx.variables)
 		if err != nil {
@@ -2041,6 +2062,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				jb, _ := json.MarshalIndent(vres, "", "  ")
 				writeSessionf(ctx.sessionLog, "[step:%s] validation result %d:\n%s\n", stepName, idx+1, string(jb))
 				*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: vres})
+				ctx.events.emit(lifecycleEvent{Type: "validation.completed", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"status": vres.Status, "pass": vres.Pass}})
 			}
 
 			for _, vres := range results {
@@ -2101,12 +2123,17 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 	return stopDeviceSteps
 }
 
-func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string) (result deviceRunResult) {
+func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
 	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
 	result = deviceRunResult{index: index, hostname: hostname, ip: ip}
-	defer func() { result.duration = time.Since(startedAt) }()
+	events.emit(lifecycleEvent{Type: "device.started", Hostname: hostname, IP: ip})
+	defer func() {
+		result.duration = time.Since(startedAt)
+		failed := result.failed
+		events.emit(lifecycleEvent{Type: "device.completed", Hostname: hostname, IP: ip, Failed: &failed, Data: map[string]interface{}{"duration_ns": result.duration.Nanoseconds()}})
+	}()
 	deviceType := strings.TrimSpace(device.Type)
 
 	if hostname == "" || ip == "" || deviceType == "" {
@@ -2170,6 +2197,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		approveAll: approveAll, approvalInput: approvals, approvalWriter: approvalWriter,
 		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
 		factsDefaults:  config.Facts,
+		events:         events,
 	}
 	if executeSteps(&ctx, &client, steps) {
 		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
@@ -2196,104 +2224,24 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	return result
 }
 
-func runDeviceBatch(devices []DeviceConfig, offset int, cfg ExecutionConfig, lastStart *time.Time, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, int, bool) {
-	maxParallel := cfg.MaxParallel
-	if maxParallel == 0 {
-		maxParallel = 1
-	}
-	interval := time.Duration(cfg.StartIntervalSeconds) * time.Second
-	results := make([]deviceRunResult, 0, len(devices))
-	completed := make(chan deviceRunResult, len(devices))
-	active, failures, next := 0, 0, 0
-	stopped := false
-
-	receive := func() {
-		result := <-completed
-		active--
-		if result.failed {
-			failures++
-		}
-		results = append(results, result)
-	}
-
-	for next < len(devices) {
-		if cfg.FailureThreshold > 0 && failures >= cfg.FailureThreshold {
-			stopped = true
-			break
-		}
-		if active >= maxParallel {
-			receive()
-			continue
-		}
-
-		if !lastStart.IsZero() && interval > 0 {
-			wait := time.Until(lastStart.Add(interval))
-			if wait > 0 {
-				timer := time.NewTimer(wait)
-				select {
-				case result := <-completed:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					active--
-					if result.failed {
-						failures++
-					}
-					results = append(results, result)
-					continue
-				case <-timer.C:
-				}
-			}
-		}
-
-		index := offset + next
-		device := devices[next]
-		next++
-		active++
-		*lastStart = time.Now()
-		slog.Info("starting scheduled device", "hostname", device.Hostname, "ip", device.IP, "active", active, "max_parallel", maxParallel)
-		go func() { completed <- runner(index, device) }()
-	}
-	for active > 0 {
-		receive()
-	}
-	return results, failures, stopped
-}
-
 func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, bool) {
-	canaryCount := cfg.CanaryCount
-	if canaryCount > len(devices) {
-		canaryCount = len(devices)
+	outcomes, stopped := orchestrator.Run(context.Background(), devices, orchestrator.Policy{
+		MaxParallel:      cfg.MaxParallel,
+		StartInterval:    time.Duration(cfg.StartIntervalSeconds) * time.Second,
+		CanaryCount:      cfg.CanaryCount,
+		FailureThreshold: cfg.FailureThreshold,
+	}, func(ctx context.Context, index int, device DeviceConfig) orchestrator.Outcome[deviceRunResult] {
+		result := runner(index, device)
+		return orchestrator.Outcome[deviceRunResult]{Index: index, Value: result, Failed: result.failed}
+	})
+	results := make([]deviceRunResult, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		results = append(results, outcome.Value)
 	}
-	allResults := make([]deviceRunResult, 0, len(devices))
-	lastStart := time.Time{}
-	totalFailures := 0
-
-	if canaryCount > 0 {
-		canaryCfg := cfg
-		canaryCfg.FailureThreshold = 0
-		results, failures, _ := runDeviceBatch(devices[:canaryCount], 0, canaryCfg, &lastStart, runner)
-		allResults = append(allResults, results...)
-		totalFailures += failures
-		if failures > 0 {
-			slog.Error("canary stage failed; remaining devices will not be started", "canary_failures", failures)
-			return allResults, true
-		}
-	}
-
-	remainingCfg := cfg
-	if cfg.FailureThreshold > 0 {
-		remainingCfg.FailureThreshold = cfg.FailureThreshold - totalFailures
-	}
-	results, _, stopped := runDeviceBatch(devices[canaryCount:], canaryCount, remainingCfg, &lastStart, runner)
-	allResults = append(allResults, results...)
 	if stopped {
-		slog.Error("failure threshold reached; remaining devices will not be started", "failure_threshold", cfg.FailureThreshold)
+		slog.Error("scheduled execution stopped before all devices completed", "failure_threshold", cfg.FailureThreshold, "canary_count", cfg.CanaryCount)
 	}
-	return allResults, stopped
+	return results, stopped
 }
 
 func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, schedule ScheduleConfig, runner func(int, int, DeviceConfig) deviceRunResult, sleep func(time.Duration)) ([]deviceRunResult, bool) {
@@ -2320,15 +2268,21 @@ func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, sch
 	return all, stopped
 }
 
-func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, parsers map[string]ParserModuleConfig, runDir string, index int) (result deviceRunResult) {
+func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, parsers map[string]ParserModuleConfig, runDir string, index int, events *eventDispatcher) (result deviceRunResult) {
 	started := time.Now()
 	result = deviceRunResult{index: index, hostname: "local_steps"}
-	defer func() { result.duration = time.Since(started) }()
+	events.emit(lifecycleEvent{Type: "device.started", Hostname: "local_steps"})
+	defer func() {
+		result.duration = time.Since(started)
+		failed := result.failed
+		events.emit(lifecycleEvent{Type: "device.completed", Hostname: "local_steps", Failed: &failed, Data: map[string]interface{}{"duration_ns": result.duration.Nanoseconds()}})
+	}()
 	variables, _ := configVariables(config.Vars)
 	ctx := stepExecutionContext{
 		hostname: "local_steps", jsonOut: jsonOut, sessionLog: io.Discard,
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
 		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
+		events: events,
 	}
 
 	for _, step := range steps {
@@ -2336,6 +2290,7 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 		if stepName == "" {
 			stepName = "unnamed"
 		}
+		events.emit(lifecycleEvent{Type: "step.started", Hostname: "local_steps", Step: stepName})
 		if step.Local == nil {
 			result.failed = true
 			slog.Error("invalid playbook local step", "step", stepName, "error", "local configuration is required")
@@ -2393,6 +2348,7 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 			}
 			for _, validationResult := range validationResults {
 				result.aggregated = append(result.aggregated, deviceValidation{Hostname: "local_steps", Result: validationResult})
+				events.emit(lifecycleEvent{Type: "validation.completed", Hostname: "local_steps", Step: stepName, Data: map[string]interface{}{"status": validationResult.Status, "pass": validationResult.Pass}})
 				if step.Register != "" && validationResult.RawExtract != "" {
 					variables[step.Register] = validationResult.RawExtract
 				}
@@ -2428,9 +2384,17 @@ func main() {
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
+	var limitExpression string
+	var excludeExpression string
+	var rerunFailedFile string
+	var eventsFile string
 	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
 	flag.StringVar(&cliInventoryFile, "inventory", "", "path to inventory file")
 	flag.StringVar(&cliParsersFile, "parsers", "", "path to parser module file")
+	flag.StringVar(&limitExpression, "limit", "", "inventory selector expression to include (for example: site=london and role=core)")
+	flag.StringVar(&excludeExpression, "exclude", "", "inventory selector expression to exclude")
+	flag.StringVar(&rerunFailedFile, "rerun-failed", "", "run only devices marked failed in a previous results.json")
+	flag.StringVar(&eventsFile, "events-jsonl", "", "append lifecycle events as JSON Lines to this file")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
@@ -2457,24 +2421,14 @@ func main() {
 		}
 	})
 
-	var username, password string
-	if len(config.SSH) > 0 {
-		username, password, err = credentials.ResolveCredentials(cliCredsInput, nil, nil)
-		if err != nil {
-			slog.Error("error reading credentials", "error", err)
-			os.Exit(1)
-		}
-		if username == "" || password == "" {
-			slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
-			os.Exit(1)
-		}
-	}
-
 	if strings.TrimSpace(cliInventoryFile) != "" {
 		config.InventoryFile = cliInventoryFile
 	}
 	if strings.TrimSpace(cliParsersFile) != "" {
 		config.ParsersFile = cliParsersFile
+	}
+	if strings.TrimSpace(eventsFile) != "" {
+		config.Output.EventsFile = eventsFile
 	}
 
 	inventory, err := loadOptionalInventory(config.InventoryFile, configFile)
@@ -2487,6 +2441,40 @@ func main() {
 	if err != nil {
 		slog.Error("error resolving SSH inventory", "error", err)
 		os.Exit(1)
+	}
+	includeSelector, err := parseDeviceSelector(limitExpression)
+	if err != nil {
+		slog.Error("invalid --limit selector", "error", err)
+		os.Exit(1)
+	}
+	excludeSelector, err := parseDeviceSelector(excludeExpression)
+	if err != nil {
+		slog.Error("invalid --exclude selector", "error", err)
+		os.Exit(1)
+	}
+	var replayDevices map[string]bool
+	if strings.TrimSpace(rerunFailedFile) != "" {
+		replayDevices, err = loadFailedDevices(rerunFailedFile)
+		if err != nil {
+			slog.Error("error reading failed-device replay summary", "path", rerunFailedFile, "error", err)
+			os.Exit(1)
+		}
+	}
+	sshDevices = filterDevices(sshDevices, includeSelector, excludeSelector, replayDevices)
+	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(sshDevices) == 0 {
+		slog.Warn("inventory selection matched no SSH devices")
+	}
+	var username, password string
+	if len(sshDevices) > 0 {
+		username, password, err = credentials.ResolveCredentials(cliCredsInput, nil, nil)
+		if err != nil {
+			slog.Error("error reading credentials", "error", err)
+			os.Exit(1)
+		}
+		if username == "" || password == "" {
+			slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
+			os.Exit(1)
+		}
 	}
 	for _, device := range sshDevices {
 		if err := validateSSHSecurity(effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity)); err != nil {
@@ -2517,6 +2505,21 @@ func main() {
 		}
 		slog.Info("recording structured output", "run_id", runID, "directory", runDir)
 	}
+	events := &eventDispatcher{runID: runID}
+	if configured := strings.TrimSpace(config.Output.EventsFile); configured != "" {
+		eventPath := configured
+		if !filepath.IsAbs(eventPath) && runDir != "" {
+			eventPath = filepath.Join(runDir, eventPath)
+		}
+		sink, sinkErr := newJSONLEventSink(eventPath)
+		if sinkErr != nil {
+			slog.Error("error opening lifecycle event output", "path", eventPath, "error", sinkErr)
+			os.Exit(1)
+		}
+		events.sinks = append(events.sinks, sink)
+		slog.Info("recording lifecycle events", "path", eventPath)
+	}
+	events.emit(lifecycleEvent{Type: "run.started", Data: map[string]interface{}{"playbook": config.NamePlaybook, "device_count": len(sshDevices)}})
 
 	if err := validateExecutionConfig(config.Execution); err != nil {
 		slog.Error("invalid execution configuration", "error", err)
@@ -2550,7 +2553,7 @@ func main() {
 		for state.next < len(state.order) && state.order[state.next] != index {
 			state.cond.Wait()
 		}
-		result := runSSHDevice(index, occurrence, device, config, username, password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir)
+		result := runSSHDevice(index, occurrence, device, config, username, password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()
@@ -2563,7 +2566,7 @@ func main() {
 	}
 	deviceResultCount := len(sshDevices) * occurrences
 	if len(config.LocalSteps) > 0 {
-		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, deviceResultCount))
+		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, deviceResultCount, events))
 	}
 	runFailed := schedulingStopped
 	resultsByIndex := make(map[int]deviceRunResult, len(deviceResults))
@@ -2575,6 +2578,7 @@ func main() {
 	}
 	var aggregated []deviceValidation
 	var artifacts []outputArtifact
+	var outcomes []deviceOutcome
 	resultCount := deviceResultCount
 	if len(config.LocalSteps) > 0 {
 		resultCount++
@@ -2583,12 +2587,13 @@ func main() {
 		if result, ok := resultsByIndex[index]; ok {
 			aggregated = append(aggregated, result.aggregated...)
 			artifacts = append(artifacts, result.artifacts...)
+			outcomes = append(outcomes, deviceOutcome{Hostname: result.hostname, IP: result.ip, Failed: result.failed, Duration: result.duration})
 		}
 	}
 	if runDir != "" {
 		summaryPath, err := writeRunSummary(config.Output, runDir, runSummary{
 			RunID: runID, Playbook: config.NamePlaybook, StartedAt: runStarted, CompletedAt: time.Now(),
-			Failed: runFailed, Validations: aggregated, Artifacts: artifacts,
+			Failed: runFailed, Validations: aggregated, Artifacts: artifacts, Devices: outcomes,
 		})
 		if err != nil {
 			runFailed = true
@@ -2597,6 +2602,9 @@ func main() {
 			slog.Info("wrote run summary", "path", summaryPath)
 		}
 	}
+	failed := runFailed
+	events.emit(lifecycleEvent{Type: "run.completed", Failed: &failed, Data: map[string]interface{}{"duration_ns": time.Since(runStarted).Nanoseconds(), "device_results": len(deviceResults)}})
+	events.close()
 
 	// Emit aggregated JSON if requested
 	if jsonOut {

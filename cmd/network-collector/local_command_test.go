@@ -52,7 +52,7 @@ func TestRunPlaybookLocalStepsRunsOnceAndSharesVariables(t *testing.T) {
 				Extractor: "regex", Pattern: `(baseline)`, Condition: "eq", Expected: "baseline",
 			},
 		},
-	}, Config{}, true, nil, "", 0)
+	}, Config{}, true, nil, "", 0, nil)
 
 	if result.failed {
 		t.Fatal("runPlaybookLocalSteps() unexpectedly failed")
