@@ -1779,8 +1779,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 8 {
-		t.Fatalf("expected inventory plus seven workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 9 {
+		t.Fatalf("expected inventory plus eight workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1792,13 +1792,13 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 			t.Fatalf("failed to load workflow example %s: %v", path, err)
 		}
 		inventory, err := loadOptionalInventory(config.InventoryFile, path)
-		if err != nil || inventory == nil || len(inventory.Hosts) != 1 {
+		if err != nil || inventory == nil || len(inventory.Hosts) == 0 {
 			t.Fatalf("invalid inventory for %s: inventory=%+v error=%v", path, inventory, err)
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 7 {
-		t.Fatalf("expected seven loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 8 {
+		t.Fatalf("expected eight loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1829,6 +1829,11 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, filepath.Join(directory, "07-interface-turnup.yaml"))
 	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 {
 		t.Fatalf("interface turn-up example is incomplete: parsers=%+v config=%+v error=%v", turnupParsers, turnup, err)
+	}
+	security := loaded["08-ssh-security-profiles.yaml"]
+	securityInventory, err := loadOptionalInventory(security.InventoryFile, filepath.Join(directory, "08-ssh-security-profiles.yaml"))
+	if err != nil || security.SSHSecurity.Profile != "auto" || securityInventory == nil || len(securityInventory.Hosts) != 2 || securityInventory.Hosts[1].SSHSecurity == nil || securityInventory.Hosts[1].SSHSecurity.Profile != "legacy" {
+		t.Fatalf("SSH security profile example is incomplete: inventory=%+v config=%+v error=%v", securityInventory, security, err)
 	}
 }
 

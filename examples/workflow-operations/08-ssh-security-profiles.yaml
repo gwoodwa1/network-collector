@@ -1,0 +1,33 @@
+name_playbook: Mixed modern and legacy SSH estate
+inventory_file: inventory/security-profiles.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+# Auto tries the SSH library's standard algorithms first and retries with the
+# compatibility algorithms only when negotiation reports no common algorithm.
+# Authentication, host-key, timeout, DNS, and connection failures never cause
+# a legacy retry.
+ssh_security:
+  profile: auto
+
+  # This preserves the previous host-key behavior for backwards compatibility.
+  # Prefer `known_hosts` after customer keys have been enrolled:
+  # host_key_policy: known_hosts
+  # known_hosts_file: ~/.ssh/known_hosts
+  host_key_policy: insecure
+
+execution:
+  max_parallel: 2
+
+ssh:
+  - group: mixed-estate
+    steps:
+      - name: identify-negotiated-estate
+        message: collecting through the global auto profile or inventory legacy override
+
+      - name: show-version
+        cmd: show version
+
+      - name: show-platform
+        cmd: show platform
+        parser: xr_show_platform

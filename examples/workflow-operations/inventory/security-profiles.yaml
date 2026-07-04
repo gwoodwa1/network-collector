@@ -1,0 +1,18 @@
+hosts:
+  - name: standard-router
+    ip: 192.0.2.20
+    type: cisco_iosxr
+
+  - name: legacy-router
+    ip: 192.0.2.21
+    type: cisco_iosxr
+    ssh_security:
+      profile: legacy
+      host_key_policy: insecure
+
+groups:
+  mixed-estate:
+    hosts:
+      - standard-router
+      - legacy-router
+

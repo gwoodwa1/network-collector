@@ -11,6 +11,7 @@ These playbooks demonstrate the workflow language as complete configurations. Th
 | `05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
 | `06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
 | `07-interface-turnup.yaml` | approval, interface configuration, light levels, error counters, rollback |
+| `08-ssh-security-profiles.yaml` | global `auto` negotiation, inventory-level `legacy` override, host-key migration |
 
 Run one example from the repository root:
 
@@ -37,3 +38,5 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 `06-custom-variables.yaml` imports shared values from `vars/common.yaml` and uses them throughout the workflow. This is a useful pattern for keeping site, environment, interface, expected-state, and change-window data separate from reusable workflow logic.
 
 `07-interface-turnup.yaml` is a guarded interface activation pattern. It verifies the port exists, asks for approval, commits `no shutdown`, checks line protocol, parses Rx/Tx optical power and alarm flags, verifies zero input/CRC/output errors, and returns the interface to shutdown if a post-check fails. Its multiline IOS-XR configuration commands are a lab template and must be tested against the target driver and commit policy.
+
+`08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
