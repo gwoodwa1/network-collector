@@ -10,6 +10,9 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 - **gNMI**: Collect data using the gNMI protocol.
 - **RESTCONF**: Fetch data using RESTCONF from devices supporting this protocol.
 
+
+<img width="1672" height="941" alt="info_graphic" src="https://github.com/user-attachments/assets/7a1fe8ff-9b94-4539-8314-24fcdc5220f7" />
+
 ## Installation
 
 Download a platform archive from the [GitHub releases page](https://github.com/gwoodwa1/network-collector/releases), extract it, and run:
