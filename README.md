@@ -63,6 +63,30 @@ To build from source instead:
     ./network-collector --creds_input
     ```
 
+### Docker
+
+Build the multi-stage image. The final Alpine image runs as a non-root user and includes only the collector, CA roots, timezone data, OpenSSH client, and the default configuration/parser assets:
+
+```bash
+docker build --build-arg VERSION=dev -t network-collector:local .
+```
+
+Run with credentials supplied through the environment and mount configuration read-only. Mount `/workspace/artifacts` and `/workspace/session_logs` when the output must persist:
+
+```bash
+docker run --rm \
+  -e NET_USER \
+  -e NET_PASSWORD \
+  -v "$PWD/config.yaml:/workspace/config.yaml:ro" \
+  -v "$PWD/inventory.yaml:/workspace/inventory.yaml:ro" \
+  -v "$PWD/parsers.yaml:/workspace/parsers.yaml:ro" \
+  -v "$PWD/artifacts:/workspace/artifacts" \
+  -v "$PWD/session_logs:/workspace/session_logs" \
+  network-collector:local --fail-on-fail
+```
+
+The container uses `/workspace` as its working directory. Local workflow steps can execute only programs installed in the image; build a derived runtime image when additional local tools are required.
+
 ## Package usage
 
 Import the SSH module into your Go program:
