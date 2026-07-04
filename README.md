@@ -254,7 +254,7 @@ Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group
 
 ### SSH security profiles
 
-Existing configurations remain compatible. When `ssh_security` is omitted, Network Collector uses the previous behavior: the `compatibility` algorithm profile with host-key verification disabled. This avoids breaking legacy device estates, but emits warnings so the policy is visible.
+Existing configurations remain compatible. When `ssh_security` is omitted, Network Collector uses the previous behavior: the `compatibility` algorithm profile with host-key verification disabled. This avoids breaking legacy device estates. At startup, one inventory-wide security summary reports profile and host-key-policy counts instead of repeating warnings for every connection.
 
 ```yaml
 ssh_security:
@@ -267,7 +267,7 @@ Available profiles:
 - `compatibility`: preserves the previous cipher and key-exchange behavior.
 - `auto`: tries the SSH library's standard algorithm set first, then retries with legacy compatibility algorithms only after a recognizable algorithm-negotiation failure.
 - `modern`: uses only the SSH library's standard algorithm set and never falls back.
-- `legacy`: explicitly enables the compatibility algorithm set and emits a warning.
+- `legacy`: explicitly enables the compatibility algorithm set and appears in the startup warning summary.
 
 Auto fallback never occurs for authentication failures, host-key failures, timeouts, DNS errors, or refused connections.
 

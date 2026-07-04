@@ -1671,6 +1671,19 @@ ssh:
 	}
 }
 
+func TestSSHSecuritySummaryCountsResolvedPolicies(t *testing.T) {
+	global := SSHSecurityConfig{Profile: "auto", HostKeyPolicy: "known_hosts"}
+	devices := []DeviceConfig{
+		{Hostname: "standard"},
+		{Hostname: "legacy", SSHSecurity: &SSHSecurityConfig{Profile: "legacy", HostKeyPolicy: "insecure"}},
+		{Hostname: "compatibility", SSHSecurity: &SSHSecurityConfig{Profile: "compatibility", HostKeyPolicy: "insecure"}},
+	}
+	summary := summarizeSSHSecurity(global, devices)
+	if summary.Auto != 1 || summary.Legacy != 1 || summary.Compatibility != 1 || summary.Insecure != 2 || summary.Verified != 1 {
+		t.Fatalf("unexpected SSH security summary: %+v", summary)
+	}
+}
+
 func TestLoadConfigComposesImports(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")

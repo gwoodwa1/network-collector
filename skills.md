@@ -60,6 +60,7 @@ Rules:
 - Omitting `ssh_security` preserves the prior compatibility algorithms and disabled host-key checking.
 - `auto` falls back only for algorithm negotiation errors, never authentication, identity, timeout, or connection failures.
 - Device and inventory-host `ssh_security` maps override individual global settings.
+- The CLI emits one startup SSH policy summary across the resolved inventory; only actual auto-mode downgrade retries produce per-connection warnings.
 - `vars_files` imports variable maps relative to the declaring config; globs and multiple files are supported.
 - `vars` defines inline values and overrides imported variable-file values.
 - `execution` is optional. Without it, SSH devices run serially as before.

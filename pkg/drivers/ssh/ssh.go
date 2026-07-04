@@ -194,18 +194,6 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 		}
 		return c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, "legacy", policy)
 	}
-	if profile == "compatibility" || profile == "legacy" {
-		slog.Warn("using SSH profile with legacy compatibility algorithms", "host", trimmedHost, "profile", profile)
-		if c.channelLog != nil {
-			_, _ = fmt.Fprintf(c.channelLog, "WARNING: SSH host %s is using %s profile with legacy algorithms\n", trimmedHost, profile)
-		}
-	}
-	if policy == "insecure" {
-		slog.Warn("SSH host key verification is disabled", "host", trimmedHost)
-		if c.channelLog != nil {
-			_, _ = fmt.Fprintf(c.channelLog, "WARNING: SSH host key verification is disabled for %s\n", trimmedHost)
-		}
-	}
 	return c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, profile, policy)
 }
 
