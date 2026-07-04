@@ -4,6 +4,7 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added cross-feature regression tests for approval scheduling, recurring artifacts, rollback recovery metadata, and parallel variable scope/merging.
 - Began decomposing the CLI monolith by extracting configuration/security loading and output/logging, and consolidated repetitive SSH compatibility warnings into one startup policy summary.
 - Added backwards-compatible SSH security profiles with modern-first negotiation fallback, per-device overrides, optional known-host verification, and explicit legacy/insecure warnings.
 - Added a guarded interface turn-up example with approval, optical telemetry parsing, error-counter validation, and rollback.
