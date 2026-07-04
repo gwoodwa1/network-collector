@@ -37,11 +37,14 @@ archives:
       - README.md
       - CHANGELOG.md
       - VERSION
+      - Dockerfile
+      - .dockerignore
       - config.yaml
       - inventory.yaml
       - parsers.yaml
       - parser_templates/**/*
       - examples/modular/*
+      - examples/workflow-operations/**/*
       - skills.md
 
 checksum:

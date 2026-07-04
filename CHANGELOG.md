@@ -4,6 +4,13 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+## [1.0.2] - 2026-07-04
+
+- Added inventory labels with Boolean `--limit` and `--exclude` selectors, plus `--rerun-failed` targeting from previous structured run summaries.
+- Added non-fatal JSONL lifecycle events for runs, devices, steps, validations, and artifacts.
+- Extracted a reusable Go orchestration package with bounded concurrency, canary staging, start intervals, failure thresholds, context cancellation, selectors, event contracts, and shared result types.
+- Added a multi-stage, non-root Alpine container image with a minimal runtime, OpenSSH support, bundled parser assets, and persistent output mount guidance.
+- Expanded the workflow cookbook with labelled inventories, selector recipes, canary rollout, failed-device replay, lifecycle events, guarded reload/reconnect handling, and stronger example validation.
 - Added NETCONF-first, SSH/TextFSM-fallback facts gathering with OpenConfig, native, and combined JSON formats; IOS-XR coverage includes system, platform, interfaces, LLDP, BGP, IS-IS, and LDP.
 - Added a local gNMI server integration test, parser fuzzing, NETCONF lifecycle tests, and full SSH auto-fallback control-flow tests.
 - Added local TLS-server integration tests for Arista eAPI and RESTCONF, enforced race testing in CI/release workflows, and published CI coverage profiles.
@@ -41,3 +48,4 @@ First stable release.
 
 [1.0.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.0
 [1.0.1]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.1
+[1.0.2]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.2
