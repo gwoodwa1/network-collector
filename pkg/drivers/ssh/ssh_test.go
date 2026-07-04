@@ -1,9 +1,49 @@
 package ssh
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+func TestNormalizeSecurityProfileDefaultsToCompatibility(t *testing.T) {
+	profile, err := normalizeSecurityProfile("")
+	if err != nil || profile != "compatibility" {
+		t.Fatalf("unexpected default profile=%q error=%v", profile, err)
+	}
+	for _, value := range []string{"compatibility", "auto", "modern", "legacy"} {
+		if _, err := normalizeSecurityProfile(value); err != nil {
+			t.Fatalf("valid profile %q rejected: %v", value, err)
+		}
+	}
+	if _, err := normalizeSecurityProfile("unsafe"); err == nil {
+		t.Fatal("invalid profile accepted")
+	}
+}
+
+func TestAlgorithmNegotiationErrorClassification(t *testing.T) {
+	for _, message := range []string{"ssh: no common algorithm", "no matching key exchange method found", "unable to negotiate with host: no matching cipher"} {
+		if !isAlgorithmNegotiationError(errors.New(message)) {
+			t.Fatalf("negotiation error not recognized: %s", message)
+		}
+	}
+	for _, message := range []string{"authentication failed", "host key mismatch", "i/o timeout", "connection refused"} {
+		if isAlgorithmNegotiationError(errors.New(message)) {
+			t.Fatalf("unsafe fallback classification for: %s", message)
+		}
+	}
+}
+
+func TestHostKeyPolicyValidation(t *testing.T) {
+	for _, value := range []string{"", "insecure", "known_hosts"} {
+		if _, err := normalizeHostKeyPolicy(value); err != nil {
+			t.Fatalf("valid policy %q rejected: %v", value, err)
+		}
+	}
+	if _, err := normalizeHostKeyPolicy("accept-new"); err == nil {
+		t.Fatal("invalid policy accepted")
+	}
+}
 
 func TestNewClient_Defaults(t *testing.T) {
 	client := NewClient()

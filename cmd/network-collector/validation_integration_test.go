@@ -1627,6 +1627,50 @@ func TestCustomVariablesFilesPrecedenceAndExecution(t *testing.T) {
 	}
 }
 
+func TestSSHSecurityConfigDefaultsAndOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+ssh_security:
+  profile: auto
+  host_key_policy: known_hosts
+  known_hosts_file: ~/.ssh/known_hosts
+ssh:
+  - hostname: modern-router
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    cmd: show version
+  - hostname: legacy-router
+    ip: 192.0.2.11
+    type: cisco_iosxr
+    ssh_security:
+      profile: legacy
+      host_key_policy: insecure
+    cmd: show version
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modern := effectiveSSHSecurity(config.SSHSecurity, config.SSH[0].SSHSecurity)
+	legacy := effectiveSSHSecurity(config.SSHSecurity, config.SSH[1].SSHSecurity)
+	if modern.Profile != "auto" || modern.HostKeyPolicy != "known_hosts" || modern.KnownHostsFile != "~/.ssh/known_hosts" {
+		t.Fatalf("unexpected global security: %+v", modern)
+	}
+	if legacy.Profile != "legacy" || legacy.HostKeyPolicy != "insecure" || legacy.KnownHostsFile != "~/.ssh/known_hosts" {
+		t.Fatalf("unexpected device override: %+v", legacy)
+	}
+	if err := validateSSHSecurity(SSHSecurityConfig{}); err != nil {
+		t.Fatalf("backwards-compatible defaults rejected: %v", err)
+	}
+	if err := validateSSHSecurity(SSHSecurityConfig{Profile: "invalid"}); err == nil {
+		t.Fatal("invalid SSH profile accepted")
+	}
+}
+
 func TestLoadConfigComposesImports(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")

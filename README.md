@@ -252,6 +252,47 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### SSH security profiles
+
+Existing configurations remain compatible. When `ssh_security` is omitted, Network Collector uses the previous behavior: the `compatibility` algorithm profile with host-key verification disabled. This avoids breaking legacy device estates, but emits warnings so the policy is visible.
+
+```yaml
+ssh_security:
+  profile: compatibility
+  host_key_policy: insecure
+```
+
+Available profiles:
+
+- `compatibility`: preserves the previous cipher and key-exchange behavior.
+- `auto`: tries the SSH library's standard algorithm set first, then retries with legacy compatibility algorithms only after a recognizable algorithm-negotiation failure.
+- `modern`: uses only the SSH library's standard algorithm set and never falls back.
+- `legacy`: explicitly enables the compatibility algorithm set and emits a warning.
+
+Auto fallback never occurs for authentication failures, host-key failures, timeouts, DNS errors, or refused connections.
+
+Enable known-host verification with either an explicit OpenSSH file or the normal system/user locations:
+
+```yaml
+ssh_security:
+  profile: auto
+  host_key_policy: known_hosts
+  known_hosts_file: ~/.ssh/known_hosts # optional
+```
+
+If `known_hosts_file` is omitted, ScrapliGo checks its supported user and system defaults. A device entry or inventory host can override individual settings for mixed estates:
+
+```yaml
+ssh:
+  - host: old-router
+    ssh_security:
+      profile: legacy
+      host_key_policy: insecure
+    cmd: show version
+```
+
+Legacy fallback and host identity are independent. Where possible, use `known_hosts` even for devices that require old key exchange or cipher algorithms.
+
 ### Custom SSH platform definitions
 
 SSH platform definitions and command-output parsers solve different problems:

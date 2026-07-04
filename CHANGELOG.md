@@ -4,6 +4,7 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added backwards-compatible SSH security profiles with modern-first negotiation fallback, per-device overrides, optional known-host verification, and explicit legacy/insecure warnings.
 - Added a guarded interface turn-up example with approval, optical telemetry parsing, error-counter validation, and rollback.
 - Added inline custom variables and relative variable-file imports with deterministic precedence and support throughout templates and workflow logic.
 - Added direct conditions, list iteration, parameterized workflows, recovery and rollback, approval gates, isolated parallel branches, and bounded recurring schedules for SSH workflows.

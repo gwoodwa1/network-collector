@@ -146,6 +146,13 @@ type DeviceConfig struct {
 	Parser           string             `mapstructure:"parser" yaml:"parser"`
 	Validation       *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
 	Validations      []ValidationConfig `mapstructure:"validations" yaml:"validations"`
+	SSHSecurity      *SSHSecurityConfig `mapstructure:"ssh_security" yaml:"ssh_security"`
+}
+
+type SSHSecurityConfig struct {
+	Profile        string `mapstructure:"profile" yaml:"profile"`
+	HostKeyPolicy  string `mapstructure:"host_key_policy" yaml:"host_key_policy"`
+	KnownHostsFile string `mapstructure:"known_hosts_file" yaml:"known_hosts_file"`
 }
 
 type ValidationConfig struct {
@@ -169,6 +176,7 @@ type Config struct {
 	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
 	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
 	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
+	SSHSecurity   SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
 }
 
 type ScheduleConfig struct {
@@ -196,13 +204,14 @@ type ExecutionConfig struct {
 }
 
 type InventoryHostConfig struct {
-	Name             string `yaml:"name"`
-	Hostname         string `yaml:"hostname"`
-	IP               string `yaml:"ip"`
-	Address          string `yaml:"address"`
-	Type             string `yaml:"type"`
-	Timeout          int    `yaml:"timeout"`
-	OperationTimeout int    `yaml:"operation_timeout"`
+	Name             string             `yaml:"name"`
+	Hostname         string             `yaml:"hostname"`
+	IP               string             `yaml:"ip"`
+	Address          string             `yaml:"address"`
+	Type             string             `yaml:"type"`
+	Timeout          int                `yaml:"timeout"`
+	OperationTimeout int                `yaml:"operation_timeout"`
+	SSHSecurity      *SSHSecurityConfig `yaml:"ssh_security"`
 }
 
 type InventoryGroupConfig struct {
@@ -617,6 +626,10 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 	}
 	if resolved.OperationTimeout == 0 {
 		resolved.OperationTimeout = host.OperationTimeout
+	}
+	if resolved.SSHSecurity == nil && host.SSHSecurity != nil {
+		copied := *host.SSHSecurity
+		resolved.SSHSecurity = &copied
 	}
 	return resolved
 }
@@ -2377,7 +2390,42 @@ func logStepMessage(ctx *stepExecutionContext, stepName, messageTemplate string)
 	return nil
 }
 
-func sshOptionsForDevice(device DeviceConfig) []ssh.Option {
+func effectiveSSHSecurity(global SSHSecurityConfig, device *SSHSecurityConfig) SSHSecurityConfig {
+	resolved := global
+	if device == nil {
+		return resolved
+	}
+	if strings.TrimSpace(device.Profile) != "" {
+		resolved.Profile = device.Profile
+	}
+	if strings.TrimSpace(device.HostKeyPolicy) != "" {
+		resolved.HostKeyPolicy = device.HostKeyPolicy
+	}
+	if strings.TrimSpace(device.KnownHostsFile) != "" {
+		resolved.KnownHostsFile = device.KnownHostsFile
+	}
+	return resolved
+}
+
+func validateSSHSecurity(config SSHSecurityConfig) error {
+	profile := strings.ToLower(strings.TrimSpace(config.Profile))
+	if profile == "" {
+		profile = "compatibility"
+	}
+	if profile != "compatibility" && profile != "auto" && profile != "modern" && profile != "legacy" {
+		return fmt.Errorf("ssh_security.profile must be compatibility, auto, modern, or legacy")
+	}
+	policy := strings.ToLower(strings.TrimSpace(config.HostKeyPolicy))
+	if policy == "" {
+		policy = "insecure"
+	}
+	if policy != "insecure" && policy != "known_hosts" {
+		return fmt.Errorf("ssh_security.host_key_policy must be insecure or known_hosts")
+	}
+	return nil
+}
+
+func sshOptionsForDevice(device DeviceConfig, globalSecurity SSHSecurityConfig) []ssh.Option {
 	opts := []ssh.Option{}
 	if device.Timeout > 0 {
 		opts = append(opts, ssh.WithConnectionTimeout(time.Duration(device.Timeout)*time.Second))
@@ -2385,6 +2433,8 @@ func sshOptionsForDevice(device DeviceConfig) []ssh.Option {
 	if device.OperationTimeout > 0 {
 		opts = append(opts, ssh.WithOperationTimeout(time.Duration(device.OperationTimeout)*time.Second))
 	}
+	security := effectiveSSHSecurity(globalSecurity, device.SSHSecurity)
+	opts = append(opts, ssh.WithSecurityProfile(security.Profile), ssh.WithHostKeyPolicy(security.HostKeyPolicy, security.KnownHostsFile))
 	return opts
 }
 
@@ -2692,7 +2742,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	}
 	slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
 
-	opts := sshOptionsForDevice(device)
+	opts := sshOptionsForDevice(device, config.SSHSecurity)
 	channelLog := io.Writer(sessionLog)
 	if !jsonOut && !pretty {
 		channelLog = io.MultiWriter(os.Stdout, sessionLog)
@@ -3035,6 +3085,12 @@ func main() {
 	if err != nil {
 		slog.Error("error resolving SSH inventory", "error", err)
 		os.Exit(1)
+	}
+	for _, device := range sshDevices {
+		if err := validateSSHSecurity(effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity)); err != nil {
+			slog.Error("invalid SSH security configuration", "hostname", device.Hostname, "error", err)
+			os.Exit(1)
+		}
 	}
 
 	parserConfig, err := loadOptionalParsers(config.ParsersFile, configFile)

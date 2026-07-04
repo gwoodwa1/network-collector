@@ -26,6 +26,9 @@ name_playbook: Human readable playbook title
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 fail_on_fail: false
+ssh_security:
+  profile: compatibility
+  host_key_policy: insecure
 vars_files:
   - vars/common.yaml
 vars:
@@ -53,6 +56,10 @@ Rules:
 - `inventory_file` is optional; default behavior is to look for `inventory.yaml`.
 - `parsers_file` is optional; default behavior is to look for `parsers.yaml`.
 - `fail_on_fail` is optional. Use `true` when the process should exit non-zero if any validation fails or errors.
+- `ssh_security` supports `compatibility`, `auto`, `modern`, and `legacy` profiles plus `insecure` or `known_hosts` host-key policy.
+- Omitting `ssh_security` preserves the prior compatibility algorithms and disabled host-key checking.
+- `auto` falls back only for algorithm negotiation errors, never authentication, identity, timeout, or connection failures.
+- Device and inventory-host `ssh_security` maps override individual global settings.
 - `vars_files` imports variable maps relative to the declaring config; globs and multiple files are supported.
 - `vars` defines inline values and overrides imported variable-file values.
 - `execution` is optional. Without it, SSH devices run serially as before.
