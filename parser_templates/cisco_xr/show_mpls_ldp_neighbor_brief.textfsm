@@ -1,0 +1,9 @@
+Value Required PEER_ID ([0-9a-fA-F:.]+:\d+)
+Value ADDRESS ([0-9a-fA-F:.]+)
+Value STATE (Oper|Operational|Up|Down)
+
+Start
+  ^${PEER_ID}\s+${ADDRESS}\s+${STATE}\s+.* -> Record
+  ^Peer LDP Identifier:\s+${PEER_ID}
+  ^\s+TCP connection:\s+${ADDRESS}.*
+  ^\s+State:\s+${STATE}.* -> Record

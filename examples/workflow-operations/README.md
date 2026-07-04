@@ -35,6 +35,8 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 
 `05-pre-post-diff.yaml` is the most complete change-window pattern. It captures six pre/post command outputs, parses platform and route summaries with bundled TextFSM modules, generates unified JSON diffs with a reusable local workflow, and fails when selected state changes. Raw output may contain counters or timestamps, so compare only commands stable on your platform or parse and compare stable fields.
 
+`09-openconfig-facts.yaml` demonstrates vendor-neutral fact gathering. Each subset tries an OpenConfig NETCONF filter first and falls back independently to SSH plus TextFSM. Set `format` to `openconfig`, `native`, or `both`; native output preserves fields that OpenConfig does not model. The bundled SSH mappings currently cover IOS-XR system, platform, interfaces, LLDP, BGP, IS-IS, and LDP.
+
 `06-custom-variables.yaml` imports shared values from `vars/common.yaml` and uses them throughout the workflow. This is a useful pattern for keeping site, environment, interface, expected-state, and change-window data separate from reusable workflow logic.
 
 `07-interface-turnup.yaml` is a guarded interface activation pattern. It verifies the port exists, asks for approval, commits `no shutdown`, checks line protocol, parses Rx/Tx optical power and alarm flags, verifies zero input/CRC/output errors, and returns the interface to shutdown if a post-check fails. Its multiline IOS-XR configuration commands are a lab template and must be tested against the target driver and commit policy.

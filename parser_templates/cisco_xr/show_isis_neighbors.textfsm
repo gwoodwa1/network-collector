@@ -1,0 +1,10 @@
+Value Required SYSTEM_ID (\S+)
+Value INTERFACE (\S+)
+Value NEIGHBOR_IP ([0-9a-fA-F:.]+)
+Value STATE (Up|Down|Init)
+Value HOLDTIME (\d+)
+Value LEVEL (L1|L2|L1L2)
+
+Start
+  ^${SYSTEM_ID}\s+${INTERFACE}\s+\*?${NEIGHBOR_IP}\s+${STATE}\s+${HOLDTIME}\s+${LEVEL}.* -> Record
+  ^${SYSTEM_ID}\s+${INTERFACE}\s+${STATE}\s+${HOLDTIME}\s+${LEVEL}.* -> Record

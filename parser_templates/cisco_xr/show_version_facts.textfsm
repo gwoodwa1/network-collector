@@ -1,0 +1,9 @@
+Value HOSTNAME (\S+)
+Value VERSION ([^,\s]+)
+Value UPTIME (.+)
+Value MODEL (.+)
+
+Start
+  ^Cisco IOS XR Software, Version\s+${VERSION}.*
+  ^${HOSTNAME}\s+uptime is\s+${UPTIME} -> Record
+  ^cisco\s+${MODEL}\s+processor.*

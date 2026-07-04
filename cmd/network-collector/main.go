@@ -82,6 +82,13 @@ type StepConfig struct {
 	Block          *BlockConfig            `mapstructure:"block" yaml:"block"`
 	Approval       *ApprovalConfig         `mapstructure:"approval" yaml:"approval"`
 	Parallel       *ParallelConfig         `mapstructure:"parallel" yaml:"parallel"`
+	Facts          *FactsConfig            `mapstructure:"facts" yaml:"facts"`
+}
+
+type FactsConfig struct {
+	Format     string   `mapstructure:"format" yaml:"format"`
+	Subsets    []string `mapstructure:"subsets" yaml:"subsets"`
+	Transports []string `mapstructure:"transports" yaml:"transports"`
 }
 
 type ApprovalConfig struct {
@@ -175,6 +182,13 @@ type Config struct {
 	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
 	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
 	SSHSecurity   SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
+	Facts         FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
+}
+
+type FactsDefaultsConfig struct {
+	DefaultFormat     string   `mapstructure:"default_format" yaml:"default_format"`
+	DefaultSubsets    []string `mapstructure:"default_subsets" yaml:"default_subsets"`
+	DefaultTransports []string `mapstructure:"default_transports" yaml:"default_transports"`
 }
 
 type ScheduleConfig struct {
@@ -314,6 +328,7 @@ type stepExecutionContext struct {
 	approvalInput  *approvalInput
 	approvalWriter io.Writer
 	artifactPrefix string
+	factsDefaults  FactsDefaultsConfig
 }
 
 type approvalAnswer struct {
@@ -1506,6 +1521,9 @@ func executeWorkflow(ctx *stepExecutionContext, client **ssh.Client, step StepCo
 
 func stepsNeedSSH(steps []StepConfig, workflows map[string]WorkflowConfig, seen map[string]bool) bool {
 	for _, step := range steps {
+		if step.Facts != nil {
+			return true
+		}
 		if step.Local == nil && strings.TrimSpace(step.Command) != "" {
 			return true
 		}
@@ -1745,7 +1763,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Approval != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, "approval step cannot define executable or other control fields")
 				continue
@@ -1774,7 +1792,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if step.Parallel != nil {
 			controlCount++
 		}
-		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
+		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
 			*ctx.runFailed = true
 			recordStepFailure(ctx, stepName, "control step must define exactly one of repeat, foreach, use, block, or parallel and no executable fields")
 			continue
@@ -1805,7 +1823,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Repeat != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				stopDeviceSteps = true
 				err := fmt.Errorf("repeat step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
@@ -1816,6 +1834,19 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			if executeRepeat(ctx, client, *step.Repeat, stepName, depth+1, time.Sleep) {
 				stopDeviceSteps = true
 				break
+			}
+			continue
+		}
+
+		if step.Facts != nil {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, "facts step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
+				continue
+			}
+			if err := executeFactsStep(ctx, client, step, stepName); err != nil {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, err.Error())
 			}
 			continue
 		}
@@ -2138,6 +2169,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
 		approveAll: approveAll, approvalInput: approvals, approvalWriter: approvalWriter,
 		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
+		factsDefaults:  config.Facts,
 	}
 	if executeSteps(&ctx, &client, steps) {
 		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)

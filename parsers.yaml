@@ -69,3 +69,23 @@ parsers:
     type: textfsm
     template: parser_templates/cisco_xr/show_running_config_ntp.textfsm
     root: ntp
+  xr_facts_system:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_version_facts.textfsm
+    root: system
+  xr_facts_lldp:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_lldp_neighbors_detail.textfsm
+    root: neighbors
+  xr_facts_bgp:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_bgp_summary.textfsm
+    root: neighbors
+  xr_facts_isis:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_isis_neighbors.textfsm
+    root: neighbors
+  xr_facts_ldp:
+    type: textfsm
+    template: parser_templates/cisco_xr/show_mpls_ldp_neighbor_brief.textfsm
+    root: neighbors

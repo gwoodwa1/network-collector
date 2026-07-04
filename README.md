@@ -531,6 +531,37 @@ ssh:
 
 The association template handles IPv4, IPv6, configured peers, selection markers, VRFs, and continuation rows. The status template handles synchronized and unsynchronized clocks, including `never updated`. Numeric TextFSM values remain JSON strings; use `expected_type` in validations when a typed comparison is required.
 
+### Vendor-neutral facts
+
+Use a `facts` step to gather operational state without spelling out each device command. Collection is performed per subset: OpenConfig NETCONF is tried first, then SSH with the platform's TextFSM parser. A failure or unsupported model in one subset does not force successfully collected subsets onto the fallback transport.
+
+```yaml
+facts:
+  default_format: both
+  default_subsets: [system, platform, interfaces, lldp, bgp, isis, ldp]
+  default_transports: [netconf, ssh]
+
+ssh:
+  - group: xr
+    steps:
+      - name: gather-facts
+        facts: {}
+        register: device_facts
+```
+
+`format` accepts `openconfig`, `native`, or `both` (the default). OpenConfig data uses RFC 7951-style module-qualified top-level names. Native data is the JSON emitted by NETCONF XML decoding or TextFSM and retains vendor-specific fields. Metadata records the transport, command/parser, normalization completeness, unmapped fields, and recoverable fallback errors for every subset. Step values override the top-level defaults:
+
+```yaml
+- name: routing-native-facts
+  facts:
+    format: native
+    subsets: [bgp, isis, ldp]
+    transports: [ssh]
+  register: routing_facts
+```
+
+The bundled SSH facts registry currently covers IOS-XR. Its subsets are `system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`. Other platforms can still use OpenConfig NETCONF after a platform registry entry is added; SSH fallback deliberately requires a tested command and parser mapping rather than guessing CLI syntax.
+
 ### Offline parser fixture tests
 
 Parser and validation changes can be tested without logging into a network device. Add captured command output as plain text under `cmd/network-collector/testdata/cli/`, then add a case to `cmd/network-collector/testdata/parser-fixtures.yaml`.

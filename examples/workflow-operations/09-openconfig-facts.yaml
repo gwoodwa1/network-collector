@@ -1,0 +1,35 @@
+name_playbook: openconfig-and-native-facts
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+
+# These defaults apply to every facts step. A step can override any value.
+facts:
+  default_format: both
+  default_subsets: [system, platform, interfaces, lldp, bgp, isis, ldp]
+  default_transports: [netconf, ssh]
+
+output:
+  directory: output
+  save_parsed: true
+
+ssh:
+  - group: lab
+    steps:
+      - name: gather-all-facts
+        facts: {}
+        register: device_facts
+
+      # Native mode preserves every field emitted by the TextFSM templates.
+      - name: routing-native-only
+        facts:
+          format: native
+          subsets: [bgp, isis, ldp]
+          transports: [ssh]
+        register: routing_native
+
+      # OpenConfig-only output is useful for vendor-neutral downstream systems.
+      - name: topology-openconfig
+        facts:
+          format: openconfig
+          subsets: [interfaces, lldp]
+        register: topology_openconfig

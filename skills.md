@@ -504,7 +504,9 @@ Supported parser module keys:
 - `template`: required for `textfsm`; relative paths resolve from `parsers.yaml`.
 - `root`: JSON array key for `regex_records` and `textfsm`; defaults to `records`.
 
-Bundled IOS-XR TextFSM modules include `xr_show_platform`, `xr_show_route_summary`, `xr_show_interfaces_brief_textfsm`, `xr_show_ntp_associations`, `xr_show_ntp_status`, and `xr_show_running_config_ntp`.
+Bundled IOS-XR TextFSM modules include `xr_show_platform`, `xr_show_route_summary`, `xr_show_interfaces_brief_textfsm`, `xr_show_ntp_associations`, `xr_show_ntp_status`, `xr_show_running_config_ntp`, and facts modules for system, LLDP, BGP, IS-IS, and LDP.
+
+Use `facts: {}` as a device step for NETCONF-first, SSH-fallback collection. Supported output formats are `openconfig`, `native`, and `both` (default). Facts subsets are `system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`. Top-level `facts.default_format`, `facts.default_subsets`, and `facts.default_transports` define playbook defaults; step values override them.
 
 Supported parser field keys:
 

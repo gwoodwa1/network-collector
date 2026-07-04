@@ -1,0 +1,8 @@
+Value Required NEIGHBOR ([0-9a-fA-F:.]+)
+Value REMOTE_AS (\d+)
+Value MSGRX (\d+)
+Value MSGTX (\d+)
+Value STATE (\S+)
+
+Start
+  ^${NEIGHBOR}\s+\d+\s+${REMOTE_AS}\s+${MSGRX}\s+${MSGTX}\s+\d+\s+\d+\s+\d+\s+\S+\s+${STATE}\s*$$ -> Record

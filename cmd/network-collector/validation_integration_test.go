@@ -1792,8 +1792,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 9 {
-		t.Fatalf("expected inventory plus eight workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 10 {
+		t.Fatalf("expected inventory plus nine workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1810,8 +1810,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 8 {
-		t.Fatalf("expected eight loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 9 {
+		t.Fatalf("expected nine loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1847,6 +1847,35 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	securityInventory, err := loadOptionalInventory(security.InventoryFile, filepath.Join(directory, "08-ssh-security-profiles.yaml"))
 	if err != nil || security.SSHSecurity.Profile != "auto" || securityInventory == nil || len(securityInventory.Hosts) != 2 || securityInventory.Hosts[1].SSHSecurity == nil || securityInventory.Hosts[1].SSHSecurity.Profile != "legacy" {
 		t.Fatalf("SSH security profile example is incomplete: inventory=%+v config=%+v error=%v", securityInventory, security, err)
+	}
+	facts := loaded["09-openconfig-facts.yaml"]
+	if facts.Facts.DefaultFormat != "both" || len(facts.Facts.DefaultSubsets) != 7 || len(facts.SSH) != 1 || len(facts.SSH[0].Steps) != 3 || facts.SSH[0].Steps[0].Facts == nil || facts.SSH[0].Steps[1].Facts.Format != "native" {
+		t.Fatalf("facts example is incomplete: %+v", facts)
+	}
+}
+
+func TestIOSXRFactsTextFSMParsers(t *testing.T) {
+	parsers, err := loadParsers(filepath.Join("..", "..", "parsers.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct{ name, output, want string }{
+		{"xr_facts_system", "Cisco IOS XR Software, Version 7.9.2\nxr-edge-01 uptime is 2 weeks, 3 days\n", `"HOSTNAME":"xr-edge-01"`},
+		{"xr_facts_lldp", "Local Interface: Gi0/0/0/0\nChassis id: 0011.2233.4455\nPort id: Eth1\nPort Description: uplink\nSystem Name: spine-01\nSystem Description: network switch\n", `"SYSTEM_NAME":"spine-01"`},
+		{"xr_facts_bgp", "192.0.2.2 0 65002 10 12 4 0 0 1d02h 42\n", `"REMOTE_AS":"65002"`},
+		{"xr_facts_isis", "core-02 Gi0/0/0/1 *192.0.2.2 Up 22 L2\n", `"SYSTEM_ID":"core-02"`},
+		{"xr_facts_ldp", "192.0.2.2:0 192.0.2.2 Operational 3d\n", `"PEER_ID":"192.0.2.2:0"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := parseOutputWithModule(test.output, test.name, parsers.Parsers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(parsed, test.want) {
+				t.Fatalf("unexpected parser output: %s", parsed)
+			}
+		})
 	}
 }
 

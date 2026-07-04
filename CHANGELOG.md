@@ -4,6 +4,7 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added NETCONF-first, SSH/TextFSM-fallback facts gathering with OpenConfig, native, and combined JSON formats; IOS-XR coverage includes system, platform, interfaces, LLDP, BGP, IS-IS, and LDP.
 - Added a local gNMI server integration test, parser fuzzing, NETCONF lifecycle tests, and full SSH auto-fallback control-flow tests.
 - Added local TLS-server integration tests for Arista eAPI and RESTCONF, enforced race testing in CI/release workflows, and published CI coverage profiles.
 - Added cross-feature regression tests for approval scheduling, recurring artifacts, rollback recovery metadata, and parallel variable scope/merging.
