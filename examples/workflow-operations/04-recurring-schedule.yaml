@@ -15,6 +15,7 @@ output:
   directory: artifacts
   save_raw: true
   summary_file: results.json
+  events_file: events.jsonl
 
 ssh:
   - group: xr-lab
@@ -44,4 +45,3 @@ local_steps:
     local:
       command: printf
       args: ['All scheduled device occurrences completed\n']
-

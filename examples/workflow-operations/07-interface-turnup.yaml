@@ -12,6 +12,7 @@ output:
   save_raw: true
   save_parsed: true
   summary_file: results.json
+  events_file: events.jsonl
 
 ssh:
   - group: xr-lab

@@ -1,0 +1,55 @@
+name_playbook: Label targeting, canary rollout, and failed-device replay
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+# CLI selectors are applied after this group is expanded. This lets one
+# reusable playbook target a site, role, environment, wave, or arbitrary label
+# without duplicating inventory groups.
+execution:
+  max_parallel: 2
+  start_interval_seconds: 10
+  canary_count: 1
+  failure_threshold: 2
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: all-lab
+    steps:
+      - name: identify-target
+        message: selected inventory device is entering the guarded health rollout
+
+      - name: platform-health
+        cmd: show platform
+        parser: xr_show_platform
+        validation:
+          extractor: gjson
+          json_path: nodes.#
+          condition: gt
+          expected: 0
+          expected_type: int
+
+      - name: ntp-health
+        cmd: show ntp status
+        parser: xr_show_ntp_status
+        retry:
+          until_pass: true
+          interval_seconds: 15
+          max_attempts: 3
+        validation:
+          extractor: gjson
+          json_path: status.0.STATUS
+          condition: contains
+          expected: synchronized
+        on_fail:
+          action: fail
+          message: NTP health failed; stop this device and count it toward the rollout threshold
+
+      - name: target-complete
+        message: selected device passed the guarded rollout checks

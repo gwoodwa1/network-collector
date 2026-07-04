@@ -11,9 +11,11 @@ facts:
 output:
   directory: output
   save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl
 
 ssh:
-  - group: lab
+  - group: xr-lab
     steps:
       - name: gather-all-facts
         facts: {}

@@ -2,6 +2,9 @@ hosts:
   - name: standard-router
     ip: 192.0.2.20
     type: cisco_iosxr
+    labels:
+      site: london
+      ssh_generation: modern
 
   - name: legacy-router
     ip: 192.0.2.21
@@ -9,10 +12,12 @@ hosts:
     ssh_security:
       profile: legacy
       host_key_policy: insecure
+    labels:
+      site: manchester
+      ssh_generation: legacy
 
 groups:
   mixed-estate:
     hosts:
       - standard-router
       - legacy-router
-

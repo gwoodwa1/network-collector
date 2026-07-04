@@ -4,9 +4,57 @@ hosts:
     type: cisco_iosxr
     timeout: 30
     operation_timeout: 120
+    labels:
+      site: london
+      role: core
+      environment: lab
+      maintenance: "false"
+      wave: canary
+
+  - name: xr-lab-02
+    ip: 192.0.2.11
+    type: cisco_iosxr
+    labels:
+      site: london
+      role: edge
+      environment: lab
+      maintenance: "false"
+      wave: standard
+
+  - name: xr-lab-03
+    ip: 192.0.2.12
+    type: cisco_iosxr
+    labels:
+      site: manchester
+      role: core
+      environment: lab
+      maintenance: "false"
+      wave: standard
+
+  - name: xr-maintenance-01
+    ip: 192.0.2.13
+    type: cisco_iosxr
+    labels:
+      site: london
+      role: edge
+      environment: lab
+      maintenance: "true"
+      wave: hold
 
 groups:
   xr-lab:
     hosts:
       - xr-lab-01
 
+  all-lab:
+    hosts:
+      - xr-lab-01
+      - xr-lab-02
+      - xr-lab-03
+      - xr-maintenance-01
+
+  london-lab:
+    hosts:
+      - xr-lab-01
+      - xr-lab-02
+      - xr-maintenance-01

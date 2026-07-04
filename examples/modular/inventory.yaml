@@ -4,6 +4,11 @@ hosts:
     type: cisco_xr
     timeout: 30
     operation_timeout: 120
+    labels:
+      site: london
+      role: core
+      environment: lab
+      maintenance: "false"
 
 groups:
   xr:

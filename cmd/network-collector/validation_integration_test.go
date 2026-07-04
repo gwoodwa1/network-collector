@@ -1792,8 +1792,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 10 {
-		t.Fatalf("expected inventory plus nine workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 12 {
+		t.Fatalf("expected inventory plus eleven workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1810,8 +1810,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 9 {
-		t.Fatalf("expected nine loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 11 {
+		t.Fatalf("expected eleven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1851,6 +1851,16 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	facts := loaded["09-openconfig-facts.yaml"]
 	if facts.Facts.DefaultFormat != "both" || len(facts.Facts.DefaultSubsets) != 7 || len(facts.SSH) != 1 || len(facts.SSH[0].Steps) != 3 || facts.SSH[0].Steps[0].Facts == nil || facts.SSH[0].Steps[1].Facts.Format != "native" {
 		t.Fatalf("facts example is incomplete: %+v", facts)
+	}
+	targeting := loaded["10-targeting-canary-and-replay.yaml"]
+	targetingInventory, err := loadOptionalInventory(targeting.InventoryFile, filepath.Join(directory, "10-targeting-canary-and-replay.yaml"))
+	if err != nil || targeting.Execution.CanaryCount != 1 || targeting.Execution.FailureThreshold != 2 || targeting.Output.EventsFile != "events.jsonl" || targetingInventory == nil || len(targetingInventory.Hosts) != 4 || targetingInventory.Hosts[0].Labels["wave"] != "canary" {
+		t.Fatalf("targeting example is incomplete: inventory=%+v config=%+v error=%v", targetingInventory, targeting, err)
+	}
+	reload := loaded["11-reload-and-reconnect.yaml"]
+	reloadSteps := reload.SSH[0].Steps
+	if len(reloadSteps) != 5 || reloadSteps[1].Approval == nil || reloadSteps[2].ReturnToPrompt == nil || *reloadSteps[2].ReturnToPrompt || reloadSteps[3].SSHProbe == nil || reloadSteps[4].OnPass == nil || len(reloadSteps[4].OnPass.Steps) != 2 {
+		t.Fatalf("reload/reconnect example is incomplete: %+v", reload)
 	}
 }
 

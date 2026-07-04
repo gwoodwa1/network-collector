@@ -1,0 +1,59 @@
+name_playbook: Guarded reload and SSH reconnection
+inventory_file: inventory.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: pre-reload-health
+        cmd: show platform
+        validation:
+          extractor: regex
+          pattern: '(?m)^\S+\s+\S+\s+\S+\s+(IOS XR RUN|OPERATIONAL)'
+          condition: matches
+          expected: '.+'
+        on_fail:
+          action: fail
+          message: platform is not healthy enough to reload
+
+      - name: authorize-reload
+        approval:
+          message: Reload the selected lab router and wait for SSH to return?
+          timeout_seconds: 300
+
+      # LAB TEMPLATE: replace this command with the tested reload syntax for
+      # the target platform. No prompt is expected because the session drops.
+      - name: initiate-reload
+        cmd: reload
+        return_to_prompt: false
+
+      - name: wait-for-router
+        ssh_probe:
+          port: 22
+          interval_seconds: 30
+          max_attempts: 40
+          timeout_seconds: 5
+          post_wait_seconds: 120
+
+      - name: verify-router-returned
+        cmd: show platform
+        validation:
+          extractor: regex
+          pattern: '(?m)^\S+\s+\S+\s+\S+\s+(IOS XR RUN|OPERATIONAL)'
+          condition: matches
+          expected: '.+'
+        on_pass:
+          steps:
+            - name: reconnect-success
+              message: SSH returned and the post-reload platform check passed
+            - name: collect-post-reload-version
+              cmd: show version
+        on_fail:
+          action: fail
+          message: SSH returned but the post-reload health check failed
