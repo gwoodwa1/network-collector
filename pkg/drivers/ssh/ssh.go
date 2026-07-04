@@ -27,6 +27,7 @@ type Client struct {
 	hostKeyPolicy   string
 	knownHostsFile  string
 	selectedProfile string
+	connectProfile  func(host, username, password, driverName, profile, hostKeyPolicy string) error
 }
 
 // Option is a type-safe option for configuring Client
@@ -181,7 +182,11 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 	}
 
 	if profile == "auto" {
-		err = c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, "modern", policy)
+		connect := c.connectWithProfile
+		if c.connectProfile != nil {
+			connect = c.connectProfile
+		}
+		err = connect(trimmedHost, username, password, trimmedDriverName, "modern", policy)
 		if err == nil {
 			return nil
 		}
@@ -192,7 +197,10 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 		if c.channelLog != nil {
 			_, _ = fmt.Fprintf(c.channelLog, "WARNING: modern SSH negotiation failed for %s; retrying legacy compatibility profile\n", trimmedHost)
 		}
-		return c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, "legacy", policy)
+		return connect(trimmedHost, username, password, trimmedDriverName, "legacy", policy)
+	}
+	if c.connectProfile != nil {
+		return c.connectProfile(trimmedHost, username, password, trimmedDriverName, profile, policy)
 	}
 	return c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, profile, policy)
 }

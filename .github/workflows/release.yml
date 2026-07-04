@@ -24,7 +24,7 @@ jobs:
           cache: true
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Release archives
         uses: goreleaser/goreleaser-action@v7

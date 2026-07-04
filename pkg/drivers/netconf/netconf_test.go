@@ -1,0 +1,42 @@
+package netconf
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestValidationAndLifecycleErrors(t *testing.T) {
+	var nilClient *ScrapligoNETCONF
+	if err := nilClient.Connect("host", "user", "pass"); err == nil {
+		t.Fatal("nil client connect accepted")
+	}
+	client := &ScrapligoNETCONF{}
+	tests := []struct{ host, user, pass, want string }{{"", "user", "pass", "host is required"}, {"host", "", "pass", "username is required"}, {"host", "user", "", "password is required"}}
+	for _, tc := range tests {
+		if err := client.Connect(tc.host, tc.user, tc.pass); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("Connect error=%v want=%q", err, tc.want)
+		}
+	}
+	if _, err := client.Execute("<get/>"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected execute error: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close disconnected client: %v", err)
+	}
+	if err := nilClient.Close(); err != nil {
+		t.Fatalf("close nil client: %v", err)
+	}
+}
+
+func TestTimeoutOptions(t *testing.T) {
+	client := &ScrapligoNETCONF{}
+	WithNetconfTimeouts(3*time.Second, 7*time.Second)(client)
+	if client.socketTimeout != 3*time.Second || client.opsTimeout != 7*time.Second {
+		t.Fatalf("timeouts not applied: socket=%s ops=%s", client.socketTimeout, client.opsTimeout)
+	}
+	WithNetconfTimeouts(0, 0)(client)
+	if client.socketTimeout != 3*time.Second || client.opsTimeout != 7*time.Second {
+		t.Fatal("non-positive timeout unexpectedly replaced values")
+	}
+}

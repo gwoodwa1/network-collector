@@ -45,6 +45,40 @@ func TestHostKeyPolicyValidation(t *testing.T) {
 	}
 }
 
+func TestAutoProfileFallbackControlFlow(t *testing.T) {
+	client := NewClient(WithSecurityProfile("auto"))
+	profiles := []string{}
+	client.connectProfile = func(_, _, _, _, profile, _ string) error {
+		profiles = append(profiles, profile)
+		if profile == "modern" {
+			return errors.New("ssh: no common algorithm for key exchange")
+		}
+		return nil
+	}
+	if err := client.Connect("router", "user", "pass", "cisco_iosxr"); err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 2 || profiles[0] != "modern" || profiles[1] != "legacy" {
+		t.Fatalf("unexpected profile attempts: %v", profiles)
+	}
+}
+
+func TestAutoProfileDoesNotFallbackForSecurityOrTransportErrors(t *testing.T) {
+	for _, message := range []string{"authentication failed", "host key mismatch", "i/o timeout", "connection refused"} {
+		t.Run(message, func(t *testing.T) {
+			client := NewClient(WithSecurityProfile("auto"))
+			attempts := 0
+			client.connectProfile = func(_, _, _, _, _, _ string) error { attempts++; return errors.New(message) }
+			if err := client.Connect("router", "user", "pass", "cisco_iosxr"); err == nil {
+				t.Fatal("expected connection error")
+			}
+			if attempts != 1 {
+				t.Fatalf("unsafe fallback after %q: attempts=%d", message, attempts)
+			}
+		})
+	}
+}
+
 func TestNewClient_Defaults(t *testing.T) {
 	client := NewClient()
 	if client == nil {

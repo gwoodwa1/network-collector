@@ -4,6 +4,8 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added a local gNMI server integration test, parser fuzzing, NETCONF lifecycle tests, and full SSH auto-fallback control-flow tests.
+- Added local TLS-server integration tests for Arista eAPI and RESTCONF, enforced race testing in CI/release workflows, and published CI coverage profiles.
 - Added cross-feature regression tests for approval scheduling, recurring artifacts, rollback recovery metadata, and parallel variable scope/merging.
 - Began decomposing the CLI monolith by extracting configuration/security loading and output/logging, and consolidated repetitive SSH compatibility warnings into one startup policy summary.
 - Added backwards-compatible SSH security profiles with modern-first negotiation fallback, per-device overrides, optional known-host verification, and explicit legacy/insecure warnings.
