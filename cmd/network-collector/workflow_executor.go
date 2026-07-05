@@ -1034,9 +1034,6 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 
 			validationOutput := output
-			if strings.TrimSpace(step.Register) != "" && strings.TrimSpace(step.Parser) == "" {
-				ctx.variables[strings.TrimSpace(step.Register)] = output
-			}
 			if strings.TrimSpace(step.Parser) != "" {
 				parsedOutput, err := parseOutputWithModule(output, step.Parser, ctx.parsers)
 				if err != nil {
@@ -1048,17 +1045,31 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				}
 				validationOutput = parsedOutput
 				writeSessionf(ctx.sessionLog, "[step:%s] parser %q output:\n%s\n", stepName, step.Parser, parsedOutput)
-				if err := saveStepArtifact(ctx, step, stepName, attempt, "parsed", parsedOutput); err != nil {
+			}
+			if step.Enrich != nil {
+				enrichedOutput, err := enrichJSON(validationOutput, *step.Enrich, ctx.configBaseDir)
+				if err != nil {
 					*ctx.runFailed = true
-					slog.Error("error saving parsed command output", "hostname", ctx.hostname, "step", stepName, "error", err)
+					slog.Error("enrichment error", "hostname", ctx.hostname, "step", stepName, "error", err)
+					writeSessionf(ctx.sessionLog, "[step:%s] enrichment error: %v\n", stepName, err)
+					recordStepFailure(ctx, stepName, fmt.Sprintf("enrichment error: %v", err))
+					break
+				}
+				validationOutput = enrichedOutput
+				writeSessionf(ctx.sessionLog, "[step:%s] enriched output:\n%s\n", stepName, enrichedOutput)
+			}
+			if strings.TrimSpace(step.Parser) != "" || step.Enrich != nil {
+				if err := saveStepArtifact(ctx, step, stepName, attempt, "parsed", validationOutput); err != nil {
+					*ctx.runFailed = true
+					slog.Error("error saving structured command output", "hostname", ctx.hostname, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "[step:%s] output error: %v\n", stepName, err)
 				}
 				if !ctx.jsonOut {
-					fmt.Printf("parser output for %s step=%s parser=%s:\n%s\n", ctx.hostname, stepName, step.Parser, parsedOutput)
+					fmt.Printf("structured output for %s step=%s:\n%s\n", ctx.hostname, stepName, validationOutput)
 				}
-				if registerParserOutput(ctx.variables, step, validationOutput) {
-					slog.Info("registered parser output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
-				}
+			}
+			if registerParserOutput(ctx.variables, step, validationOutput) {
+				slog.Info("registered step output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
 			}
 			if step.Drift != nil {
 				if err := applyDriftCheck(ctx, step, stepName, validationOutput); err != nil {

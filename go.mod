@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
+	github.com/itchyny/gojq v0.12.19
 	github.com/openconfig/gnmi v0.14.1
 	github.com/openconfig/gnmic v0.46.0
 	github.com/openconfig/gnmic/pkg/api v0.1.11
@@ -31,7 +32,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
-	github.com/itchyny/gojq v0.12.19 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect

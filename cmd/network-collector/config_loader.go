@@ -340,6 +340,11 @@ func loadConfig(configFile string) (Config, bool, error) {
 	if _, err := configVariables(config.Vars); err != nil {
 		return Config{}, false, err
 	}
+	absolutePath, err := filepath.Abs(configFile)
+	if err != nil {
+		return Config{}, false, fmt.Errorf("resolve config path: %w", err)
+	}
+	config.baseDir = filepath.Dir(absolutePath)
 	return config, settings.GetBool("fail_on_fail"), nil
 }
 

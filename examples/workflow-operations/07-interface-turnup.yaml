@@ -84,11 +84,18 @@ ssh:
             - name: verify-zero-interface-errors
               cmd: show interfaces {{interface}}
               parser: xr_interface_error_counters
+              enrich:
+                engine: gojq
+                expression_file: enrich/interface-errors.jq
+                variables:
+                  error_threshold: 0
               register: interface_counters
-              validations:
-                - {extractor: gjson, json_path: input_errors, condition: eq, expected: 0, expected_type: int}
-                - {extractor: gjson, json_path: crc_errors, condition: eq, expected: 0, expected_type: int}
-                - {extractor: gjson, json_path: output_errors, condition: eq, expected: 0, expected_type: int}
+              validation:
+                extractor: gjson
+                json_path: _summary.has_issues
+                condition: eq
+                expected: false
+                expected_type: bool
 
           rollback:
             - name: return-interface-to-shutdown

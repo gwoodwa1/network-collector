@@ -44,6 +44,7 @@ type StepConfig struct {
 	Message        string                  `mapstructure:"message" yaml:"message"`
 	Command        string                  `mapstructure:"cmd" yaml:"cmd"`
 	Parser         string                  `mapstructure:"parser" yaml:"parser"`
+	Enrich         *EnrichmentConfig       `mapstructure:"enrich" yaml:"enrich"`
 	WaitSeconds    int                     `mapstructure:"wait_seconds" yaml:"wait_seconds"`
 	ReturnToPrompt *bool                   `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
 	SSHProbe       *SSHProbeConfig         `mapstructure:"ssh_probe" yaml:"ssh_probe"`
@@ -66,6 +67,15 @@ type StepConfig struct {
 	Facts          *FactsConfig            `mapstructure:"facts" yaml:"facts"`
 	Drift          *DriftConfig            `mapstructure:"drift" yaml:"drift"`
 	GNMISubscribe  *GNMISubscribeConfig    `mapstructure:"gnmi_subscribe" yaml:"gnmi_subscribe"`
+}
+
+type EnrichmentConfig struct {
+	Engine         string                 `mapstructure:"engine" yaml:"engine"`
+	Expression     string                 `mapstructure:"expression" yaml:"expression"`
+	ExpressionFile string                 `mapstructure:"expression_file" yaml:"expression_file"`
+	Variables      map[string]interface{} `mapstructure:"variables" yaml:"variables"`
+	TimeoutSeconds int                    `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	MaxOutputBytes int                    `mapstructure:"max_output_bytes" yaml:"max_output_bytes"`
 }
 
 type GNMISubscribeConfig struct {
@@ -188,6 +198,7 @@ type Config struct {
 	SSHSecurity   SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
 	Facts         FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
 	Credentials   CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
+	baseDir       string
 }
 
 type CredentialProviderConfig struct {
@@ -348,6 +359,7 @@ type stepExecutionContext struct {
 	aggregated     *[]deviceValidation
 	runFailed      *bool
 	parsers        map[string]ParserModuleConfig
+	configBaseDir  string
 	output         OutputConfig
 	runDir         string
 	deviceIndex    int

@@ -83,7 +83,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers, workflows: config.Workflows,
-		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
+		configBaseDir: config.baseDir,
+		output:        config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
 		approveAll: approveAll, approvalInput: approvals, approvalWriter: approvalWriter,
 		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
 		factsDefaults:  config.Facts,
@@ -171,7 +172,8 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 	ctx := stepExecutionContext{
 		hostname: "local_steps", jsonOut: jsonOut, sessionLog: io.Discard,
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
-		output: config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
+		configBaseDir: config.baseDir,
+		output:        config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
 		events: events,
 	}
 
@@ -218,9 +220,20 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 					break
 				}
 				validationOutput = parsedOutput
-				if err := saveStepArtifact(&ctx, step, stepName, attempt, "parsed", parsedOutput); err != nil {
+			}
+			if step.Enrich != nil {
+				enrichedOutput, err := enrichJSON(validationOutput, *step.Enrich, ctx.configBaseDir)
+				if err != nil {
 					result.failed = true
-					slog.Error("error saving parsed playbook local output", "step", stepName, "error", err)
+					slog.Error("playbook local enrichment error", "step", stepName, "error", err)
+					break
+				}
+				validationOutput = enrichedOutput
+			}
+			if strings.TrimSpace(step.Parser) != "" || step.Enrich != nil {
+				if err := saveStepArtifact(&ctx, step, stepName, attempt, "parsed", validationOutput); err != nil {
+					result.failed = true
+					slog.Error("error saving structured playbook local output", "step", stepName, "error", err)
 				}
 			}
 			if name := strings.TrimSpace(step.Register); name != "" {

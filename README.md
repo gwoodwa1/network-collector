@@ -579,6 +579,32 @@ parsers:
 
 TextFSM value names are preserved as JSON keys. For example, `Value INTERFACE ...` produces an `INTERFACE` key. The `root` setting defaults to `records` for both record-oriented parser types.
 
+#### User-defined JSON enrichment
+
+Attach `enrich` to a step to transform JSON output with an embedded, pure-Go jq engine. Enrichment runs after parsing and before registration, validation, drift checks, and parsed artifact storage. This lets playbooks turn counters and measurements into deterministic summaries without adding vendor rules to Network Collector:
+
+```yaml
+- name: summarize-interface-errors
+  cmd: show interfaces HundredGigE0/0/0/0
+  parser: xr_interface_error_counters
+  enrich:
+    engine: gojq
+    expression_file: enrich/interface-errors.jq
+    variables:
+      error_threshold: 0
+  register: interface_health
+  validation:
+    extractor: gjson
+    json_path: _summary.has_issues
+    condition: eq
+    expected: false
+    expected_type: bool
+```
+
+Expressions can be supplied with `expression` or `expression_file`; the two settings are mutually exclusive. Relative expression paths are resolved from the main configuration file. Values under `variables` are available to the expression as `$params`, preserving YAML number, boolean, string, list, and object types. An expression must produce exactly one JSON value.
+
+The evaluator defaults to a two-second timeout and a 1 MiB result limit. Override these per step with `timeout_seconds` and `max_output_bytes`. It does not expose environment variables, filesystem functions, or jq module loading. The enriched document should preserve useful source data and add evidence-backed fields such as `_summary` for downstream playbooks and agents. See `examples/workflow-operations/enrich/interface-errors.jq` for a complete rule.
+
 #### Included IOS-XR TextFSM parsers
 
 The parser pack includes custom TextFSM coverage for:
@@ -1132,11 +1158,12 @@ Validation steps in `config.yaml` support extractors and typed comparisons. Use 
 - `pattern` / `json_path`: the extraction pattern or JSON path. Regex extraction uses the first capture group when present; otherwise it uses the whole regex match.
 - `condition`: `eq`, `neq`, `contains`, `not_contains`, `matches`, `gt`, `gte`, `lt`, or `lte`.
 - `expected`: the expected value to compare against
-- `expected_type` (optional): `string`, `int`, or `length` — when provided the extracted value will be coerced to that type before comparison. This prevents accidental string vs numeric mismatches (for example, the string "100" is distinct from the integer 100 when `expected_type` is `int`). With `length`, regex values use string length and GJSON arrays/objects use item count.
+- `expected_type` (optional): `string`, `int`, `bool`, or `length` — when provided the extracted value will be coerced to that type before comparison. This prevents accidental string vs numeric mismatches (for example, the string "100" is distinct from the integer 100 when `expected_type` is `int`). With `length`, regex values use string length and GJSON arrays/objects use item count.
 
 Example equality checks added in `config.yaml`:
 
 - String equality (exact match): `condition: eq`, `expected: "RUNNING"`, `expected_type: string`
 - Integer equality: `condition: eq`, `expected: 100`, `expected_type: int`
+- Boolean equality: `condition: eq`, `expected: true`, `expected_type: bool`
 - Regex match against an extracted value: `condition: matches`, `expected: '^\d+\.\d+\.\d+$'`
 - Length check: `condition: gte`, `expected: 3`, `expected_type: length`

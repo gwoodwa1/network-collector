@@ -78,6 +78,18 @@ func TestGJSONContains(t *testing.T) {
 	}
 }
 
+func TestGJSONBoolEq(t *testing.T) {
+	res, err := ValidateOutput(`{"_summary":{"has_issues":true}}`, ValidationRule{
+		Extractor: "gjson", JSONPath: "_summary.has_issues", Condition: "eq", Expected: true, ExpectedType: "bool",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("expected pass, got: %+v", res)
+	}
+}
+
 func TestRegexWithoutCaptureUsesWholeMatch(t *testing.T) {
 	out := "address-family ipv4 unicast overload"
 	rule := ValidationRule{

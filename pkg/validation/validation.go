@@ -17,7 +17,7 @@ type ValidationRule struct {
 	JSONPath     string      `json:"json_path,omitempty" yaml:"json_path,omitempty"`         // gjson path
 	Condition    string      `json:"condition" yaml:"condition"`                             // eq | neq | contains | not_contains | gt | gte | lt | lte | matches
 	Expected     interface{} `json:"expected" yaml:"expected"`                               // comparison value or regex pattern for matches
-	ExpectedType string      `json:"expected_type,omitempty" yaml:"expected_type,omitempty"` // string | int | length
+	ExpectedType string      `json:"expected_type,omitempty" yaml:"expected_type,omitempty"` // string | int | bool | length
 }
 
 // ValidationResult contains the detailed outcome of running a single ValidationRule against output.
@@ -149,6 +149,15 @@ func coerceValue(extracted extractedValue, rule ValidationRule, res *ValidationR
 			return nil, false
 		}
 		return i, true
+	case "bool":
+		value, err := strconv.ParseBool(strings.TrimSpace(extracted.raw))
+		if err != nil {
+			res.Status = "error"
+			res.Err = fmt.Sprintf("failed to coerce value to bool: %v", err)
+			res.Message = res.Err
+			return nil, false
+		}
+		return value, true
 	case "length":
 		if extracted.length != nil {
 			return *extracted.length, true
@@ -211,6 +220,22 @@ func compareEquality(val interface{}, rule ValidationRule, res *ValidationResult
 			return
 		}
 		equal = actualInt == expectedInt
+	} else if strings.EqualFold(rule.ExpectedType, "bool") {
+		expectedBool, ok := toBool(rule.Expected)
+		if !ok {
+			res.Status = "error"
+			res.Err = "expected value is not a bool"
+			res.Message = res.Err
+			return
+		}
+		actualBool, ok := val.(bool)
+		if !ok {
+			res.Status = "error"
+			res.Err = "extracted value is not a bool"
+			res.Message = res.Err
+			return
+		}
+		equal = actualBool == expectedBool
 	} else {
 		equal = fmt.Sprintf("%v", val) == fmt.Sprintf("%v", rule.Expected)
 	}
@@ -222,6 +247,18 @@ func compareEquality(val interface{}, rule ValidationRule, res *ValidationResult
 		failMessage = "values equal"
 	}
 	setComparisonResult(res, equal != negated, passMessage, failMessage, fmt.Sprintf("got=%v want=%v", val, rule.Expected))
+}
+
+func toBool(value interface{}) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
 }
 
 func compareContains(val interface{}, rule ValidationRule, res *ValidationResult) {
