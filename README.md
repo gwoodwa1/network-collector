@@ -605,6 +605,27 @@ Expressions can be supplied with `expression` or `expression_file`; the two sett
 
 The evaluator defaults to a two-second timeout and a 1 MiB result limit. Override these per step with `timeout_seconds` and `max_output_bytes`. It does not expose environment variables, filesystem functions, or jq module loading. The enriched document should preserve useful source data and add evidence-backed fields such as `_summary` for downstream playbooks and agents. See `examples/workflow-operations/enrich/interface-errors.jq` for a complete rule.
 
+Common expression patterns include:
+
+```jq
+# Add a count while preserving the source document.
+. + {"_summary": {"interface_count": ((.interfaces // []) | length)}}
+
+# Select evidence with a playbook-supplied threshold.
+. as $source
+| [.records[] | select((.utilization // 0) > $params.threshold)] as $busy
+| $source + {"_summary": {
+    "has_issues": (($busy | length) > 0),
+    "issue_count": ($busy | length),
+    "issues": $busy
+  }}
+
+# Normalize an optional value without discarding the original data.
+. + {"normalized": {"hostname": (.HOSTNAME // .hostname // "unknown")}}
+```
+
+An expression does not require a separate tool or service: it is ordinary gojq stored inline or in a `.jq` file. Prefer a file for multi-line policy, keep tunable thresholds under `variables`, use `//` for optional input fields, and wrap streams in arrays so the expression returns one result. A dedicated expression-authoring skill is useful only when a team maintains a larger rule catalogue with shared schemas, fixtures, and golden-output tests; `skills.md` contains the built-in authoring guidance for normal playbooks.
+
 #### Included IOS-XR TextFSM parsers
 
 The parser pack includes custom TextFSM coverage for:
@@ -663,6 +684,8 @@ ssh:
 ```
 
 The bundled SSH facts registry covers IOS-XR (`system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`) plus Arista EOS and Juniper Junos (`system`, `platform`, `interfaces`, `lldp`, and `bgp`). Unsupported subsets can still use OpenConfig NETCONF; SSH fallback deliberately requires a tested command and parser mapping rather than guessing CLI syntax.
+
+`facts` steps currently register and store their collected JSON through a dedicated execution path. They do not currently apply `enrich` or step validation, so do not attach `enrich` to a `facts` step. To derive a summary today, enrich JSON from a command/parser step or a local JSON-producing step. A future facts integration should apply enrichment before registration, drift checks, and parsed artifact storage, matching normal structured steps.
 
 ### Structured drift detection
 

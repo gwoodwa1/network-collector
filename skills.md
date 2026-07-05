@@ -4,7 +4,7 @@ Use this guide when generating `config.yaml`, `inventory.yaml`, or `parsers.yaml
 
 ## Goal
 
-Generate playbooks for `cmd/network-collector`, a network automation CLI that runs SSH commands, optionally parses command output into JSON, validates results, registers variables, retries checks, and runs conditional follow-up actions.
+Generate playbooks for `cmd/network-collector`, a network automation CLI that runs SSH commands, optionally parses and enriches command output into JSON, validates results, registers variables, retries checks, and runs conditional follow-up actions.
 
 The primary generated files are:
 
@@ -231,6 +231,7 @@ steps:
     message: checking current software
     cmd: show version
     parser: optional_parser_name
+    enrich: {}
     validation: {}
     validations: []
     register: variable_name
@@ -254,6 +255,7 @@ Supported step keys:
 - `message`: optional operator note logged before the step. Supports variables.
 - `cmd`: command to send over SSH. Supports variables.
 - `parser`: parser module name from `parsers.yaml`.
+- `enrich`: optional gojq transformation applied to JSON after parsing and before registration, validation, drift checks, and parsed artifact storage.
 - `validation`: one validation rule.
 - `validations`: multiple validation rules. All must pass.
 - `register`: variable name to store extracted or parsed data.
@@ -276,8 +278,55 @@ Rules:
 
 - Use `validation` for one rule and `validations` for multiple rules.
 - If a step has `parser`, validations run against the parsed JSON, not raw CLI text.
+- If a step has `enrich`, its input must be valid JSON. A command normally needs a `parser`; a `local` step may emit JSON directly.
+- Enrichment runs after parsing. Registration, validation, drift checks, and parsed artifacts use the enriched result.
 - If a step has `parser` and `register`, the parsed JSON is registered as the variable value.
 - If a step has `register` and validation results have `raw_extract`, the first non-empty `raw_extract` can be registered.
+
+## JSON Enrichment and gojq Expressions
+
+Use enrichment for user-owned policy and derived data: health summaries, threshold checks, normalization, counts, and evidence lists. Keep device output parsing in parser modules; do not use enrichment as a substitute for parsing unstructured CLI text.
+
+```yaml
+- name: summarize-interface-errors
+  cmd: show interfaces HundredGigE0/0/0/0
+  parser: xr_interface_error_counters
+  enrich:
+    engine: gojq
+    expression_file: enrich/interface-errors.jq
+    variables:
+      error_threshold: 0
+  register: interface_health
+  validation:
+    extractor: gjson
+    json_path: _summary.has_issues
+    condition: eq
+    expected: false
+    expected_type: bool
+```
+
+Supported enrichment keys:
+
+- `engine`: optional; omit it or use `gojq`.
+- `expression`: inline gojq expression.
+- `expression_file`: gojq file resolved relative to the main configuration file.
+- `variables`: typed YAML values exposed to the expression as `$params`.
+- `timeout_seconds`: optional evaluation timeout; defaults to 2 seconds.
+- `max_output_bytes`: optional encoded-result limit; defaults to 1 MiB.
+
+Rules for generated expressions:
+
+- Set exactly one of `expression` and `expression_file`.
+- Produce exactly one JSON value. Wrap filtered streams in arrays, for example `[.records[] | select(...)]`.
+- Preserve source evidence unless replacement is intentional. Prefer `. as $source | ... | $source + {"_summary": ...}`.
+- Use `//` for missing counters, for example `(.crc_errors // 0)`.
+- Put adjustable policy values in `variables`; refer to them through `$params`, not hard-coded thresholds.
+- Keep `_summary.has_issues`, `_summary.issue_count`, and `_summary.issues` stable when producing health results. Each issue should include a rule, severity, message, and evidence where practical.
+- Validate booleans with `expected_type: bool`.
+- Enrichment has no environment, filesystem, or jq module access. It is a deterministic transformation of the input JSON and `$params`.
+- `facts` steps currently use a separate execution path and do not apply `enrich` or validation. Do not generate `facts` plus `enrich` until runtime support is added; enrich a command/parser or local JSON step instead.
+
+A separate general-purpose skill is not required to write expressions. This authoring skill contains the runtime contract and preferred patterns. Consider a dedicated expression library or skill only when maintaining a sizeable catalogue of domain rules, vendor schema mappings, shared fixtures, and golden-output tests.
 - Use `wait_seconds` alone for pauses.
 - Use `return_to_prompt: false` for reboot/confirmation commands that intentionally lose the prompt.
 
