@@ -41,7 +41,7 @@ func sanitizeLogName(value string) string {
 }
 
 func outputEnabled(config Config, devices []DeviceConfig) bool {
-	if config.Output.SaveRaw || config.Output.SaveParsed || strings.TrimSpace(config.Output.SummaryFile) != "" || strings.TrimSpace(config.Output.EventsFile) != "" {
+	if config.Output.SaveRaw || config.Output.SaveParsed || strings.TrimSpace(config.Output.SummaryFile) != "" || strings.TrimSpace(config.Output.EventsFile) != "" || len(config.Output.EventSinks) > 0 {
 		return true
 	}
 	for _, device := range devices {
@@ -114,6 +114,11 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 		if step.Output != nil {
 			override = step.Output.SaveParsed
 		}
+	}
+	if kind == "drift" {
+		enabled = true
+		extension = "drift.json"
+		override = nil
 	}
 	if !stepOutputEnabled(enabled, override) {
 		return nil

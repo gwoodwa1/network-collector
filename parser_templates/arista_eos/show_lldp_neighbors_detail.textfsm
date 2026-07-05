@@ -1,0 +1,12 @@
+Value LOCAL_INTERFACE (\S+)
+Value CHASSIS_ID (\S+)
+Value PORT_ID (\S+)
+Value PORT_DESCRIPTION (.*)
+Value SYSTEM_NAME (\S+)
+
+Start
+  ^Interface name:\s+${LOCAL_INTERFACE}
+  ^Chassis ID:\s+${CHASSIS_ID}
+  ^Port ID:\s+${PORT_ID}
+  ^Port Description:\s+${PORT_DESCRIPTION}
+  ^System Name:\s+${SYSTEM_NAME} -> Record

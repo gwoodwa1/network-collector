@@ -1792,8 +1792,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 12 {
-		t.Fatalf("expected inventory plus eleven workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 14 {
+		t.Fatalf("expected inventory plus thirteen workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	for _, path := range paths {
@@ -1810,8 +1810,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		}
 		loaded[filepath.Base(path)] = config
 	}
-	if len(loaded) != 11 {
-		t.Fatalf("expected eleven loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 13 {
+		t.Fatalf("expected thirteen loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1861,6 +1861,15 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	reloadSteps := reload.SSH[0].Steps
 	if len(reloadSteps) != 5 || reloadSteps[1].Approval == nil || reloadSteps[2].ReturnToPrompt == nil || *reloadSteps[2].ReturnToPrompt || reloadSteps[3].SSHProbe == nil || reloadSteps[4].OnPass == nil || len(reloadSteps[4].OnPass.Steps) != 2 {
 		t.Fatalf("reload/reconnect example is incomplete: %+v", reload)
+	}
+	multivendor := loaded["12-multivendor-facts.yaml"]
+	multivendorInventory, err := loadOptionalInventory(multivendor.InventoryFile, filepath.Join(directory, "12-multivendor-facts.yaml"))
+	if err != nil || len(multivendor.Facts.DefaultSubsets) != 5 || multivendorInventory == nil || len(multivendorInventory.Hosts) != 2 || multivendorInventory.Hosts[0].CredentialProfile != "datacenter" {
+		t.Fatalf("multi-vendor facts example is incomplete: inventory=%+v config=%+v error=%v", multivendorInventory, multivendor, err)
+	}
+	driftExample := loaded["13-structured-drift.yaml"]
+	if len(driftExample.SSH) != 1 || len(driftExample.SSH[0].Steps) != 2 || driftExample.SSH[0].Steps[0].Drift == nil || driftExample.SSH[0].Steps[0].Drift.Baseline != "previous" || driftExample.SSH[0].Steps[1].Drift == nil || !driftExample.SSH[0].Steps[1].Drift.UpdateBaseline {
+		t.Fatalf("drift example is incomplete: %+v", driftExample)
 	}
 }
 

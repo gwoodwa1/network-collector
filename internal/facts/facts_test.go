@@ -124,3 +124,18 @@ func TestCollectorMergesRoutingSubsetsUnderNetworkInstances(t *testing.T) {
 		}
 	}
 }
+
+func TestEOSAndJunosSSHDefinitions(t *testing.T) {
+	tests := []struct{ platform, subset, command, parser string }{
+		{"arista_eos", "system", "show version", "eos_facts_system"},
+		{"eos", "interfaces", "show interfaces status", "eos_facts_interfaces"},
+		{"juniper_junos", "platform", "show chassis hardware", "junos_facts_platform"},
+		{"junos", "bgp", "show bgp summary", "junos_facts_bgp"},
+	}
+	for _, test := range tests {
+		definition, ok := lookup(test.platform, test.subset)
+		if !ok || definition.Command != test.command || definition.Parser != test.parser {
+			t.Fatalf("lookup(%s,%s)=%+v,%v", test.platform, test.subset, definition, ok)
+		}
+	}
+}

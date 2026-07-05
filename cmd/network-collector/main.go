@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
+	"github.com/gwoodwa1/network-collector/pkg/drift"
+	gnmidriver "github.com/gwoodwa1/network-collector/pkg/drivers/gnmi"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 	"github.com/gwoodwa1/network-collector/pkg/orchestrator"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
@@ -84,6 +86,27 @@ type StepConfig struct {
 	Approval       *ApprovalConfig         `mapstructure:"approval" yaml:"approval"`
 	Parallel       *ParallelConfig         `mapstructure:"parallel" yaml:"parallel"`
 	Facts          *FactsConfig            `mapstructure:"facts" yaml:"facts"`
+	Drift          *DriftConfig            `mapstructure:"drift" yaml:"drift"`
+	GNMISubscribe  *GNMISubscribeConfig    `mapstructure:"gnmi_subscribe" yaml:"gnmi_subscribe"`
+}
+
+type GNMISubscribeConfig struct {
+	Paths                 []string `mapstructure:"paths" yaml:"paths"`
+	Port                  int      `mapstructure:"port" yaml:"port"`
+	Mode                  string   `mapstructure:"mode" yaml:"mode"`
+	StreamMode            string   `mapstructure:"stream_mode" yaml:"stream_mode"`
+	SampleIntervalSeconds int      `mapstructure:"sample_interval_seconds" yaml:"sample_interval_seconds"`
+	DurationSeconds       int      `mapstructure:"duration_seconds" yaml:"duration_seconds"`
+	MaxUpdates            int      `mapstructure:"max_updates" yaml:"max_updates"`
+	SkipTLS               bool     `mapstructure:"skip_tls" yaml:"skip_tls"`
+	TimeoutSeconds        int      `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+}
+
+type DriftConfig struct {
+	Baseline       string   `mapstructure:"baseline" yaml:"baseline"`
+	Ignore         []string `mapstructure:"ignore" yaml:"ignore"`
+	FailOnChange   bool     `mapstructure:"fail_on_change" yaml:"fail_on_change"`
+	UpdateBaseline bool     `mapstructure:"update_baseline" yaml:"update_baseline"`
 }
 
 type FactsConfig struct {
@@ -138,22 +161,23 @@ type RepeatConfig struct {
 }
 
 type DeviceConfig struct {
-	Hostname         string             `mapstructure:"hostname" yaml:"hostname"`
-	IP               string             `mapstructure:"ip" yaml:"ip"`
-	Host             string             `mapstructure:"host" yaml:"host"`
-	Hosts            []string           `mapstructure:"hosts" yaml:"hosts"`
-	Group            string             `mapstructure:"group" yaml:"group"`
-	Groups           []string           `mapstructure:"groups" yaml:"groups"`
-	Type             string             `mapstructure:"type" yaml:"type"`
-	Timeout          int                `mapstructure:"timeout" yaml:"timeout"`
-	OperationTimeout int                `mapstructure:"operation_timeout" yaml:"operation_timeout"`
-	Steps            []StepConfig       `mapstructure:"steps" yaml:"steps"`
-	Command          string             `mapstructure:"cmd" yaml:"cmd"`
-	Parser           string             `mapstructure:"parser" yaml:"parser"`
-	Validation       *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
-	Validations      []ValidationConfig `mapstructure:"validations" yaml:"validations"`
-	SSHSecurity      *SSHSecurityConfig `mapstructure:"ssh_security" yaml:"ssh_security"`
-	Labels           map[string]string  `mapstructure:"labels" yaml:"labels"`
+	Hostname          string             `mapstructure:"hostname" yaml:"hostname"`
+	IP                string             `mapstructure:"ip" yaml:"ip"`
+	Host              string             `mapstructure:"host" yaml:"host"`
+	Hosts             []string           `mapstructure:"hosts" yaml:"hosts"`
+	Group             string             `mapstructure:"group" yaml:"group"`
+	Groups            []string           `mapstructure:"groups" yaml:"groups"`
+	Type              string             `mapstructure:"type" yaml:"type"`
+	Timeout           int                `mapstructure:"timeout" yaml:"timeout"`
+	OperationTimeout  int                `mapstructure:"operation_timeout" yaml:"operation_timeout"`
+	Steps             []StepConfig       `mapstructure:"steps" yaml:"steps"`
+	Command           string             `mapstructure:"cmd" yaml:"cmd"`
+	Parser            string             `mapstructure:"parser" yaml:"parser"`
+	Validation        *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
+	Validations       []ValidationConfig `mapstructure:"validations" yaml:"validations"`
+	SSHSecurity       *SSHSecurityConfig `mapstructure:"ssh_security" yaml:"ssh_security"`
+	Labels            map[string]string  `mapstructure:"labels" yaml:"labels"`
+	CredentialProfile string             `mapstructure:"credential_profile" yaml:"credential_profile"`
 }
 
 type SSHSecurityConfig struct {
@@ -185,6 +209,13 @@ type Config struct {
 	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
 	SSHSecurity   SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
 	Facts         FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
+	Credentials   CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
+}
+
+type CredentialProviderConfig struct {
+	Provider string   `mapstructure:"provider" yaml:"provider"`
+	File     string   `mapstructure:"file" yaml:"file"`
+	Command  []string `mapstructure:"command" yaml:"command"`
 }
 
 type FactsDefaultsConfig struct {
@@ -199,11 +230,24 @@ type ScheduleConfig struct {
 }
 
 type OutputConfig struct {
-	Directory   string `mapstructure:"directory" yaml:"directory"`
-	SaveRaw     bool   `mapstructure:"save_raw" yaml:"save_raw"`
-	SaveParsed  bool   `mapstructure:"save_parsed" yaml:"save_parsed"`
-	SummaryFile string `mapstructure:"summary_file" yaml:"summary_file"`
-	EventsFile  string `mapstructure:"events_file" yaml:"events_file"`
+	Directory   string            `mapstructure:"directory" yaml:"directory"`
+	SaveRaw     bool              `mapstructure:"save_raw" yaml:"save_raw"`
+	SaveParsed  bool              `mapstructure:"save_parsed" yaml:"save_parsed"`
+	SummaryFile string            `mapstructure:"summary_file" yaml:"summary_file"`
+	EventsFile  string            `mapstructure:"events_file" yaml:"events_file"`
+	EventSinks  []EventSinkConfig `mapstructure:"event_sinks" yaml:"event_sinks"`
+}
+
+type EventSinkConfig struct {
+	Type           string            `mapstructure:"type" yaml:"type"`
+	URL            string            `mapstructure:"url" yaml:"url"`
+	Headers        map[string]string `mapstructure:"headers" yaml:"headers"`
+	HMACSecretEnv  string            `mapstructure:"hmac_secret_env" yaml:"hmac_secret_env"`
+	Network        string            `mapstructure:"network" yaml:"network"`
+	Address        string            `mapstructure:"address" yaml:"address"`
+	AppName        string            `mapstructure:"app_name" yaml:"app_name"`
+	TimeoutSeconds int               `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	QueueSize      int               `mapstructure:"queue_size" yaml:"queue_size"`
 }
 
 type StepOutputConfig struct {
@@ -219,15 +263,16 @@ type ExecutionConfig struct {
 }
 
 type InventoryHostConfig struct {
-	Name             string             `yaml:"name"`
-	Hostname         string             `yaml:"hostname"`
-	IP               string             `yaml:"ip"`
-	Address          string             `yaml:"address"`
-	Type             string             `yaml:"type"`
-	Timeout          int                `yaml:"timeout"`
-	OperationTimeout int                `yaml:"operation_timeout"`
-	SSHSecurity      *SSHSecurityConfig `yaml:"ssh_security"`
-	Labels           map[string]string  `yaml:"labels"`
+	Name              string             `yaml:"name"`
+	Hostname          string             `yaml:"hostname"`
+	IP                string             `yaml:"ip"`
+	Address           string             `yaml:"address"`
+	Type              string             `yaml:"type"`
+	Timeout           int                `yaml:"timeout"`
+	OperationTimeout  int                `yaml:"operation_timeout"`
+	SSHSecurity       *SSHSecurityConfig `yaml:"ssh_security"`
+	Labels            map[string]string  `yaml:"labels"`
+	CredentialProfile string             `yaml:"credential_profile"`
 }
 
 type InventoryGroupConfig struct {
@@ -652,6 +697,9 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 		copied := *host.SSHSecurity
 		resolved.SSHSecurity = &copied
 	}
+	if strings.TrimSpace(resolved.CredentialProfile) == "" {
+		resolved.CredentialProfile = strings.TrimSpace(host.CredentialProfile)
+	}
 	resolved.Labels = cloneLabels(host.Labels)
 	for key, value := range device.Labels {
 		resolved.Labels[key] = value
@@ -917,6 +965,73 @@ func parseOutputWithModule(output, parserName string, parsers map[string]ParserM
 	default:
 		return "", fmt.Errorf("unsupported parser type %q for parser %q", parser.Type, parserName)
 	}
+}
+
+func applyDriftCheck(ctx *stepExecutionContext, step StepConfig, stepName, current string) error {
+	if step.Drift == nil {
+		return nil
+	}
+	vars := cloneVariables(ctx.variables)
+	vars["hostname"] = ctx.hostname
+	vars["ip"] = ctx.ip
+	baselinePath, err := renderTemplate(strings.TrimSpace(step.Drift.Baseline), vars)
+	if err != nil {
+		return fmt.Errorf("render drift baseline: %w", err)
+	}
+	if baselinePath == "" {
+		return fmt.Errorf("drift.baseline cannot be empty")
+	}
+	updateBaseline := step.Drift.UpdateBaseline
+	if strings.EqualFold(baselinePath, "previous") {
+		directory := strings.TrimSpace(ctx.output.Directory)
+		if directory == "" {
+			directory = "artifacts"
+		}
+		baselinePath = filepath.Join(directory, ".baselines", sanitizeLogName(ctx.hostname), sanitizeLogName(stepName)+".json")
+		updateBaseline = true
+	}
+	baseline, err := os.ReadFile(baselinePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read drift baseline: %w", err)
+	}
+	if os.IsNotExist(err) {
+		if !updateBaseline {
+			return fmt.Errorf("drift baseline %q does not exist", baselinePath)
+		}
+		if err := atomicWriteFile(baselinePath, append([]byte(current), '\n')); err != nil {
+			return fmt.Errorf("create drift baseline: %w", err)
+		}
+		baseline = []byte(current)
+	}
+	report, err := drift.Compare(baseline, []byte(current), step.Drift.Ignore)
+	if err != nil {
+		return err
+	}
+	encoded, _ := json.MarshalIndent(report, "", "  ")
+	writeSessionf(ctx.sessionLog, "[step:%s] drift result:\n%s\n", stepName, encoded)
+	if err := saveStepArtifact(ctx, step, stepName, 1, "drift", string(encoded)); err != nil {
+		return err
+	}
+	status := "pass"
+	message := "no structured drift detected"
+	if report.Changed {
+		message = fmt.Sprintf("structured drift detected: %d change(s)", len(report.Changes))
+		if step.Drift.FailOnChange {
+			status = "fail"
+		}
+	}
+	result := validation.ValidationResult{Pass: status == "pass", Status: status, Extractor: "drift", PatternOrPath: baselinePath, Message: message, Timestamp: time.Now()}
+	*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: result})
+	ctx.events.emit(lifecycleEvent{Type: "validation.completed", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"status": status, "pass": status == "pass", "kind": "drift", "changed": report.Changed, "changes": len(report.Changes)}})
+	if report.Changed && step.Drift.FailOnChange {
+		*ctx.runFailed = true
+	}
+	if updateBaseline && report.Changed {
+		if err := atomicWriteFile(baselinePath, append([]byte(current), '\n')); err != nil {
+			return fmt.Errorf("update drift baseline: %w", err)
+		}
+	}
+	return nil
 }
 
 func inventoryIndex(inventory *InventoryConfig) (map[string]InventoryHostConfig, error) {
@@ -1784,7 +1899,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Approval != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, "approval step cannot define executable or other control fields")
 				continue
@@ -1813,7 +1928,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if step.Parallel != nil {
 			controlCount++
 		}
-		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
+		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
 			*ctx.runFailed = true
 			recordStepFailure(ctx, stepName, "control step must define exactly one of repeat, foreach, use, block, or parallel and no executable fields")
 			continue
@@ -1844,7 +1959,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Repeat != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				stopDeviceSteps = true
 				err := fmt.Errorf("repeat step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
@@ -1860,7 +1975,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Facts != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.GNMISubscribe != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, "facts step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
 				continue
@@ -1869,6 +1984,11 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, err.Error())
 			}
+			continue
+		}
+		if step.GNMISubscribe != nil && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil) {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, "gnmi_subscribe step cannot also define cmd, local, wait_seconds, or ssh_probe")
 			continue
 		}
 
@@ -1939,7 +2059,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			continue
 		}
 		cmd := ""
-		if step.Local == nil {
+		if step.Local == nil && step.GNMISubscribe == nil {
 			cmd, err = renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
 			if err != nil {
 				*ctx.runFailed = true
@@ -1948,7 +2068,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				continue
 			}
 		}
-		if cmd == "" && step.Local == nil {
+		if cmd == "" && step.Local == nil && step.GNMISubscribe == nil {
 			if wait > 0 || step.SSHProbe != nil || strings.TrimSpace(step.Message) != "" {
 				continue
 			}
@@ -1964,7 +2084,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		for {
 			attempt++
 
-			if step.Local == nil && (client == nil || *client == nil) {
+			if step.Local == nil && step.GNMISubscribe == nil && (client == nil || *client == nil) {
 				*ctx.runFailed = true
 				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
@@ -1976,12 +2096,15 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			var commandDisplay string
 			if step.Local != nil {
 				output, commandDisplay, err = executeLocalCommand(*step.Local, ctx.variables)
+			} else if step.GNMISubscribe != nil {
+				commandDisplay = strings.Join(step.GNMISubscribe.Paths, ",")
+				output, err = executeGNMISubscribe(ctx, *step.GNMISubscribe)
 			} else {
 				commandDisplay = cmd
 				output, err = (*client).Execute(cmd)
 			}
 			if err != nil {
-				if step.Local == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
+				if step.Local == nil && step.GNMISubscribe == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
 					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
 					if err := closeSSHClient(*client); err != nil {
@@ -2001,6 +2124,8 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			commandKind := "device"
 			if step.Local != nil {
 				commandKind = "local"
+			} else if step.GNMISubscribe != nil {
+				commandKind = "gnmi_subscribe"
 			}
 			writeSessionf(ctx.sessionLog, "\n[step:%s] %s command=%q\n%s\n", stepName, commandKind, commandDisplay, output)
 			if !ctx.jsonOut {
@@ -2037,6 +2162,13 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				}
 				if registerParserOutput(ctx.variables, step, validationOutput) {
 					slog.Info("registered parser output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
+				}
+			}
+			if step.Drift != nil {
+				if err := applyDriftCheck(ctx, step, stepName, validationOutput); err != nil {
+					*ctx.runFailed = true
+					recordStepFailure(ctx, stepName, fmt.Sprintf("drift check failed: %v", err))
+					break
 				}
 			}
 
@@ -2121,6 +2253,31 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 	}
 	return stopDeviceSteps
+}
+
+func executeGNMISubscribe(ctx *stepExecutionContext, config GNMISubscribeConfig) (string, error) {
+	port := config.Port
+	if port <= 0 {
+		port = 57400
+	}
+	address := net.JoinHostPort(ctx.ip, strconv.Itoa(port))
+	options := []gnmidriver.Option{}
+	if config.SkipTLS {
+		options = append(options, gnmidriver.WithSkipTLS())
+	}
+	if config.TimeoutSeconds > 0 {
+		options = append(options, gnmidriver.WithRequestTimeout(time.Duration(config.TimeoutSeconds)*time.Second))
+	}
+	client := &gnmidriver.GNMIClient{}
+	if err := client.Connect(address, ctx.username, ctx.password, options...); err != nil {
+		return "", err
+	}
+	defer client.Close()
+	return client.Subscribe(context.Background(), gnmidriver.Subscription{
+		Paths: config.Paths, Mode: config.Mode, StreamMode: config.StreamMode,
+		SampleInterval: time.Duration(config.SampleIntervalSeconds) * time.Second,
+		Duration:       time.Duration(config.DurationSeconds) * time.Second, MaxUpdates: config.MaxUpdates,
+	})
 }
 
 func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
@@ -2336,6 +2493,13 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 			if name := strings.TrimSpace(step.Register); name != "" {
 				variables[name] = validationOutput
 			}
+			if step.Drift != nil {
+				if err := applyDriftCheck(&ctx, step, stepName, validationOutput); err != nil {
+					result.failed = true
+					slog.Error("playbook local drift check failed", "step", stepName, "error", err)
+					break
+				}
+			}
 
 			validations := stepValidations(step)
 			if len(validations) == 0 {
@@ -2464,16 +2628,38 @@ func main() {
 	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(sshDevices) == 0 {
 		slog.Warn("inventory selection matched no SSH devices")
 	}
-	var username, password string
+	deviceCredentials := make([]credentials.Credentials, len(sshDevices))
 	if len(sshDevices) > 0 {
-		username, password, err = credentials.ResolveCredentials(cliCredsInput, nil, nil)
-		if err != nil {
-			slog.Error("error reading credentials", "error", err)
+		providerType := config.Credentials.Provider
+		if cliCredsInput {
+			providerType = "interactive"
+		}
+		credentialFile := strings.TrimSpace(config.Credentials.File)
+		if credentialFile != "" && !filepath.IsAbs(credentialFile) {
+			credentialFile = filepath.Join(filepath.Dir(configFile), credentialFile)
+		}
+		provider, providerErr := credentials.NewProvider(credentials.ProviderConfig{Type: providerType, File: credentialFile, Command: config.Credentials.Command}, os.Stdin, os.Stderr)
+		if providerErr != nil {
+			slog.Error("error configuring credential provider", "error", providerErr)
 			os.Exit(1)
 		}
-		if username == "" || password == "" {
-			slog.Error("missing required credentials", "required", "NET_USER,NET_PASSWORD")
-			os.Exit(1)
+		if strings.EqualFold(providerType, "interactive") || strings.EqualFold(providerType, "prompt") {
+			shared, resolveErr := provider.Resolve(context.Background(), credentials.Target{Hostname: "selected inventory"})
+			if resolveErr != nil {
+				slog.Error("error resolving credentials", "error", resolveErr)
+				os.Exit(1)
+			}
+			for index := range deviceCredentials {
+				deviceCredentials[index] = shared
+			}
+		} else {
+			for index, device := range sshDevices {
+				deviceCredentials[index], err = provider.Resolve(context.Background(), credentials.Target{Hostname: device.Hostname, IP: device.IP, Profile: device.CredentialProfile})
+				if err != nil {
+					slog.Error("error resolving credentials", "hostname", device.Hostname, "error", err)
+					os.Exit(1)
+				}
+			}
 		}
 	}
 	for _, device := range sshDevices {
@@ -2519,6 +2705,15 @@ func main() {
 		events.sinks = append(events.sinks, sink)
 		slog.Info("recording lifecycle events", "path", eventPath)
 	}
+	for index, sinkConfig := range config.Output.EventSinks {
+		sink, sinkErr := newNetworkEventSink(sinkConfig)
+		if sinkErr != nil {
+			slog.Error("error configuring lifecycle event sink", "index", index, "type", sinkConfig.Type, "error", sinkErr)
+			os.Exit(1)
+		}
+		events.sinks = append(events.sinks, sink)
+		slog.Info("configured lifecycle event sink", "type", strings.ToLower(strings.TrimSpace(sinkConfig.Type)))
+	}
 	events.emit(lifecycleEvent{Type: "run.started", Data: map[string]interface{}{"playbook": config.NamePlaybook, "device_count": len(sshDevices)}})
 
 	if err := validateExecutionConfig(config.Execution); err != nil {
@@ -2553,7 +2748,8 @@ func main() {
 		for state.next < len(state.order) && state.order[state.next] != index {
 			state.cond.Wait()
 		}
-		result := runSSHDevice(index, occurrence, device, config, username, password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
+		credential := deviceCredentials[index]
+		result := runSSHDevice(index, occurrence, device, config, credential.Username, credential.Password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()

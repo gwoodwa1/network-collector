@@ -29,11 +29,31 @@ var xrDefinitions = map[string]Definition{
 	"ldp":        {Command: "show mpls ldp neighbor brief", Parser: "xr_facts_ldp", NETCONFFilter: `<network-instances xmlns="http://openconfig.net/yang/network-instance"><network-instance><mpls><signaling-protocols><ldp xmlns="http://openconfig.net/yang/mpls-ldp"/></signaling-protocols></mpls></network-instance></network-instances>`},
 }
 
+var eosDefinitions = map[string]Definition{
+	"system":     {Command: "show version", Parser: "eos_facts_system"},
+	"platform":   {Command: "show module", Parser: "eos_facts_platform"},
+	"interfaces": {Command: "show interfaces status", Parser: "eos_facts_interfaces"},
+	"lldp":       {Command: "show lldp neighbors detail", Parser: "eos_facts_lldp"},
+	"bgp":        {Command: "show ip bgp summary", Parser: "eos_facts_bgp"},
+}
+
+var junosDefinitions = map[string]Definition{
+	"system":     {Command: "show version", Parser: "junos_facts_system"},
+	"platform":   {Command: "show chassis hardware", Parser: "junos_facts_platform"},
+	"interfaces": {Command: "show interfaces terse", Parser: "junos_facts_interfaces"},
+	"lldp":       {Command: "show lldp neighbors detail", Parser: "junos_facts_lldp"},
+	"bgp":        {Command: "show bgp summary", Parser: "junos_facts_bgp"},
+}
+
 func canonicalPlatform(platform string) string {
 	value := strings.ToLower(strings.TrimSpace(platform))
 	switch value {
 	case "cisco_iosxr", "iosxr", "ios-xr":
 		return "cisco_iosxr"
+	case "arista_eos", "eos", "arista-eos":
+		return "arista_eos"
+	case "juniper_junos", "junos", "juniper-junos":
+		return "juniper_junos"
 	default:
 		return value
 	}
@@ -47,6 +67,14 @@ func lookup(platform, subset string) (Definition, bool) {
 	switch canonicalPlatform(platform) {
 	case "cisco_iosxr":
 		sshDefinition := xrDefinitions[subset]
+		definition.Command = sshDefinition.Command
+		definition.Parser = sshDefinition.Parser
+	case "arista_eos":
+		sshDefinition := eosDefinitions[subset]
+		definition.Command = sshDefinition.Command
+		definition.Parser = sshDefinition.Parser
+	case "juniper_junos":
+		sshDefinition := junosDefinitions[subset]
 		definition.Command = sshDefinition.Command
 		definition.Parser = sshDefinition.Parser
 	}

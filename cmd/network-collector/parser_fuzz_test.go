@@ -22,7 +22,11 @@ func FuzzParserModules(f *testing.F) {
 		}
 		f.Add(data)
 	}
-	parserNames := []string{"xr_show_interfaces_brief_records", "xr_show_interfaces_brief_textfsm", "xr_show_platform", "xr_show_route_summary", "xr_show_ntp_associations", "xr_show_ntp_status", "xr_show_alarms_brief_system_active"}
+	parserNames := []string{
+		"xr_show_interfaces_brief_records", "xr_show_interfaces_brief_textfsm", "xr_show_platform", "xr_show_route_summary", "xr_show_ntp_associations", "xr_show_ntp_status", "xr_show_alarms_brief_system_active",
+		"eos_facts_system", "eos_facts_platform", "eos_facts_interfaces", "eos_facts_lldp", "eos_facts_bgp",
+		"junos_facts_system", "junos_facts_platform", "junos_facts_interfaces", "junos_facts_lldp", "junos_facts_bgp",
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 64*1024 {
 			t.Skip()

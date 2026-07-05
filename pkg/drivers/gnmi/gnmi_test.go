@@ -8,12 +8,27 @@ import (
 	"time"
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/openconfig/gnmic/pkg/api/target"
 	"google.golang.org/grpc"
 )
 
 type testGNMIServer struct {
 	gnmipb.UnimplementedGNMIServer
 	t *testing.T
+}
+
+func (s *testGNMIServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
+	request, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if len(request.GetSubscribe().GetSubscription()) == 0 {
+		s.t.Error("subscription has no paths")
+	}
+	if err := stream.Send(&gnmipb.SubscribeResponse{Response: &gnmipb.SubscribeResponse_Update{Update: &gnmipb.Notification{Timestamp: 2, Update: []*gnmipb.Update{{Path: request.GetSubscribe().GetSubscription()[0].Path, Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "UP"}}}}}}}); err != nil {
+		return err
+	}
+	return stream.Send(&gnmipb.SubscribeResponse{Response: &gnmipb.SubscribeResponse_SyncResponse{SyncResponse: true}})
 }
 
 func (s *testGNMIServer) Get(_ context.Context, request *gnmipb.GetRequest) (*gnmipb.GetResponse, error) {
@@ -43,6 +58,13 @@ func TestConnectExecuteCloseAgainstLocalServer(t *testing.T) {
 	if !strings.Contains(output, "interface-up") {
 		t.Fatalf("unexpected gNMI output: %s", output)
 	}
+	subscriptionOutput, err := client.Subscribe(context.Background(), Subscription{Paths: []string{"/interfaces/interface[name=Loopback0]/state/oper-status"}, Mode: "once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(subscriptionOutput, "UP") || !strings.Contains(subscriptionOutput, "sync-response") {
+		t.Fatalf("unexpected subscription output: %s", subscriptionOutput)
+	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -55,5 +77,9 @@ func TestValidationErrors(t *testing.T) {
 	}
 	if _, err := client.Execute("/interfaces"); err == nil {
 		t.Fatal("execute before connect accepted")
+	}
+	client.target = &target.Target{}
+	if _, err := client.Subscribe(context.Background(), Subscription{Paths: []string{"/interfaces"}, Mode: "stream"}); err == nil {
+		t.Fatal("unbounded stream accepted")
 	}
 }

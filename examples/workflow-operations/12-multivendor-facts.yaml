@@ -1,0 +1,24 @@
+name_playbook: EOS and Junos multi-vendor facts
+inventory_file: inventory/multivendor.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+facts:
+  default_format: both
+  default_subsets: [system, platform, interfaces, lldp, bgp]
+  default_transports: [netconf, ssh]
+
+output:
+  directory: artifacts
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: multivendor-lab
+    steps:
+      - name: collect-standard-facts
+        facts: {}
+        register: device_facts
+      - name: facts-complete
+        message: vendor-native facts and normalized OpenConfig-shaped state were collected

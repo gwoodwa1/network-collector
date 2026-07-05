@@ -55,13 +55,40 @@ To build from source instead:
     export NET_PASSWORD=<your password>
     ```
 
-    Alternatively, pass `--creds_input` to any of the built commands to be
+Alternatively, pass `--creds_input` to any of the built commands to be
     prompted for a username and password. Interactive input overrides any
     credentials already set in the environment, and password entry is hidden:
 
     ```bash
     ./network-collector --creds_input
     ```
+
+For unattended or mixed-credential estates, select a credential provider in the playbook. Existing environment behavior remains the default:
+
+```yaml
+credentials:
+  provider: file
+  file: /secure/network-credentials.yaml
+```
+
+Credential files must not be accessible by group or other users (`chmod 600`) and support a default plus named profiles:
+
+```yaml
+default: {username: automation, password: default-secret}
+profiles:
+  datacenter: {username: eos-automation, password: eos-secret}
+  edge: {username: junos-automation, password: junos-secret}
+```
+
+Assign a profile to an inventory host with `credential_profile: datacenter`. The `command` provider executes an argument array and expects one JSON object on stdout containing `username` and `password`; it receives `NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE` environment variables:
+
+```yaml
+credentials:
+  provider: command
+  command: [/usr/local/bin/read-network-secret, --format, json]
+```
+
+This command contract can wrap Vault, AWS Secrets Manager, an OS keyring, or another organization-specific secret broker without storing secrets in playbooks. Provider commands time out after 30 seconds. Never commit populated credential files or print secrets from provider commands.
 
 ### Docker
 
@@ -609,7 +636,23 @@ ssh:
   register: routing_facts
 ```
 
-The bundled SSH facts registry currently covers IOS-XR. Its subsets are `system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`. Other platforms can still use OpenConfig NETCONF after a platform registry entry is added; SSH fallback deliberately requires a tested command and parser mapping rather than guessing CLI syntax.
+The bundled SSH facts registry covers IOS-XR (`system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`) plus Arista EOS and Juniper Junos (`system`, `platform`, `interfaces`, `lldp`, and `bgp`). Unsupported subsets can still use OpenConfig NETCONF; SSH fallback deliberately requires a tested command and parser mapping rather than guessing CLI syntax.
+
+### Structured drift detection
+
+Attach `drift` to a command or local step that produces JSON directly or through a parser:
+
+```yaml
+- name: platform-drift
+  cmd: show platform
+  parser: xr_show_platform
+  drift:
+    baseline: previous
+    ignore: [nodes.*.uptime]
+    fail_on_change: true
+```
+
+`baseline: previous` stores rolling per-device/per-step state under the output directory's `.baselines` folder. A file path instead compares against an explicitly approved JSON baseline; `{{hostname}}` and `{{ip}}` are available in the path. `update_baseline: true` creates or refreshes file baselines. Comparisons are structural, ignore JSON object key ordering, identify added/removed/changed paths, and always write a `drift.json` artifact. With `fail_on_change: false`, changes remain visible without failing the run.
 
 ### Offline parser fixture tests
 
@@ -868,6 +911,28 @@ Use `parallel` for independent same-device branches. Each branch gets a separate
 
 A control step may define one of `repeat`, `foreach`, `use`, `block`, or `parallel`; executable fields belong in its nested steps. An `approval` gate is a standalone step. `when` may guard any normal or control step.
 
+Use `gnmi_subscribe` for a finite telemetry collection. `once` completes when the target sends its synchronization response. A `stream` must set `duration_seconds` or `max_updates`; subscriptions without an explicit duration remain bounded by `timeout_seconds` (30 seconds by default), so an ordinary playbook can never wait forever. The resulting JSON array supports `register`, `validations`, `drift`, retries, and structured output like other step output:
+
+```yaml
+- name: collect-interface-changes
+  gnmi_subscribe:
+    paths:
+      - /interfaces/interface/state/oper-status
+    port: 57400
+    mode: stream
+    stream_mode: on_change
+    duration_seconds: 30
+    max_updates: 20
+    skip_tls: true
+  register: interface_changes
+  validation:
+    extractor: json_path
+    json_path: "$[0]"
+    condition: exists
+```
+
+Streaming modes are `target_defined`, `on_change`, and `sample`. For `sample`, also set `sample_interval_seconds`. Use `mode: once` for a synchronized snapshot without a duration.
+
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 
 ### Structured output files
@@ -881,11 +946,26 @@ output:
   save_parsed: true
   summary_file: results.json
   events_file: events.jsonl
+  event_sinks:
+    - type: webhook
+      url: https://automation.example.net/network-events
+      timeout_seconds: 5
+      queue_size: 256
+      headers:
+        X-Collector-Site: london
+      hmac_secret_env: EVENT_WEBHOOK_SECRET
+    - type: syslog
+      network: udp
+      address: syslog.example.net:514
+      app_name: network-collector
+      queue_size: 256
 ```
 
 Each invocation creates a timestamped run directory. Raw and parsed output is stored per inventory entry, step, and attempt, so concurrent devices and retries never overwrite one another. `results.json` contains run timestamps, overall failure state, validations, and the paths of all saved artifacts. Files are written atomically.
 
 When `events_file` is set, lifecycle events are appended as JSON Lines. Relative paths are placed in the run directory. Events include `run.started`, `device.started`, `step.started`, `validation.completed`, `artifact.written`, `device.completed`, and `run.completed`. Event-sink errors are logged as warnings and do not interrupt device work. `--events-jsonl PATH` overrides the configured event file for one invocation.
+
+`event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.
 
 ### Reusable orchestration package
 
@@ -893,7 +973,7 @@ The CLI's inventory targeting and device scheduling are available to other Go pr
 
 - Generic bounded execution with canary staging, start intervals, failure thresholds, and context cancellation
 - Compiled inventory selectors over standard target fields and arbitrary labels
-- Lifecycle `Event` and `EventSink` contracts plus a concurrency-safe JSONL sink
+- Lifecycle `Event` and `EventSink` contracts plus JSONL, asynchronous webhook, and RFC 5424 syslog sinks
 - Shared target and device-outcome types
 
 The scheduler is generic, so an embedding application keeps its own task and result types:

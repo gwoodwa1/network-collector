@@ -1,0 +1,6 @@
+Value Required NEIGHBOR ([0-9a-fA-F:.]+)
+Value REMOTE_AS (\d+)
+Value STATE (\S+)
+
+Start
+  ^${NEIGHBOR}\s+${REMOTE_AS}\s+\d+\s+\d+\s+\d+\s+\d+\s+\S+\s+${STATE}.* -> Record

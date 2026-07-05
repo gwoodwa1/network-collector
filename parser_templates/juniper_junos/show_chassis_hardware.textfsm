@@ -1,0 +1,6 @@
+Value Required NODE (\S+(?:\s+\d+)?)
+Value TYPE (\S+)
+Value CONFIG_STATE (.*)
+
+Start
+  ^${NODE}\s+\S+\s+${TYPE}\s+${CONFIG_STATE}\s*$$ -> Record

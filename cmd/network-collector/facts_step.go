@@ -98,5 +98,10 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 	if err := saveStepArtifact(ctx, step, stepName, 1, "parsed", string(encoded)); err != nil {
 		return fmt.Errorf("save facts artifact: %w", err)
 	}
+	if step.Drift != nil {
+		if err := applyDriftCheck(ctx, step, stepName, string(encoded)); err != nil {
+			return fmt.Errorf("facts drift check: %w", err)
+		}
+	}
 	return nil
 }

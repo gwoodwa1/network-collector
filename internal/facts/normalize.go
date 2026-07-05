@@ -34,7 +34,7 @@ func Normalize(subset string, native json.RawMessage, transport string) (string,
 		interfaces := make([]any, 0, len(records))
 		for _, r := range records {
 			name := field(r, "INTERFACE")
-			interfaces = append(interfaces, map[string]any{"name": name, "state": compact(map[string]any{"name": name, "admin-status": adminStatus(field(r, "STATUS")), "oper-status": upDown(field(r, "PROTOCOL")), "description": field(r, "DESCRIPTION")})})
+			interfaces = append(interfaces, map[string]any{"name": name, "state": compact(map[string]any{"name": name, "admin-status": adminStatus(field(r, "STATUS")), "oper-status": upDown(firstNonEmpty(field(r, "PROTOCOL"), field(r, "STATUS"))), "description": field(r, "DESCRIPTION")})})
 		}
 		return root, map[string]any{"interface": interfaces}, false, unknownFields(records, "INTERFACE", "STATUS", "PROTOCOL", "DESCRIPTION"), nil
 	case "lldp":
@@ -137,7 +137,7 @@ func number(value string) any {
 	return value
 }
 func upDown(value string) string {
-	if strings.EqualFold(value, "up") {
+	if strings.EqualFold(value, "up") || strings.EqualFold(value, "connected") || strings.EqualFold(value, "active") {
 		return "UP"
 	}
 	return "DOWN"
@@ -150,7 +150,7 @@ func adminStatus(value string) string {
 }
 func operStatus(value string) string {
 	value = strings.ToUpper(strings.ReplaceAll(value, " ", "_"))
-	if value == "IOS_XR_RUN" || value == "OPERATIONAL" {
+	if value == "IOS_XR_RUN" || value == "OPERATIONAL" || value == "OK" {
 		return "ACTIVE"
 	}
 	return value

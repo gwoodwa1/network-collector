@@ -1,0 +1,15 @@
+hosts:
+  - name: eos-leaf-01
+    ip: 192.0.2.30
+    type: arista_eos
+    credential_profile: datacenter
+    labels: {vendor: arista, role: leaf, site: london, environment: lab}
+  - name: junos-edge-01
+    ip: 192.0.2.31
+    type: juniper_junos
+    credential_profile: edge
+    labels: {vendor: juniper, role: edge, site: london, environment: lab}
+
+groups:
+  multivendor-lab:
+    hosts: [eos-leaf-01, junos-edge-01]

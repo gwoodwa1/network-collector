@@ -1,0 +1,34 @@
+name_playbook: Structured configuration drift
+inventory_file: inventory.yaml
+parsers_file: ../../parsers.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: platform-drift
+        cmd: show platform
+        parser: xr_show_platform
+        drift:
+          # `previous` maintains a per-device, per-step rolling baseline under
+          # artifacts/.baselines. Use a JSON file path for an approved baseline.
+          baseline: previous
+          ignore: []
+          fail_on_change: true
+
+      - name: route-summary-drift
+        cmd: show route summary
+        parser: xr_show_route_summary
+        drift:
+          baseline: baselines/{{hostname}}-routes.json
+          # Create the approved baseline on the first run and refresh it after
+          # review. Set false in enforcement-only jobs.
+          update_baseline: true
+          fail_on_change: false

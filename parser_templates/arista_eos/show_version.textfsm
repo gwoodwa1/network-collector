@@ -1,0 +1,9 @@
+Value VERSION (\S+)
+Value MODEL (\S+)
+Value HOSTNAME (\S+)
+
+Start
+  ^Arista\s+${MODEL}
+  ^Software image version:\s+${VERSION}
+  ^.*uptime is.*
+  ^Hostname:\s+${HOSTNAME} -> Record

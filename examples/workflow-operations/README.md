@@ -15,6 +15,8 @@ These playbooks demonstrate the workflow language as complete configurations. Th
 | `09-openconfig-facts.yaml` | vendor-neutral OpenConfig facts, native facts, per-subset transport fallback |
 | `10-targeting-canary-and-replay.yaml` | inventory labels, Boolean selectors, exclusions, canaries, failure thresholds, JSONL events, failed-device replay |
 | `11-reload-and-reconnect.yaml` | approval, expected disconnect, SSH probing, post-boot delay, reconnect, nested validation actions |
+| `12-multivendor-facts.yaml` | EOS and Junos system, platform, interface, LLDP, and BGP facts with NETCONF-first fallback |
+| `13-structured-drift.yaml` | approved JSON baselines, rolling previous-state baselines, ignored paths, drift artifacts, optional enforcement |
 
 Run one example from the repository root:
 
@@ -80,3 +82,7 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 `08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
 
 `11-reload-and-reconnect.yaml` is intentionally a lab-only template. It demonstrates a command that disconnects before returning to the prompt, bounded TCP/SSH probing, a post-port-open boot delay, reconnection, post-reload validation, and nested `on_pass` steps. Replace and independently test the reload command before using it on real equipment.
+
+`12-multivendor-facts.yaml` uses a separate EOS/Junos inventory. The same five fact subsets are normalized into the existing OpenConfig-shaped result while preserving the complete native TextFSM records. NETCONF remains first in the transport order and each unsupported or absent model falls back independently to the vendor CLI parser.
+
+`13-structured-drift.yaml` shows both baseline modes. `baseline: previous` maintains rolling state automatically; a normal path points to an explicitly approved JSON baseline. Drift compares parsed JSON rather than unstable CLI formatting and always writes a `drift.json` artifact. `fail_on_change` decides whether detected changes fail the device run.

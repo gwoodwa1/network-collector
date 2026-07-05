@@ -4,6 +4,13 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Add bounded gNMI `once` and `stream` subscriptions with `target_defined`, `on_change`, and `sample` modes, available in playbook steps and the gNMI client.
+- Add asynchronous webhook and RFC 5424 syslog lifecycle-event sinks, including optional webhook HMAC signing.
+
+- Added Arista EOS and Juniper Junos SSH/TextFSM fact coverage for system, platform, interfaces, LLDP, and BGP with the existing NETCONF-first fallback model.
+- Added structural JSON drift detection with approved or rolling previous-state baselines, ignored paths, machine-readable drift artifacts, and optional enforcement.
+- Added pluggable environment, interactive, permission-checked file, and external-command credential providers with per-device inventory profiles.
+
 ## [1.0.2] - 2026-07-04
 
 - Added inventory labels with Boolean `--limit` and `--exclude` selectors, plus `--rerun-failed` targeting from previous structured run summaries.

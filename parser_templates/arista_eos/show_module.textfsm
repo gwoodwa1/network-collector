@@ -1,0 +1,7 @@
+Value Required NODE (\d+)
+Value TYPE (.+?)
+Value CONFIG_STATE (\S+)
+Value STATE (Ok|Not Inserted|Failed)
+
+Start
+  ^${NODE}\s+\d+\s+${TYPE}\s{2,}\S+\s+${STATE}\s*$$ -> Record

@@ -1,0 +1,6 @@
+Value Required INTERFACE (\S+)
+Value STATUS (connected|notconnect|disabled|errdisabled)
+Value DESCRIPTION (.*?)
+
+Start
+  ^${INTERFACE}\s+${DESCRIPTION}\s{2,}${STATUS}\s+\S+\s+\S+\s+\S+.* -> Record

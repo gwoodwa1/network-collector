@@ -44,6 +44,7 @@ archives:
       - parsers.yaml
       - parser_templates/**/*
       - examples/modular/*
+      - examples/credentials.example.yaml
       - examples/workflow-operations/**/*
       - skills.md
 

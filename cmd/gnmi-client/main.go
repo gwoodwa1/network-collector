@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -14,11 +15,21 @@ import (
 )
 
 type GNMIConfig struct {
-	Hostname string `mapstructure:"hostname"`
-	IP       string `mapstructure:"ip"`
-	Path     string `mapstructure:"path"`
-	SkipTLS  bool   `mapstructure:"skip_tls"`
-	Timeout  int    `mapstructure:"timeout"`
+	Hostname  string               `mapstructure:"hostname"`
+	IP        string               `mapstructure:"ip"`
+	Path      string               `mapstructure:"path"`
+	SkipTLS   bool                 `mapstructure:"skip_tls"`
+	Timeout   int                  `mapstructure:"timeout"`
+	Subscribe *GNMISubscribeConfig `mapstructure:"subscribe"`
+}
+
+type GNMISubscribeConfig struct {
+	Paths                 []string `mapstructure:"paths"`
+	Mode                  string   `mapstructure:"mode"`
+	StreamMode            string   `mapstructure:"stream_mode"`
+	SampleIntervalSeconds int      `mapstructure:"sample_interval_seconds"`
+	DurationSeconds       int      `mapstructure:"duration_seconds"`
+	MaxUpdates            int      `mapstructure:"max_updates"`
 }
 
 type GNMIConfigSet struct {
@@ -61,7 +72,7 @@ func main() {
 		ip := strings.TrimSpace(device.IP)
 		gnmiPath := strings.TrimSpace(device.Path)
 
-		if hostname == "" || ip == "" || gnmiPath == "" {
+		if hostname == "" || ip == "" || (gnmiPath == "" && device.Subscribe == nil) {
 			slog.Warn("skipping invalid gNMI entry", "hostname", hostname, "ip", ip, "path", gnmiPath)
 			continue
 		}
@@ -84,7 +95,12 @@ func main() {
 				slog.Error("error closing gNMI client", "hostname", h, "ip", i, "error", err)
 			}
 		}(client, hostname, ip)
-		output, err := client.Execute(gnmiPath)
+		var output string
+		if device.Subscribe != nil {
+			output, err = client.Subscribe(context.Background(), gnmi.Subscription{Paths: device.Subscribe.Paths, Mode: device.Subscribe.Mode, StreamMode: device.Subscribe.StreamMode, SampleInterval: time.Duration(device.Subscribe.SampleIntervalSeconds) * time.Second, Duration: time.Duration(device.Subscribe.DurationSeconds) * time.Second, MaxUpdates: device.Subscribe.MaxUpdates})
+		} else {
+			output, err = client.Execute(gnmiPath)
+		}
 		if err != nil {
 			slog.Error("error executing gNMI path", "hostname", hostname, "ip", ip, "error", err)
 		} else {

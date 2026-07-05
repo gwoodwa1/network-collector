@@ -89,3 +89,43 @@ parsers:
     type: textfsm
     template: parser_templates/cisco_xr/show_mpls_ldp_neighbor_brief.textfsm
     root: neighbors
+  eos_facts_system:
+    type: textfsm
+    template: parser_templates/arista_eos/show_version.textfsm
+    root: system
+  eos_facts_platform:
+    type: textfsm
+    template: parser_templates/arista_eos/show_module.textfsm
+    root: components
+  eos_facts_interfaces:
+    type: textfsm
+    template: parser_templates/arista_eos/show_interfaces_status.textfsm
+    root: interfaces
+  eos_facts_lldp:
+    type: textfsm
+    template: parser_templates/arista_eos/show_lldp_neighbors_detail.textfsm
+    root: neighbors
+  eos_facts_bgp:
+    type: textfsm
+    template: parser_templates/arista_eos/show_ip_bgp_summary.textfsm
+    root: neighbors
+  junos_facts_system:
+    type: textfsm
+    template: parser_templates/juniper_junos/show_version.textfsm
+    root: system
+  junos_facts_platform:
+    type: textfsm
+    template: parser_templates/juniper_junos/show_chassis_hardware.textfsm
+    root: components
+  junos_facts_interfaces:
+    type: textfsm
+    template: parser_templates/juniper_junos/show_interfaces_terse.textfsm
+    root: interfaces
+  junos_facts_lldp:
+    type: textfsm
+    template: parser_templates/juniper_junos/show_lldp_neighbors_detail.textfsm
+    root: neighbors
+  junos_facts_bgp:
+    type: textfsm
+    template: parser_templates/juniper_junos/show_bgp_summary.textfsm
+    root: neighbors
