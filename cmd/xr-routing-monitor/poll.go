@@ -1,0 +1,169 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// collectionSpec maps each data point to the IOS-XR command and parser
+// module used to collect it, built from real IOS-XR command output.
+type collectionSpec struct {
+	BGPCommand       string
+	BGPParser        string
+	RouteCommand     string // %s is replaced with the device's VRF name
+	RouteParser      string
+	InterfaceCommand string // %s is replaced with the interface name
+	InterfaceParser  string
+}
+
+var defaultSpec = collectionSpec{
+	BGPCommand:       "show bgp vpnv4 unicast summary",
+	BGPParser:        "xr_bgp_vpnv4_summary",
+	RouteCommand:     "show route vrf %s summary",
+	RouteParser:      "xr_route_vrf_summary",
+	InterfaceCommand: `show int %s | inc "rate|Description:"`,
+	InterfaceParser:  "xr_bundle_interface_stats",
+}
+
+type tickResult struct {
+	Timestamp  string                     `json:"timestamp"`
+	Hostname   string                     `json:"hostname"`
+	BGP        json.RawMessage            `json:"bgp,omitempty"`
+	Routes     map[string]json.RawMessage `json:"routes,omitempty"`
+	Interfaces map[string]json.RawMessage `json:"interfaces,omitempty"`
+	Errors     []string                   `json:"errors,omitempty"`
+}
+
+// pollDevice runs one collection tick immediately, then one per interval,
+// against the device's already-open session, until ctx is cancelled or the
+// session appears to have dropped (detected via the BGP command's Execute
+// error, since BGP is collected on every tick and acts as a session
+// liveness canary). It never reconnects: a dropped session requires a fresh
+// RSA passcode, which this loop cannot supply unattended.
+func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string) {
+	defer func() {
+		if err := session.client.Close(); err != nil {
+			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
+		}
+	}()
+
+	outputPath := filepath.Join(outputDir, sanitizeFilename(session.hostname)+".jsonl")
+	file, err := os.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		slog.Error("failed to open output file", "hostname", session.hostname, "path", outputPath, "error", err)
+		return
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	tick := func() bool {
+		result, sessionAlive := collectTick(session, parsers)
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			slog.Error("failed to encode tick result", "hostname", session.hostname, "error", err)
+			return sessionAlive
+		}
+		if _, err := writer.Write(append(encoded, '\n')); err != nil {
+			slog.Error("failed to write tick result", "hostname", session.hostname, "error", err)
+		}
+		writer.Flush()
+		statusOut.printTick(result, sessionAlive)
+		if !sessionAlive {
+			slog.Error("session appears to have dropped; stopping polling for this device", "hostname", session.hostname)
+		}
+		return sessionAlive
+	}
+
+	if err := captureSnapshot(session, "before", outputDir, runLabel, parsers, snapshotOut); err != nil {
+		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
+	}
+
+	if !tick() {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if err := captureSnapshot(session, "after", outputDir, runLabel, parsers, snapshotOut); err != nil {
+				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
+			}
+			return
+		case <-ticker.C:
+			if !tick() {
+				return
+			}
+		}
+	}
+}
+
+// collectTick runs the BGP, route, and interface commands for one device.
+// It returns sessionAlive=false only when the BGP command itself failed to
+// execute (a proxy for the SSH session having dropped); parser lookup/parse
+// failures are recorded per-field and do not stop polling.
+func collectTick(session *deviceSession, parsers map[string]parserModule) (tickResult, bool) {
+	spec := defaultSpec
+	result := tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname}
+
+	bgpOutput, err := session.client.Execute(spec.BGPCommand)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("bgp: execute failed: %v", err))
+		return result, false
+	}
+	result.BGP = parseOrRaw(bgpOutput, spec.BGPParser, parsers, &result.Errors, "bgp")
+
+	if len(session.vrfs) > 0 {
+		result.Routes = map[string]json.RawMessage{}
+		for _, vrf := range session.vrfs {
+			routeOutput, err := session.client.Execute(fmt.Sprintf(spec.RouteCommand, vrf))
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("route vrf %s: execute failed: %v", vrf, err))
+				continue
+			}
+			result.Routes[vrf] = parseOrRaw(routeOutput, spec.RouteParser, parsers, &result.Errors, "route vrf "+vrf)
+		}
+	}
+
+	if len(session.interfaces) > 0 {
+		result.Interfaces = map[string]json.RawMessage{}
+		for _, ifaceName := range session.interfaces {
+			ifaceOutput, err := session.client.Execute(fmt.Sprintf(spec.InterfaceCommand, ifaceName))
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("interface %s: execute failed: %v", ifaceName, err))
+				continue
+			}
+			result.Interfaces[ifaceName] = parseOrRaw(ifaceOutput, spec.InterfaceParser, parsers, &result.Errors, "interface "+ifaceName)
+		}
+	}
+
+	return result, true
+}
+
+func parseOrRaw(output, parserName string, parsers map[string]parserModule, errs *[]string, label string) json.RawMessage {
+	parsed, err := parseOutputWithModule(output, parserName, parsers)
+	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("%s: %v", label, err))
+		encoded, marshalErr := json.Marshal(map[string]string{"raw": output})
+		if marshalErr != nil {
+			return json.RawMessage("null")
+		}
+		return encoded
+	}
+	return json.RawMessage(parsed)
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer("/", "_", ":", "_", " ", "_")
+	return replacer.Replace(strings.TrimSpace(name))
+}

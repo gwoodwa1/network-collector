@@ -10,6 +10,8 @@ import (
 	"golang.org/x/term"
 )
 
+const passwordMask = "********"
+
 // ResolveCredentials returns username/password using environment variables by default,
 // or prompts interactively when requested.
 func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) (string, string, error) {
@@ -42,10 +44,11 @@ func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) 
 
 		fmt.Fprint(output, "Password: ")
 		passwordBytes, err := term.ReadPassword(int(inputFile.Fd()))
-		fmt.Fprintln(output)
 		if err != nil {
+			fmt.Fprintln(output)
 			return "", "", fmt.Errorf("read password: %w", err)
 		}
+		fmt.Fprintln(output, passwordMask)
 		password = string(passwordBytes)
 	} else {
 		reader := bufio.NewReader(input)
@@ -67,6 +70,7 @@ func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) 
 		if err == io.EOF && password == "" {
 			return "", "", fmt.Errorf("read password: %w", io.EOF)
 		}
+		fmt.Fprintln(output, passwordMask)
 	}
 
 	return strings.TrimSpace(username), strings.TrimRight(password, "\r\n"), nil

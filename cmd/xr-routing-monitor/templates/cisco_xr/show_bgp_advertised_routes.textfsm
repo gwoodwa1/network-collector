@@ -1,0 +1,11 @@
+Value Filldown ROUTE_DISTINGUISHER (\S+)
+Value Required NETWORK (\S+/\d+)
+Value NEXTHOP (\S+)
+Value FROM (\S+)
+Value PATH (.*)
+
+Start
+  ^Route Distinguisher:\s+${ROUTE_DISTINGUISHER}
+  ^Route Distinguisher Version:
+  ^Network\s+Next Hop
+  ^${NETWORK}\s+${NEXTHOP}\s+${FROM}\s+${PATH}\s*$$ -> Record

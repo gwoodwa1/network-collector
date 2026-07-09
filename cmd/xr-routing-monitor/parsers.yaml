@@ -1,0 +1,29 @@
+parsers:
+  xr_bgp_vpnv4_summary:
+    type: textfsm
+    template: templates/cisco_xr/show_bgp_vpnv4_summary.textfsm
+    root: neighbors
+  xr_route_vrf_summary:
+    type: textfsm
+    template: templates/cisco_xr/show_route_vrf_summary.textfsm
+    root: routes
+  xr_bundle_interface_stats:
+    type: textfsm
+    template: templates/cisco_xr/show_bundle_interface_stats.textfsm
+    root: stats
+  xr_bgp_route_table:
+    type: textfsm
+    template: templates/cisco_xr/show_bgp_route_table.textfsm
+    root: routes
+  xr_bgp_advertised_routes:
+    type: textfsm
+    template: templates/cisco_xr/show_bgp_advertised_routes.textfsm
+    root: routes
+  xr_route_vrf_all_gateways:
+    type: textfsm
+    template: templates/cisco_xr/show_route_vrf_all_gateways.textfsm
+    root: vrfs
+  xr_route_vrf_connected_interfaces:
+    type: textfsm
+    template: templates/cisco_xr/show_route_vrf_connected_interfaces.textfsm
+    root: interfaces

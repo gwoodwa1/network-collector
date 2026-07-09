@@ -1,0 +1,13 @@
+Value Filldown ROUTE_DISTINGUISHER (\S+)
+Value Filldown NETWORK (\d+\.\d+\.\d+\.\d+/\d+)
+Value BEST ([ >])
+Value INTERNAL ([ i])
+Value Required NEXTHOP (\S+)
+Value ATTRIBUTES (.*)
+
+Start
+  ^Route Distinguisher:\s+${ROUTE_DISTINGUISHER}
+  ^Route Distinguisher Version:
+  ^\s*Network\s+Next Hop
+  ^\*${BEST}${INTERNAL}${NETWORK}\s+${NEXTHOP}\s+${ATTRIBUTES}\s*$$ -> Record
+  ^\*${BEST}${INTERNAL}\s+${NEXTHOP}\s+${ATTRIBUTES}\s*$$ -> Record

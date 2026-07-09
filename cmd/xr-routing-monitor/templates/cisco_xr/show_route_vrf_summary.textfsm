@@ -1,0 +1,9 @@
+Value SOURCE (.+?)
+Value ROUTES (\d+)
+Value BACKUP (\d+)
+Value DELETED (\d+)
+Value MEMORY (\d+)
+
+Start
+  ^Route Source
+  ^${SOURCE}\s{2,}${ROUTES}\s+${BACKUP}\s+${DELETED}\s+${MEMORY}\s*$$ -> Record

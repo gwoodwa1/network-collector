@@ -1,0 +1,10 @@
+Value DESCRIPTION (.+?)
+Value INPUT_RATE_BPS (\d+)
+Value INPUT_RATE_PPS (\d+)
+Value OUTPUT_RATE_BPS (\d+)
+Value OUTPUT_RATE_PPS (\d+)
+
+Start
+  ^\s*Description:\s+${DESCRIPTION}\s*$$
+  ^\s*\d+ (?:second|minute)s? input rate ${INPUT_RATE_BPS} bits/sec,\s+${INPUT_RATE_PPS} packets/sec\s*$$
+  ^\s*\d+ (?:second|minute)s? output rate ${OUTPUT_RATE_BPS} bits/sec,\s+${OUTPUT_RATE_PPS} packets/sec\s*$$ -> Record

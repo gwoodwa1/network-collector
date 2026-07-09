@@ -1,0 +1,9 @@
+Value Required NEIGHBOR ([0-9a-fA-F:.]+)
+Value REMOTE_AS (\d+)
+Value MSGRCVD (\d+)
+Value MSGSENT (\d+)
+Value UPDOWN (\S+)
+Value STATE_OR_PFXRCD (\S+)
+
+Start
+  ^${NEIGHBOR}\s+\d+\s+${REMOTE_AS}\s+${MSGRCVD}\s+${MSGSENT}\s+\d+\s+\d+\s+\d+\s+${UPDOWN}\s+${STATE_OR_PFXRCD}\s*$$ -> Record

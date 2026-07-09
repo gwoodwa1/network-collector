@@ -1,0 +1,18 @@
+Value Required VRF (\S+)
+Value GATEWAY (\d+\.\d+\.\d+\.\d+)
+
+Start
+  ^VRF:\s+${VRF}\s*$$
+  ^Gateway of last resort is ${GATEWAY} to network 0\.0\.0\.0\s*$$ -> Record
+
+# A trailing "VRF:" line with no default route (the common case — most VRFs
+# on this fleet have none) would otherwise cause gotextfsm's implicit
+# end-of-input Record to emit one bogus trailing record with an empty
+# GATEWAY. This explicit, empty EOF state suppresses that.
+#
+# VRF is marked Required so a Gateway line encountered with no preceding
+# VRF: line (truncated/partial output, a mid-stream reconnect) skips the
+# record entirely (gotextfsm's onAppendRecord returns SKIP_RECORD for an
+# empty Required value) instead of emitting one with VRF="" — which would
+# otherwise flow into a malformed "show route vrf  summary" command.
+EOF

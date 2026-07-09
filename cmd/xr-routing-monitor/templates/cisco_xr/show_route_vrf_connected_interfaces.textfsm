@@ -1,0 +1,4 @@
+Value INTERFACE (\S+)
+
+Start
+  ^\S+\s+\S+\s+is directly connected,\s+\S+,\s+${INTERFACE}\s*$$ -> Record
