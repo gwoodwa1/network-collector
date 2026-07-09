@@ -27,6 +27,22 @@ func TestHostnameRegistryCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestHostnameRegistryMatchesFilenameSanitizationEquivalence guards against
+// the registry treating two hostnames as distinct while sanitizeFilename
+// (poll.go) would still write them to the same output file — that mismatch
+// let two concurrent pollDevice goroutines race on the same .jsonl/.json
+// file, which is exactly the corruption this registry exists to prevent.
+func TestHostnameRegistryMatchesFilenameSanitizationEquivalence(t *testing.T) {
+	r := newHostnameRegistry()
+	r.claim("pe-router:1")
+
+	for _, colliding := range []string{"pe-router/1", "pe-router 1", "pe-router_1", "PE-ROUTER:1"} {
+		if exists, _ := r.has(colliding); !exists {
+			t.Fatalf("expected %q to collide with already-claimed \"pe-router:1\" (both sanitize to %q), but has() reported it as free", colliding, sanitizeFilename(colliding))
+		}
+	}
+}
+
 func TestHostnameRegistryFailedAttemptRemainsClaimable(t *testing.T) {
 	// A connection attempt that fails must never call claim, so the
 	// hostname stays eligible for a later deliberate retry.

@@ -23,7 +23,7 @@ func TestLoadDeviceSpecsValidFile(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	specs, interval, gatewayPrefix, err := loadDeviceSpecs(path)
+	specs, interval, gatewayPrefix, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,13 +59,13 @@ func TestLoadDeviceSpecsMissingHostname(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a device spec missing hostname")
 	}
 }
 
 func TestLoadDeviceSpecsMissingFile(t *testing.T) {
-	if _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
 		t.Fatal("expected an error for a missing devices file")
 	}
 }
@@ -75,7 +75,7 @@ func TestLoadDeviceSpecsInvalidYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("devices: [this is not valid: yaml:"), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for malformed YAML")
 	}
 }
@@ -90,7 +90,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, interval, _, err := loadDeviceSpecs(path)
+	_, interval, _, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for an invalid interval")
 	}
 }
@@ -124,7 +124,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a negative interval instead of it being silently discarded")
 	}
 }
@@ -140,7 +140,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	specs, _, gatewayPrefix, err := loadDeviceSpecs(path)
+	specs, _, gatewayPrefix, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,8 +165,101 @@ func TestLoadDeviceSpecsAutoDetectVRFRequiresGatewayPrefix(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for auto_detect_vrf without a top-level customer_gateway_prefix")
+	}
+}
+
+func TestLoadDeviceSpecsCommandAndExcludePrefixOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `exclude_interface_prefixes: [loopback, tunnel-ip]
+
+commands:
+  bgp_command: show bgp summary
+  route_parser: xr_custom_route_parser
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, commands, excludePrefixes, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if commands.BGPCommand != "show bgp summary" || commands.RouteParser != "xr_custom_route_parser" {
+		t.Fatalf("unexpected commands: %+v", commands)
+	}
+	if strings.Join(excludePrefixes, ",") != "loopback,tunnel-ip" {
+		t.Fatalf("unexpected exclude prefixes: %v", excludePrefixes)
+	}
+}
+
+func TestLoadDeviceSpecsCommandOverridesRequireOnePlaceholder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `commands:
+  route_command: show route vrf summary
+  interface_command: show interface %s %s
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, _, _, err := loadDeviceSpecs(path)
+	if err == nil {
+		t.Fatal("expected invalid command placeholders to be rejected")
+	}
+	if !strings.Contains(err.Error(), "commands.route_command") {
+		t.Fatalf("expected route_command validation error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "commands.interface_command") {
+		t.Fatalf("expected interface_command validation error, got: %v", err)
+	}
+}
+
+// TestValidateCommandTemplateRejectsEscapedPlaceholder guards against a
+// regression where substring-counting "%s" occurrences (rather than
+// checking fmt's actual verb semantics) let an escaped literal "%%s" pass
+// validation. "%%s" is not a %s verb — fmt treats "%%" as a literal percent
+// sign, leaving "s" as ordinary text — so fmt.Sprintf(value, vrf) would
+// never substitute the VRF name and would instead append
+// "%!(EXTRA string=...)" to the command actually sent to a live router.
+func TestValidateCommandTemplateRejectsEscapedPlaceholder(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "route_command", "show route vrf %%s summary"); err == nil {
+		t.Fatal("expected an escaped percent-percent-s (not a real placeholder) to be rejected")
+	}
+}
+
+func TestValidateCommandTemplateAcceptsExactlyOnePlaceholder(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "route_command", "show route vrf %s summary"); err != nil {
+		t.Fatalf("unexpected error for a valid single placeholder: %v", err)
+	}
+}
+
+func TestValidateCommandTemplateRejectsMissingPlaceholder(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "route_command", "show route vrf summary"); err == nil {
+		t.Fatal("expected a template with no placeholder to be rejected")
+	}
+}
+
+func TestValidateCommandTemplateRejectsExtraPlaceholder(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "interface_command", "show interface %s %s"); err == nil {
+		t.Fatal("expected a template with two placeholders to be rejected")
+	}
+}
+
+func TestValidateCommandTemplateRejectsOtherFormatVerbs(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "route_command", "show route vrf %q summary"); err == nil {
+		t.Fatal("expected a template using a non-string placeholder to be rejected")
+	}
+}
+
+func TestValidateCommandTemplateAllowsBlank(t *testing.T) {
+	if err := validateCommandTemplate("devices.yaml", "route_command", ""); err != nil {
+		t.Fatalf("expected a blank (unset) override to be allowed, got: %v", err)
 	}
 }
 
@@ -207,7 +300,7 @@ func TestLoadDeviceSpecsReportsAllValidationErrorsNotJustTheFirst(t *testing.T) 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, _, _, err := loadDeviceSpecs(path)
+	_, _, _, _, _, err := loadDeviceSpecs(path)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

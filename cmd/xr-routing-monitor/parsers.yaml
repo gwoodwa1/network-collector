@@ -23,7 +23,7 @@ parsers:
     type: textfsm
     template: templates/cisco_xr/show_route_vrf_all_gateways.textfsm
     root: vrfs
-  xr_route_vrf_connected_interfaces:
+  xr_vrf_detail_interfaces:
     type: textfsm
-    template: templates/cisco_xr/show_route_vrf_connected_interfaces.textfsm
+    template: templates/cisco_xr/show_vrf_detail_interfaces.textfsm
     root: interfaces

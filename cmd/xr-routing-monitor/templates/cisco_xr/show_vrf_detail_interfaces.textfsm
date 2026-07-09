@@ -1,0 +1,9 @@
+Value INTERFACE ((?:Bundle-Ether|BE|GigabitEthernet|TenGigE|HundredGigE|FourHundredGigE|TwentyFiveGigE|FortyGigE|Loopback|BVI)\S*)
+
+Start
+  ^Interfaces:\s*$$ -> Interfaces
+
+Interfaces
+  ^\s+${INTERFACE}\s*$$ -> Record
+  ^\s+Address\s+family\b.*$$ -> Start
+  ^\S -> Start

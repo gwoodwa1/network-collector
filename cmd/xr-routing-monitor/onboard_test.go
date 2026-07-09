@@ -30,7 +30,7 @@ func TestOnboardDevicesDoesNotClaimHostnameOnFailedConnect(t *testing.T) {
 
 	// hostname, auto-detect?, vrf, interfaces, neighbors, then blank hostname to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\n\n\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if attempts != 1 {
 		t.Fatalf("expected exactly 1 connect attempt, got %d", attempts)
@@ -50,7 +50,7 @@ func TestOnboardDevicesClaimsHostnameOnSuccessfulConnect(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\n\n\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session after a successful connect, got %d", len(sessions))
@@ -70,7 +70,7 @@ func TestOnboardDevicesSkipsAlreadyClaimedHostnameWithoutConnecting(t *testing.T
 	}
 
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if attempts != 0 {
 		t.Fatalf("expected connect to never be called for an already-claimed hostname, got %d attempts", attempts)
@@ -82,22 +82,25 @@ func TestOnboardDevicesSkipsAlreadyClaimedHostnameWithoutConnecting(t *testing.T
 
 // discoveryResponses is the shared fixture (from discover_test.go /
 // parser_test.go) for a connect that succeeds and, once auto-detect runs,
-// finds two customer VRFs (4000001, CUSTOMER-A-INTERNET) and two connected
-// interfaces on the first of them.
+// finds one customer VRF (4000001, with its connected interfaces) plus one
+// non-numeric hub VRF (CUSTOMER-A-INTERNET) that matches the same gateway
+// heuristic but is excluded from vrfs/interfaces — see customerVRFName.
 func discoveryResponses() map[string]string {
 	return map[string]string{
-		`show route vrf all | inc "Gateway of last resort|VRF:"`:           sampleRouteVRFAllGatewaysOutput,
-		`show route vrf 4000001 | inc "is directly connected"`:             sampleRouteVRFConnectedInterfacesOutput,
-		`show route vrf CUSTOMER-A-INTERNET | inc "is directly connected"`: "",
+		`show route vrf all | inc "Gateway of last resort|VRF:"`: sampleRouteVRFAllGatewaysOutput,
+		`show vrf 4000001 ipv4 detail`:                           sampleVRFDetailInterfacesOutput,
+		`show vrf CUSTOMER-A-INTERNET ipv4 detail`:               "",
 	}
 }
 
-// TestOnboardDevicesAutoDetectMergesDiscoveredWithManualInterfaces proves
-// the interactive "Auto-detect customer VRF(s)..." prompt (chosen instead
-// of the manual VRF-name prompt) populates deviceSession.vrfs from
-// discovery, and that manually-typed core interfaces (BE40 here) are kept
-// alongside the auto-discovered customer-facing ones rather than replaced.
-func TestOnboardDevicesAutoDetectMergesDiscoveredWithManualInterfaces(t *testing.T) {
+// TestOnboardDevicesAutoDetectKeepsManualAndDiscoveredInterfacesSeparate
+// proves the interactive "Auto-detect customer VRF(s)..." prompt (chosen
+// instead of the manual VRF-name prompt) populates deviceSession.vrfs from
+// discovery, and that manually-typed interfaces (BE40 here) land in
+// coreInterfaces while auto-discovered ones land in customerInterfaces —
+// kept apart (not merged into one list) so the status line can label them
+// "Core Int" vs "Cust Int" by provenance.
+func TestOnboardDevicesAutoDetectKeepsManualAndDiscoveredInterfacesSeparate(t *testing.T) {
 	registry := newHostnameRegistry()
 	exec := &discoverFakeExecutor{responses: discoveryResponses()}
 	connect := func(reader *bufio.Reader, host, deviceType string, cache *credentialCache) (sessionExecutor, error) {
@@ -110,18 +113,21 @@ func TestOnboardDevicesAutoDetectMergesDiscoveredWithManualInterfaces(t *testing
 
 	// hostname, auto-detect=yes, gateway prefix, core interfaces, neighbors, then blank hostname to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n10.99.99.\nBE40\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	wantVRFs := "4000001,CUSTOMER-A-INTERNET"
+	wantVRFs := "4000001"
 	if strings.Join(sessions[0].vrfs, ",") != wantVRFs {
 		t.Fatalf("expected vrfs %q, got %v", wantVRFs, sessions[0].vrfs)
 	}
-	wantInterfaces := "BE40,GigabitEthernet0/0/0/1.100,TenGigE0/0/0/2.200"
-	if strings.Join(sessions[0].interfaces, ",") != wantInterfaces {
-		t.Fatalf("expected interfaces %q, got %v", wantInterfaces, sessions[0].interfaces)
+	if strings.Join(sessions[0].coreInterfaces, ",") != "BE40" {
+		t.Fatalf("expected core interfaces %q, got %v", "BE40", sessions[0].coreInterfaces)
+	}
+	wantCustomerInterfaces := "TenGigE0/0/0/22.11240078,TenGigE0/7/0/18.38010079,TenGigE0/7/0/18.38540079,TenGigE0/7/0/18.39890079,TenGigE0/7/0/18.39930079,TenGigE0/7/0/19.39890079"
+	if strings.Join(sessions[0].customerInterfaces, ",") != wantCustomerInterfaces {
+		t.Fatalf("expected customer interfaces %q, got %v", wantCustomerInterfaces, sessions[0].customerInterfaces)
 	}
 }
 
@@ -142,12 +148,12 @@ func TestOnboardDevicesAutoDetectUsesDefaultGatewayPrefixWithoutPrompting(t *tes
 
 	// hostname, auto-detect=yes, [no gateway prompt: default supplied], interfaces, neighbors, blank to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	wantVRFs := "4000001,CUSTOMER-A-INTERNET"
+	wantVRFs := "4000001"
 	if strings.Join(sessions[0].vrfs, ",") != wantVRFs {
 		t.Fatalf("expected vrfs %q, got %v", wantVRFs, sessions[0].vrfs)
 	}
@@ -164,7 +170,7 @@ func TestOnboardDevicesDecliningAutoDetectKeepsManualVRFPrompt(t *testing.T) {
 
 	// hostname, auto-detect=no (blank/default), vrf, interfaces, neighbors, blank to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\n\nCUSTOMER-A\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
@@ -182,7 +188,7 @@ func TestOnboardDevicesBlankAutoDetectGatewayPrefixFallsBackToManualVRFPrompt(t 
 
 	// hostname, auto-detect=yes, blank gateway prefix, manual VRF, interfaces, neighbors, blank to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n\nCUSTOMER-A\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
@@ -192,14 +198,15 @@ func TestOnboardDevicesBlankAutoDetectGatewayPrefixFallsBackToManualVRFPrompt(t 
 	}
 }
 
-// TestOnboardDevicesFromSpecsAutoDetectMergesDiscoveredWithManualInterfaces
+// TestOnboardDevicesFromSpecsAutoDetectKeepsManualAndDiscoveredInterfacesSeparate
 // is the --devices-file-driven equivalent of
-// TestOnboardDevicesAutoDetectMergesDiscoveredWithManualInterfaces: a spec
-// with auto_detect_vrf: true merges discovered VRFs/interfaces with
-// whatever the spec already listed, using the document's
-// customer_gateway_prefix (loadDeviceSpecs already guarantees one is set
-// whenever auto_detect_vrf is used).
-func TestOnboardDevicesFromSpecsAutoDetectMergesDiscoveredWithManualInterfaces(t *testing.T) {
+// TestOnboardDevicesAutoDetectKeepsManualAndDiscoveredInterfacesSeparate: a
+// spec with auto_detect_vrf: true merges discovered VRFs with whatever the
+// spec already listed, using the document's customer_gateway_prefix
+// (loadDeviceSpecs already guarantees one is set whenever auto_detect_vrf
+// is used), but keeps interfaces split into coreInterfaces (from the spec)
+// vs customerInterfaces (discovered).
+func TestOnboardDevicesFromSpecsAutoDetectKeepsManualAndDiscoveredInterfacesSeparate(t *testing.T) {
 	registry := newHostnameRegistry()
 	exec := &discoverFakeExecutor{responses: discoveryResponses()}
 	connect := func(reader *bufio.Reader, host, deviceType string, cache *credentialCache) (sessionExecutor, error) {
@@ -211,18 +218,21 @@ func TestOnboardDevicesFromSpecsAutoDetectMergesDiscoveredWithManualInterfaces(t
 	}
 
 	specs := []deviceSpec{{Hostname: "pe-router-1", AutoDetectVRF: true, Interfaces: []string{"BE40"}}}
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.")
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	wantVRFs := "4000001,CUSTOMER-A-INTERNET"
+	wantVRFs := "4000001"
 	if strings.Join(sessions[0].vrfs, ",") != wantVRFs {
 		t.Fatalf("expected vrfs %q, got %v", wantVRFs, sessions[0].vrfs)
 	}
-	wantInterfaces := "BE40,GigabitEthernet0/0/0/1.100,TenGigE0/0/0/2.200"
-	if strings.Join(sessions[0].interfaces, ",") != wantInterfaces {
-		t.Fatalf("expected interfaces %q, got %v", wantInterfaces, sessions[0].interfaces)
+	if strings.Join(sessions[0].coreInterfaces, ",") != "BE40" {
+		t.Fatalf("expected core interfaces %q, got %v", "BE40", sessions[0].coreInterfaces)
+	}
+	wantCustomerInterfaces := "TenGigE0/0/0/22.11240078,TenGigE0/7/0/18.38010079,TenGigE0/7/0/18.38540079,TenGigE0/7/0/18.39890079,TenGigE0/7/0/18.39930079,TenGigE0/7/0/19.39890079"
+	if strings.Join(sessions[0].customerInterfaces, ",") != wantCustomerInterfaces {
+		t.Fatalf("expected customer interfaces %q, got %v", wantCustomerInterfaces, sessions[0].customerInterfaces)
 	}
 }
 
@@ -232,7 +242,7 @@ func TestOnboardDevicesFromSpecsDoesNotClaimHostnameOnFailedConnect(t *testing.T
 		return nil, fmt.Errorf("simulated connect failure")
 	}
 
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 0 {
 		t.Fatalf("expected no sessions after a failed connect, got %d", len(sessions))
@@ -251,7 +261,7 @@ func TestOnboardDevicesFromSpecsSkipsDuplicateWithinFileWithoutSecondConnect(t *
 	}
 
 	specs := []deviceSpec{{Hostname: "pe-router-1"}, {Hostname: "PE-Router-1"}}
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if attempts != 1 {
 		t.Fatalf("expected exactly 1 connect attempt for a case-insensitive duplicate, got %d", attempts)
@@ -267,7 +277,7 @@ func TestOnboardDevicesFromSpecsClaimsHostnameOnSuccessfulConnect(t *testing.T) 
 		return fakeSessionExecutor{}, nil
 	}
 
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session after a successful connect, got %d", len(sessions))
@@ -291,7 +301,7 @@ func TestOnboardDevicesFromSpecsSkipsHostnameAlreadyClaimedElsewhere(t *testing.
 		return fakeSessionExecutor{}, nil
 	}
 
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "")
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), []deviceSpec{{Hostname: "pe-router-1"}}, "cisco_iosxr", &credentialCache{}, registry, connect, map[string]parserModule{}, "", defaultExcludeInterfacePrefixes)
 
 	if attempts != 0 {
 		t.Fatalf("expected connect to never be called for an already-claimed hostname, got %d attempts", attempts)

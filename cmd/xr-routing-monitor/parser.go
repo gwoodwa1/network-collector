@@ -2,14 +2,13 @@ package main
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/sirikothe/gotextfsm"
+	"github.com/gwoodwa1/network-collector/pkg/textfsm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +34,12 @@ type parserModule struct {
 	Root     string `yaml:"root"`
 	baseDir  string
 	source   fs.FS // nil reads Template from disk relative to baseDir; set reads it from this fs.FS instead
+	// compiled is populated once, at load time (see compileModule), rather
+	// than on every parseOutputWithModule call: this parser runs in the
+	// per-tick, per-VRF, per-interface polling hot loop for the lifetime of
+	// a multi-hour change window, and recompiling the same template's
+	// regexes thousands of times over that window is pure waste.
+	compiled *textfsm.Compiled
 }
 
 type parsersDocument struct {
@@ -53,6 +58,9 @@ func loadDefaultParsers() (map[string]parserModule, error) {
 	}
 	for name, module := range parsed.Parsers {
 		module.source = embeddedFS
+		if err := compileModule(&module); err != nil {
+			return nil, fmt.Errorf("parser %q: %w", name, err)
+		}
 		parsed.Parsers[name] = module
 	}
 	return parsed.Parsers, nil
@@ -76,9 +84,31 @@ func loadParsers(path string) (map[string]parserModule, error) {
 	baseDir := filepath.Dir(path)
 	for name, module := range parsed.Parsers {
 		module.baseDir = baseDir
+		if err := compileModule(&module); err != nil {
+			return nil, fmt.Errorf("parser %q: %w", name, err)
+		}
 		parsed.Parsers[name] = module
 	}
 	return parsed.Parsers, nil
+}
+
+// compileModule reads and compiles module's TextFSM template once, at load
+// time, so parseOutputWithModule never has to touch disk or recompile the
+// same regex set again for the lifetime of the run.
+func compileModule(module *parserModule) error {
+	if strings.ToLower(strings.TrimSpace(module.Type)) != "textfsm" {
+		return nil
+	}
+	templateBytes, err := readTemplate(*module)
+	if err != nil {
+		return fmt.Errorf("read textfsm template: %w", err)
+	}
+	compiled, err := textfsm.Compile(templateBytes)
+	if err != nil {
+		return fmt.Errorf("invalid textfsm template: %w", err)
+	}
+	module.compiled = compiled
+	return nil
 }
 
 func readTemplate(module parserModule) ([]byte, error) {
@@ -109,28 +139,13 @@ func parseOutputWithModule(output, parserName string, parsers map[string]parserM
 	if strings.ToLower(strings.TrimSpace(module.Type)) != "textfsm" {
 		return "", fmt.Errorf("parser %q has unsupported type %q (this tool only supports textfsm)", parserName, module.Type)
 	}
+	if module.compiled == nil {
+		return "", fmt.Errorf("parser %q was not compiled at load time", parserName)
+	}
 
-	templateBytes, err := readTemplate(module)
+	result, err := module.compiled.Run(output, module.Root)
 	if err != nil {
-		return "", fmt.Errorf("read textfsm template for parser %q: %w", parserName, err)
+		return "", fmt.Errorf("parser %q: %w", parserName, err)
 	}
-
-	var fsm gotextfsm.TextFSM
-	if err := fsm.ParseString(string(templateBytes)); err != nil {
-		return "", fmt.Errorf("invalid textfsm template for parser %q: %w", parserName, err)
-	}
-	var result gotextfsm.ParserOutput
-	if err := result.ParseTextString(output, fsm, true); err != nil {
-		return "", fmt.Errorf("textfsm parse failed for parser %q: %w", parserName, err)
-	}
-
-	root := strings.TrimSpace(module.Root)
-	if root == "" {
-		root = "records"
-	}
-	encoded, err := json.Marshal(map[string]interface{}{root: result.Dict})
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
+	return result, nil
 }

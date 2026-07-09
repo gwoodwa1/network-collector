@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const maxStatusInterfaces = 4
-
 // syncWriter serializes concurrent Write calls with a mutex. Every device
 // polls independently on its own goroutine and they all share one status
 // output stream (stdout + session.log); neither fmt.Fprintf nor
@@ -47,7 +45,7 @@ func newTickStatusPrinter(w io.Writer) *tickStatusPrinter {
 	return &tickStatusPrinter{w: w, seen: map[string]bool{}}
 }
 
-func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool) {
+func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, coreInterfaces []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.seen[result.Hostname] {
@@ -55,26 +53,20 @@ func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool) {
 		p.seen = map[string]bool{}
 	}
 	p.seen[result.Hostname] = true
-	printTickStatusLine(p.w, result, sessionAlive)
+	printTickStatusLine(p.w, result, sessionAlive, coreInterfaces)
 }
 
-// printTickStatusLine writes one scrolling status line per tick to out
-// (typically stdout, mirrored to session.log), e.g.:
-//
-//	22:07:26 | pe-router-1    | BGP 6/6 up  | routes 383 | BE45 in 6.2Gbps/out 4.1Gbps
-//
-// Fields are separated with " | " and padded to fixed widths so that, since
-// devices are polled on independent goroutines/tickers, same-shaped fields
-// (BGP, routes, a given interface's rate) land in the same column across
-// consecutive lines even though the lines themselves interleave across
-// devices and are only ever appended, never overwritten or rewritten in
-// place. It degrades field-by-field if a section failed to parse rather
-// than skipping the whole line.
-func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool) {
+// tickHeaderLine formats the fixed-width, single-line part of a tick's
+// status — timestamp, hostname, BGP, routes — with no per-interface detail.
+// This is what a device with many interfaces would otherwise blow well past
+// a terminal's column limit on, so interfaces are printed as their own
+// lines instead (see interfaceTableLines/printTickStatusLine); it's also what
+// tickStatusPrinter stores for the round-boundary recap, keeping that
+// compact regardless of how many interfaces a device has.
+func tickHeaderLine(result tickResult, sessionAlive bool) string {
 	timestamp := time.Now().Format("15:04:05")
 	if !sessionAlive {
-		fmt.Fprintf(out, "%s | %-14s | SESSION DROPPED — polling stopped for this device\n", timestamp, result.Hostname)
-		return
+		return fmt.Sprintf("%s | %-14s | SESSION DROPPED — polling stopped for this device", timestamp, result.Hostname)
 	}
 
 	fields := []string{fmt.Sprintf("%-14s", result.Hostname)}
@@ -84,11 +76,24 @@ func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool) {
 	if routes := summarizeRoutes(result.Routes); routes != "" {
 		fields = append(fields, routes)
 	}
-	if interfaces := summarizeInterfaces(result.Interfaces); interfaces != "" {
-		fields = append(fields, interfaces)
-	}
+	return fmt.Sprintf("%s | %s", timestamp, strings.Join(fields, " | "))
+}
 
-	fmt.Fprintf(out, "%s | %s\n", timestamp, strings.Join(fields, " | "))
+// printTickStatusLine writes one tick's status as tickHeaderLine followed
+// by a compact interface table (see interfaceTableLines) — never packed
+// onto the header line, since a device with many interfaces would otherwise
+// produce a line far longer than a typical terminal's column limit. Lines
+// are only ever appended, never overwritten or rewritten in place, so
+// scrollback (and a session.log redirect) stays a faithful, replayable
+// record either way.
+func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool, coreInterfaces []string) {
+	fmt.Fprintln(out, tickHeaderLine(result, sessionAlive))
+	if !sessionAlive {
+		return
+	}
+	for _, line := range interfaceTableLines(result, coreInterfaces) {
+		fmt.Fprintln(out, "  "+line)
+	}
 }
 
 func summarizeBGP(raw json.RawMessage) string {
@@ -149,41 +154,113 @@ func summarizeRouteTotal(raw json.RawMessage) string {
 	return "routes unavailable"
 }
 
-func summarizeInterfaces(interfaces map[string]json.RawMessage) string {
-	if len(interfaces) == 0 {
-		return ""
+type interfaceStatusRow struct {
+	vrf      string
+	iface    string
+	inbound  string
+	outbound string
+}
+
+// interfaceTableLines formats polled interfaces as an ASCII table:
+//
+//	| VRF | Interface | Inbound | Outbound |
+//
+// Core interfaces are manually supplied uplinks rather than VRF-specific
+// targets, so their VRF column is "core". Auto-discovered customer
+// interfaces show the single monitored VRF when there is exactly one; with
+// multiple monitored VRFs, the current tick result has no interface-to-VRF
+// mapping, so the column uses "customer" rather than inventing precision.
+// Only interfaces with non-zero inbound or outbound rates are expanded into
+// rows; idle 0/0 interfaces are counted in a summary line instead.
+func interfaceTableLines(result tickResult, coreInterfaces []string) []string {
+	if len(result.Interfaces) == 0 {
+		return nil
 	}
-	names := make([]string, 0, len(interfaces))
-	for name := range interfaces {
+	core := make(map[string]bool, len(coreInterfaces))
+	for _, name := range coreInterfaces {
+		core[name] = true
+	}
+
+	names := make([]string, 0, len(result.Interfaces))
+	for name := range result.Interfaces {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	shownNames := names
-	if len(shownNames) > maxStatusInterfaces {
-		shownNames = shownNames[:maxStatusInterfaces]
-	}
-
-	parts := make([]string, 0, len(shownNames)+1)
-	for _, name := range shownNames {
+	routeNames := sortedRouteNames(result.Routes)
+	rows := make([]interfaceStatusRow, 0, len(names))
+	hiddenZeroRate := 0
+	for _, name := range names {
+		row := interfaceStatusRow{vrf: interfaceVRFLabel(name, core, routeNames), iface: name, inbound: "?", outbound: "?"}
 		var decoded struct {
 			Stats []map[string]string `json:"stats"`
 		}
-		if err := json.Unmarshal(interfaces[name], &decoded); err != nil || len(decoded.Stats) == 0 {
-			parts = append(parts, name+" unavailable")
+		if err := json.Unmarshal(result.Interfaces[name], &decoded); err != nil || len(decoded.Stats) == 0 {
+			rows = append(rows, row)
 			continue
 		}
 		stat := decoded.Stats[0]
-		in := formatBitsPerSecond(stat["INPUT_RATE_BPS"])
-		out := formatBitsPerSecond(stat["OUTPUT_RATE_BPS"])
-		// Right-aligned to a fixed width so the units/decimal points of
-		// successive ticks for the same interface line up in the terminal.
-		parts = append(parts, fmt.Sprintf("%s in %9s/out %9s", name, in, out))
+		if isZeroRate(stat["INPUT_RATE_BPS"]) && isZeroRate(stat["OUTPUT_RATE_BPS"]) {
+			hiddenZeroRate++
+			continue
+		}
+		row.inbound = formatBitsPerSecond(stat["INPUT_RATE_BPS"])
+		row.outbound = formatBitsPerSecond(stat["OUTPUT_RATE_BPS"])
+		rows = append(rows, row)
 	}
-	if hidden := len(names) - len(shownNames); hidden > 0 {
-		parts = append(parts, fmt.Sprintf("+%d interfaces", hidden))
+	lines := formatInterfaceTable(rows)
+	if hiddenZeroRate > 0 {
+		lines = append(lines, fmt.Sprintf("+%d zero-rate interfaces not shown", hiddenZeroRate))
 	}
-	return strings.Join(parts, " | ")
+	return lines
+}
+
+func isZeroRate(raw string) bool {
+	value, err := strconv.ParseFloat(raw, 64)
+	return err == nil && value == 0
+}
+
+func sortedRouteNames(routes map[string]json.RawMessage) []string {
+	names := make([]string, 0, len(routes))
+	for name := range routes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func interfaceVRFLabel(name string, core map[string]bool, routeNames []string) string {
+	if core[name] {
+		return "core"
+	}
+	if len(routeNames) == 1 {
+		return routeNames[0]
+	}
+	return "customer"
+}
+
+func formatInterfaceTable(rows []interfaceStatusRow) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	vrfWidth := len("VRF")
+	ifaceWidth := len("Interface")
+	inWidth := len("Inbound")
+	outWidth := len("Outbound")
+	for _, row := range rows {
+		vrfWidth = max(vrfWidth, len(row.vrf))
+		ifaceWidth = max(ifaceWidth, len(row.iface))
+		inWidth = max(inWidth, len(row.inbound))
+		outWidth = max(outWidth, len(row.outbound))
+	}
+
+	rowFormat := fmt.Sprintf("| %%-%ds | %%-%ds | %%%ds | %%%ds |", vrfWidth, ifaceWidth, inWidth, outWidth)
+	lines := make([]string, 0, len(rows)+1)
+	lines = append(lines, fmt.Sprintf(rowFormat, "VRF", "Interface", "Inbound", "Outbound"))
+	for _, row := range rows {
+		lines = append(lines, fmt.Sprintf(rowFormat, row.vrf, row.iface, row.inbound, row.outbound))
+	}
+	return lines
 }
 
 func formatBitsPerSecond(raw string) string {

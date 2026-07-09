@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type Client struct {
 	hostKeyPolicy   string
 	knownHostsFile  string
 	selectedProfile string
+	passwordPattern *regexp.Regexp
 	connectProfile  func(host, username, password, driverName, profile, hostKeyPolicy string) error
 }
 
@@ -145,6 +147,20 @@ func WithOperationTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithPasswordPattern overrides scrapligo's default password-prompt regex
+// (which only matches literal "password:"). Some fleets challenge with a
+// different prompt entirely — e.g. RSA SecurID's "Enter PASSCODE:" — and
+// without this option, a connection against them just hangs until the
+// operation timeout instead of ever sending the passcode.
+func WithPasswordPattern(pattern *regexp.Regexp) Option {
+	return func(c *Client) {
+		if c == nil {
+			return
+		}
+		c.passwordPattern = pattern
+	}
+}
+
 func validateNonEmpty(value, name string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is required", name)
@@ -205,6 +221,27 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 	return c.connectWithProfile(trimmedHost, username, password, trimmedDriverName, profile, policy)
 }
 
+// closeAfterFailedOpen calls driver.Close(), recovering the panic scrapligo
+// raises when it already closed the channel internally as part of its own
+// Open() failure cleanup. scrapligo's self-cleanup on a failed Open() is
+// inconsistent: if the transport itself fails to open (host unreachable,
+// dial timeout), nothing is closed internally and driver.Close() here is
+// required to avoid leaking the connection; but if the transport opens and a
+// later step fails (in-channel auth, PTY/shell setup — e.g. a VTY session
+// limit), scrapligo's own defer already closed the channel, and calling
+// Close() again double-closes Channel.Errs and panics. There's no way to
+// tell from here which case occurred, so this attempts the close and
+// recovers if scrapligo already did it — logging whatever was recovered so
+// an unrelated future panic in Close() doesn't vanish silently.
+func closeAfterFailedOpen(driver *network.Driver) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Debug("recovered panic while closing driver after failed open (expected if scrapligo already closed its channel)", "recovered", r)
+		}
+	}()
+	_ = driver.Close()
+}
+
 func (c *Client) connectWithProfile(host, username, password, driverName, profile, hostKeyPolicy string) error {
 	platformOptions := []util.Option{
 		options.WithAuthUsername(username),
@@ -212,6 +249,9 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 		options.WithTimeoutSocket(c.socketTimeout),
 		options.WithTimeoutOps(c.opsTimeout),
 		options.WithChannelLog(c.channelLog),
+	}
+	if c.passwordPattern != nil {
+		platformOptions = append(platformOptions, options.WithPasswordPattern(c.passwordPattern))
 	}
 	if hostKeyPolicy == "insecure" {
 		platformOptions = append(platformOptions, options.WithAuthNoStrictKey())
@@ -244,7 +284,7 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 	}
 
 	if err := driver.Open(); err != nil {
-		_ = driver.Close()
+		closeAfterFailedOpen(driver)
 		return fmt.Errorf("failed to open driver: %w", err)
 	}
 

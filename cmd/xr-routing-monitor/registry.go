@@ -19,8 +19,14 @@ func newHostnameRegistry() *hostnameRegistry {
 	return &hostnameRegistry{seen: map[string]string{}}
 }
 
+// normalizeHostname must treat two hostnames as the same device whenever
+// sanitizeFilename (poll.go) would write them to the same output file —
+// otherwise two "distinct" registry entries can still race on one
+// <hostname>.jsonl/.json/.txt file, which is exactly the corruption this
+// registry exists to prevent. It reuses sanitizeFilename itself rather than
+// its own separate equivalence rule so the two can never drift apart again.
 func normalizeHostname(host string) string {
-	return strings.ToLower(strings.TrimSpace(host))
+	return strings.ToLower(sanitizeFilename(host))
 }
 
 // has reports whether host (case-insensitively) already has a successfully

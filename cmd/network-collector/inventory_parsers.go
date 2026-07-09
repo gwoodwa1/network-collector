@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/drift"
+	"github.com/gwoodwa1/network-collector/pkg/textfsm"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
-	"github.com/sirikothe/gotextfsm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -290,24 +290,11 @@ func parseWithTextFSM(output string, parser ParserModuleConfig) (string, error) 
 		return "", fmt.Errorf("failed to read TextFSM template %q: %w", templatePath, err)
 	}
 
-	var fsm gotextfsm.TextFSM
-	if err := fsm.ParseString(string(templateBytes)); err != nil {
-		return "", fmt.Errorf("invalid TextFSM template %q: %w", templatePath, err)
-	}
-	var parsed gotextfsm.ParserOutput
-	if err := parsed.ParseTextString(output, fsm, true); err != nil {
-		return "", fmt.Errorf("TextFSM parse failed with template %q: %w", templatePath, err)
-	}
-
-	root := strings.TrimSpace(parser.Root)
-	if root == "" {
-		root = "records"
-	}
-	encoded, err := json.Marshal(map[string]interface{}{root: parsed.Dict})
+	result, err := textfsm.Parse(output, templateBytes, parser.Root)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("template %q: %w", templatePath, err)
 	}
-	return string(encoded), nil
+	return result, nil
 }
 
 func parseOutputWithModule(output, parserName string, parsers map[string]ParserModuleConfig) (string, error) {

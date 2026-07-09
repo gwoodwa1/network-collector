@@ -6,6 +6,9 @@ SECURITY_AUDIT.md
 
 # Local build artifacts
 /network-collector
+/xr-routing-monitor
+/cmd/xr-routing-monitor/xr-routing-monitor
+/bin/xr-routing-monitor
 /dist/
 /artifacts/
 /session_logs/

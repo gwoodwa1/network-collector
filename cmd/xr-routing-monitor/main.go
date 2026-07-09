@@ -39,7 +39,7 @@ func main() {
 	flag.Parse()
 
 	// Tracked so an interval set at the top of a --devices file can be
-	// overridden by an explicit -interval flag, but not by its own default.
+	// overridden by an explicit CLI flag, but not by its own default.
 	intervalSetOnCLI := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "interval" {
@@ -64,12 +64,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	// runLabel identifies this change window: the --devices YAML's basename
+	// (without extension), e.g. "CRQXXX" for --devices CRQXXX.yaml — empty
+	// when devices were onboarded interactively instead. Computed here
+	// (rather than after session-log setup, where it used to live) so the
+	// session log filename below can use it too.
+	var runLabel string
+	if trimmed := strings.TrimSpace(devicesFile); trimmed != "" {
+		base := filepath.Base(trimmed)
+		runLabel = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+
 	// session.log mirrors every scrolling status line plus all slog events
 	// (connects, drops, snapshot errors) to a durable file, so the terminal
 	// output isn't the only record of what happened during the change
 	// window. It deliberately never sees credential prompts or passcodes:
 	// those stay on os.Stderr only, untouched by this file.
-	sessionLogPath := filepath.Join(outputDir, "session.log")
+	//
+	// The filename is "[<runLabel>-]<start-timestamp>-session.log" rather
+	// than a fixed "session.log" — this fleet now often runs one instance
+	// per node (to keep each device's scrolling output on its own terminal)
+	// pointed at a shared --output-dir, and a fixed filename would collide:
+	// two processes appending to the very same file interleave their writes
+	// line-by-line (the syncWriter mutex below only serializes goroutines
+	// within one process), defeating the whole point of separating them.
+	// The devices-file name plus a start timestamp keeps each run's log
+	// distinct and identifiable, the same reasoning as snapshotFilenameBase.
+	var sessionLogNameParts []string
+	if runLabel != "" {
+		sessionLogNameParts = append(sessionLogNameParts, runLabel)
+	}
+	sessionLogNameParts = append(sessionLogNameParts, time.Now().Format("20060102-150405"), "session.log")
+	sessionLogPath := filepath.Join(outputDir, strings.Join(sessionLogNameParts, "-"))
 	sessionLogFile, err := os.OpenFile(sessionLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		slog.Error("failed to open session log", "path", sessionLogPath, "error", err)
@@ -83,31 +109,24 @@ func main() {
 	// in a real mutex to keep concurrent devices' status lines from
 	// splicing together on the terminal or in session.log.
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, sessionLogFile), nil)))
-	statusOut := newTickStatusPrinter(&syncWriter{w: io.MultiWriter(os.Stdout, sessionLogFile)})
 	// Plain (non-slog) operational confirmations, like a snapshot having been
 	// written — same style as the onboarding "connected to X" messages, but
 	// mirrored to session.log too, since they happen during the change
 	// window itself rather than during setup.
 	snapshotOut := &syncWriter{w: io.MultiWriter(os.Stderr, sessionLogFile)}
-
-	// runLabel identifies this change window in before/after snapshot
-	// filenames: the --devices YAML's basename (without extension), e.g.
-	// "CRQXXX" for --devices CRQXXX.yaml, so a dedicated devices file per
-	// change keeps that change's snapshots identifiable in a shared
-	// --output-dir. Empty when devices were onboarded interactively instead.
-	var runLabel string
-	if trimmed := strings.TrimSpace(devicesFile); trimmed != "" {
-		base := filepath.Base(trimmed)
-		runLabel = strings.TrimSuffix(base, filepath.Ext(base))
-	}
+	// runLabel (computed above, before session-log setup) also identifies
+	// this change window in before/after snapshot filenames — see
+	// snapshotFilenameBase.
 
 	reader := bufio.NewReader(os.Stdin)
 	cache := &credentialCache{window: passcodeReuseWindow}
 	registry := newHostnameRegistry()
 	var sessions []*deviceSession
 	var gatewayPrefix string
+	var commands commandOverrides
+	var excludeInterfacePrefixes []string
 	if strings.TrimSpace(devicesFile) != "" {
-		specs, fileInterval, fileGatewayPrefix, err := loadDeviceSpecs(devicesFile)
+		specs, fileInterval, fileGatewayPrefix, fileCommands, fileExcludePrefixes, err := loadDeviceSpecs(devicesFile)
 		if err != nil {
 			slog.Error("failed to load devices file", "devices_file", devicesFile, "error", err)
 			os.Exit(1)
@@ -117,19 +136,25 @@ func main() {
 			interval = fileInterval
 		}
 		gatewayPrefix = fileGatewayPrefix
-		sessions = append(sessions, onboardDevicesFromSpecs(reader, specs, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix)...)
+		commands = fileCommands
+		excludeInterfacePrefixes = resolveExcludeInterfacePrefixes(fileExcludePrefixes)
+		sessions = append(sessions, onboardDevicesFromSpecs(reader, specs, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes)...)
+	} else {
+		excludeInterfacePrefixes = resolveExcludeInterfacePrefixes(nil)
 	}
+	spec := resolveCollectionSpec(commands)
 	// Always fall through to interactive onboarding afterward: blank
 	// hostname finishes immediately if the file already covered everything,
 	// or lets the operator add ad hoc devices not listed in it. gatewayPrefix
 	// (if the devices file set one) is offered as the default answer if the
 	// operator opts into VRF auto-detection for one of these devices too.
-	sessions = append(sessions, onboardDevices(reader, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix)...)
+	sessions = append(sessions, onboardDevices(reader, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes)...)
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "no devices connected, exiting")
 		return
 	}
 
+	statusOut := newTickStatusPrinter(&syncWriter{w: io.MultiWriter(os.Stdout, sessionLogFile)})
 	fmt.Fprintf(os.Stderr, "\n%d device(s) connected; polling every %s, writing to %s/. Press Ctrl+C to stop.\n\n", len(sessions), interval, outputDir)
 	slog.Info("polling started", "device_count", len(sessions), "interval", interval.String())
 
@@ -141,7 +166,7 @@ func main() {
 		wg.Add(1)
 		go func(s *deviceSession) {
 			defer wg.Done()
-			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel)
+			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel, spec)
 		}(session)
 	}
 	wg.Wait()
@@ -167,12 +192,25 @@ type connectFunc func(reader *bufio.Reader, host, deviceType string, cache *cred
 // session plus the collection parameters gathered for it during onboarding.
 // vrfs holds every VRF to monitor for this device: manually specified
 // ones, auto-detected customer VRFs (see autoDetectCustomerVRFs), or both.
+// coreInterfaces/customerInterfaces are kept as two separate lists (rather
+// than one merged list) purely so the status line (status.go) can label
+// each interface "Core Int" or "Cust Int" by provenance — manually typed
+// vs. auto-discovered — instead of losing that distinction the moment
+// they're onboarded; both are still polled together (see allInterfaces).
 type deviceSession struct {
-	hostname   string
-	vrfs       []string
-	interfaces []string
-	neighbors  []string
-	client     sessionExecutor
+	hostname           string
+	vrfs               []string
+	coreInterfaces     []string
+	customerInterfaces []string
+	neighbors          []string
+	client             sessionExecutor
+}
+
+// allInterfaces returns every interface to poll for this device — core and
+// customer — deduped and sorted, since an operator could in principle type
+// an interface manually that auto-detect also discovers.
+func (s *deviceSession) allInterfaces() []string {
+	return dedupeSorted(append(append([]string{}, s.coreInterfaces...), s.customerInterfaces...))
 }
 
 func splitCommaList(line string) []string {
@@ -190,7 +228,7 @@ func splitCommaList(line string) []string {
 // (typically a --devices file's top-level customer_gateway_prefix, empty if none was
 // loaded) is offered as the default answer when the operator opts into VRF
 // auto-detection, so it only needs to be typed once per run rather than once per device.
-func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, defaultGatewayPrefix string) []*deviceSession {
+func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, defaultGatewayPrefix string, excludeInterfacePrefixes []string) []*deviceSession {
 	var sessions []*deviceSession
 	for {
 		fmt.Fprintf(os.Stderr, "Router hostname/IP (blank to finish onboarding): ")
@@ -216,7 +254,7 @@ func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCa
 
 		fmt.Fprintf(os.Stderr, "Core-facing Bundle-Ether interface(s) on %s, comma-separated (blank to skip): ", host)
 		interfaceLine, _ := reader.ReadString('\n')
-		interfaces := dedupeSorted(splitCommaList(interfaceLine))
+		coreInterfaces := dedupeSorted(splitCommaList(interfaceLine))
 
 		fmt.Fprintf(os.Stderr, "BGP neighbor IP(s) on %s to snapshot routes for before/after the change, comma-separated (blank to skip): ", host)
 		neighborLine, _ := reader.ReadString('\n')
@@ -229,13 +267,14 @@ func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCa
 		}
 		registry.claim(host)
 
+		var customerInterfaces []string
 		if autoDetect {
-			vrfs, interfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, host, vrfs, interfaces, os.Stderr)
+			vrfs, customerInterfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, excludeInterfacePrefixes, host, vrfs, os.Stderr)
 		}
 
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", host)
-		slog.Info("device connected", "hostname", host, "vrfs", vrfs, "interfaces", interfaces, "neighbors", neighbors)
-		sessions = append(sessions, &deviceSession{hostname: host, vrfs: vrfs, interfaces: interfaces, neighbors: neighbors, client: client})
+		slog.Info("device connected", "hostname", host, "vrfs", vrfs, "core_interfaces", coreInterfaces, "customer_interfaces", customerInterfaces, "neighbors", neighbors)
+		sessions = append(sessions, &deviceSession{hostname: host, vrfs: vrfs, coreInterfaces: coreInterfaces, customerInterfaces: customerInterfaces, neighbors: neighbors, client: client})
 	}
 	return sessions
 }
@@ -291,11 +330,12 @@ func resolveCredentials(reader *bufio.Reader, cache *credentialCache) (username,
 		remaining := cache.window - time.Since(cache.capturedAt)
 		fmt.Fprintf(os.Stderr, "Reuse cached passcode for %s (~%s left in the ISE cache window)? [Y/n]: ", cache.username, remaining.Round(time.Second))
 		answer, _ := reader.ReadString('\n')
-		if !strings.EqualFold(strings.TrimSpace(answer), "n") {
+		declined := strings.EqualFold(strings.TrimSpace(answer), "n") || strings.EqualFold(strings.TrimSpace(answer), "no")
+		if !declined {
 			return cache.username, cache.password, false, nil
 		}
 	}
-	username, password, err = credentials.ResolveCredentials(true, reader, os.Stderr)
+	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr)
 	return username, password, true, err
 }
 

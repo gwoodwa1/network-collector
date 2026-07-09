@@ -33,6 +33,35 @@ var defaultSpec = collectionSpec{
 	InterfaceParser:  "xr_bundle_interface_stats",
 }
 
+// resolveCollectionSpec merges any non-empty overrides from a --devices
+// file's top-level "commands:" section onto defaultSpec, so an operator can
+// point this tool at a different show-command or parser (e.g. a code
+// variant without "show bgp vpnv4 unicast summary", or one needing a
+// "... detail" variant) by editing the devices file instead of patching Go
+// source and rebuilding the static binary mid-engagement.
+func resolveCollectionSpec(overrides commandOverrides) collectionSpec {
+	spec := defaultSpec
+	if v := strings.TrimSpace(overrides.BGPCommand); v != "" {
+		spec.BGPCommand = v
+	}
+	if v := strings.TrimSpace(overrides.BGPParser); v != "" {
+		spec.BGPParser = v
+	}
+	if v := strings.TrimSpace(overrides.RouteCommand); v != "" {
+		spec.RouteCommand = v
+	}
+	if v := strings.TrimSpace(overrides.RouteParser); v != "" {
+		spec.RouteParser = v
+	}
+	if v := strings.TrimSpace(overrides.InterfaceCommand); v != "" {
+		spec.InterfaceCommand = v
+	}
+	if v := strings.TrimSpace(overrides.InterfaceParser); v != "" {
+		spec.InterfaceParser = v
+	}
+	return spec
+}
+
 type tickResult struct {
 	Timestamp  string                     `json:"timestamp"`
 	Hostname   string                     `json:"hostname"`
@@ -48,7 +77,7 @@ type tickResult struct {
 // error, since BGP is collected on every tick and acts as a session
 // liveness canary). It never reconnects: a dropped session requires a fresh
 // RSA passcode, which this loop cannot supply unattended.
-func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string) {
+func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -66,7 +95,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 	defer writer.Flush()
 
 	tick := func() bool {
-		result, sessionAlive := collectTick(session, parsers)
+		result, sessionAlive := collectTick(session, parsers, spec)
 		encoded, err := json.Marshal(result)
 		if err != nil {
 			slog.Error("failed to encode tick result", "hostname", session.hostname, "error", err)
@@ -76,7 +105,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 			slog.Error("failed to write tick result", "hostname", session.hostname, "error", err)
 		}
 		writer.Flush()
-		statusOut.printTick(result, sessionAlive)
+		statusOut.printTick(result, sessionAlive, session.coreInterfaces)
 		if !sessionAlive {
 			slog.Error("session appears to have dropped; stopping polling for this device", "hostname", session.hostname)
 		}
@@ -112,8 +141,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 // It returns sessionAlive=false only when the BGP command itself failed to
 // execute (a proxy for the SSH session having dropped); parser lookup/parse
 // failures are recorded per-field and do not stop polling.
-func collectTick(session *deviceSession, parsers map[string]parserModule) (tickResult, bool) {
-	spec := defaultSpec
+func collectTick(session *deviceSession, parsers map[string]parserModule, spec collectionSpec) (tickResult, bool) {
 	result := tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname}
 
 	bgpOutput, err := session.client.Execute(spec.BGPCommand)
@@ -135,9 +163,9 @@ func collectTick(session *deviceSession, parsers map[string]parserModule) (tickR
 		}
 	}
 
-	if len(session.interfaces) > 0 {
+	if interfaces := session.allInterfaces(); len(interfaces) > 0 {
 		result.Interfaces = map[string]json.RawMessage{}
-		for _, ifaceName := range session.interfaces {
+		for _, ifaceName := range interfaces {
 			ifaceOutput, err := session.client.Execute(fmt.Sprintf(spec.InterfaceCommand, ifaceName))
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("interface %s: execute failed: %v", ifaceName, err))

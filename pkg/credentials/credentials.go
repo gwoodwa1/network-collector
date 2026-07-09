@@ -15,6 +15,23 @@ const passwordMask = "********"
 // ResolveCredentials returns username/password using environment variables by default,
 // or prompts interactively when requested.
 func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) (string, string, error) {
+	return resolveCredentials(promptForCreds, input, nil, output)
+}
+
+// ResolveCredentialsWithTerminal behaves like ResolveCredentials, but lets the
+// caller supply the *os.File to check/read from for terminal echo-suppressed
+// password entry (term.IsTerminal/term.ReadPassword need a real file
+// descriptor), separately from input, the io.Reader used for buffered line
+// reads. This is for callers that keep one long-lived *bufio.Reader across
+// many sequential prompts sharing the same underlying terminal: passing that
+// *bufio.Reader as input to ResolveCredentials would never satisfy its
+// internal input.(*os.File) check, silently disabling password masking even
+// at a real interactive terminal.
+func ResolveCredentialsWithTerminal(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer) (string, string, error) {
+	return resolveCredentials(promptForCreds, input, terminal, output)
+}
+
+func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer) (string, string, error) {
 	username := strings.TrimSpace(os.Getenv("NET_USER"))
 	password := strings.TrimSpace(os.Getenv("NET_PASSWORD"))
 
@@ -34,16 +51,19 @@ func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) 
 	username = ""
 	password = ""
 
-	inputFile, terminalInput := input.(*os.File)
-	terminalInput = terminalInput && term.IsTerminal(int(inputFile.Fd()))
+	terminalFile := terminal
+	if terminalFile == nil {
+		terminalFile, _ = input.(*os.File)
+	}
+	terminalInput := terminalFile != nil && term.IsTerminal(int(terminalFile.Fd()))
 	if terminalInput {
 		fmt.Fprint(output, "Username: ")
-		if _, err := fmt.Fscanln(inputFile, &username); err != nil {
+		if _, err := fmt.Fscanln(terminalFile, &username); err != nil {
 			return "", "", fmt.Errorf("read username: %w", err)
 		}
 
 		fmt.Fprint(output, "Password: ")
-		passwordBytes, err := term.ReadPassword(int(inputFile.Fd()))
+		passwordBytes, err := term.ReadPassword(int(terminalFile.Fd()))
 		if err != nil {
 			fmt.Fprintln(output)
 			return "", "", fmt.Errorf("read password: %w", err)

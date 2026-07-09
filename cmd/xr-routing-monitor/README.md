@@ -27,8 +27,18 @@ anything under `cmd/network-collector`.
 ## Build
 
 ```bash
-go build -o xr-routing-monitor ./cmd/xr-routing-monitor
+CGO_ENABLED=0 go build -o xr-routing-monitor ./cmd/xr-routing-monitor
 ```
+
+**`CGO_ENABLED=0` is required**, not optional. A plain `go build` on a machine with cgo
+enabled (the default whenever gcc is present) dynamically links against the build host's
+`libc.so.6`. Copying that binary to an older jumphost fails at runtime with
+`GLIBC_2.34 not found` / `GLIBC_2.32 not found`, even though `file` still reports what
+looks like a normal ELF binary — the giveaway is `file` reporting `dynamically linked`
+instead of `statically linked`. `CGO_ENABLED=0` produces a fully static binary with no
+runtime glibc dependency at all. There's no automated release build for this binary yet
+(`.goreleaser.yaml` doesn't cover it), so it must be built manually with the flag every
+time.
 
 Copy the resulting `xr-routing-monitor` binary to the jumphost. No other
 files are required.
@@ -126,6 +136,33 @@ reuse](#passcode-reuse)) regardless of `--devices`. After the file is
 processed you're dropped into the normal interactive prompt to add any
 further ad hoc devices, or just hit Enter immediately to start polling.
 
+Two more top-level, fleet-wide settings are optional:
+
+```yaml
+exclude_interface_prefixes: [loopback, bvi]
+
+commands:
+  bgp_command: show bgp vpnv4 unicast summary
+  bgp_parser: xr_bgp_vpnv4_summary
+  route_command: show route vrf %s summary
+  route_parser: xr_route_vrf_summary
+  interface_command: 'show int %s | inc "rate|Description:"'
+  interface_parser: xr_bundle_interface_stats
+```
+
+- `exclude_interface_prefixes` overrides which (lowercase) interface-name
+  prefixes are excluded from auto-detected polling targets — the default
+  above is applied automatically if omitted. Set this if your fleet's
+  customer VRFs carry connected routes on some other non-core virtual
+  interface type (e.g. `tunnel-ip`) that should also be excluded.
+- `commands` overrides the show-commands/parser modules this tool polls
+  every tick (see `defaultSpec` in `poll.go`). Every field is optional; only
+  the ones you set are overridden. Use this if your fleet needs a different
+  command — e.g. a code variant without `show bgp vpnv4 unicast summary`, or
+  a `... detail` variant — without patching Go source and rebuilding.
+  `route_command` and `interface_command` must each contain exactly one `%s`
+  placeholder for the VRF or interface name.
+
 ### Auto-detecting a customer VRF
 
 On a fleet where each router carries many VRFs (customer VRFs, system VRFs
@@ -137,22 +174,44 @@ operator eyeballing `show route vrf all` would: **a VRF whose default route
 `10.99.99.` on this fleet) is treated as customer-facing; everything else
 on the box is ignored.
 
-For each such VRF, the tool then finds its physical/sub-interface uplinks —
-the directly-connected routes in `show route vrf <vrf>` — and adds them to
-interface polling alongside whatever core-facing interfaces you specified
-manually (typically the core Bundle-Ether). If more than one VRF matches
-(real fleets often have more than one), all of them are monitored, and their
-interfaces are combined and deduplicated. `Loopback*` and `BVI*` directly
-connected routes are ignored by auto-discovery so they don't flood the live
+The matched default-route gateway is only ever used to identify *which VRF*
+is customer-facing — it's never used again after that. For each matched
+VRF, the tool then adds every interface actually **assigned to that VRF**
+(from `show vrf <vrf> ipv4 detail`'s `Interfaces:` section) to polling,
+alongside whatever core-facing interfaces you specified manually (typically
+the core Bundle-Ether). This is deliberately not based on the VRF's routing
+table: a VRF can import a route-target that's also exported by other,
+unrelated VRFs (e.g. a shared "internet access" RT), and an imported
+connected route still displays as `C ... is directly connected` in the
+importing VRF's table — indistinguishable from the VRF's own genuine
+interfaces. `show vrf <vrf> ipv4 detail` comes from VRF configuration
+instead, so it isn't affected by that. If more than one *customer* VRF
+matches (real fleets often have more than one), all of them are monitored,
+and their interfaces are combined and deduplicated. `Loopback*` and `BVI*`
+interfaces are still ignored by auto-discovery so they don't flood the live
 status output; add one manually under `interfaces:` if you explicitly want
 to poll it.
+
+A shared internet-breakout/hub VRF (e.g. `RI-INTERNET-ENTERPRISE`) can
+independently peer with the same route-reflector range and match the
+gateway heuristic too — but it isn't a single customer's circuit, and
+legitimately carries dozens of unrelated customers' interfaces and BGP
+sessions. To avoid pulling all of that into polling, matches are further
+filtered to this fleet's customer-VRF naming conventions: a purely numeric
+circuit/account ID (`1115679`), or a `V<circuit-id>:<SERVICE>` tag
+(`V10:CDN`, `V100:SDN`). A match that doesn't fit either style is treated as
+a hub VRF — excluded from polling, but still reported, with its interface
+count, in a `skipped hub VRF(s) on <host> ...` line so it's visible rather
+than silently dropped. If your fleet uses yet another customer-VRF naming
+style, that VRF will show up in this line instead of being picked up — the
+match rule (`customerVRFName` in `discover.go`) needs extending for it.
 
 This runs two read-only commands per device once, right after connecting,
 not on every poll tick:
 
 ```
 show route vrf all | inc "Gateway of last resort|VRF:"
-show route vrf <matched-vrf> | inc "is directly connected"
+show vrf <matched-vrf> ipv4 detail
 ```
 
 If discovery finds no matching VRF, or a follow-up interface lookup fails
@@ -178,8 +237,8 @@ passcode is available, you're asked before every connection:
 Reuse cached passcode for automation (~32s left in the ISE cache window)? [Y/n]:
 ```
 
-Answering **Enter/`y`** reuses it (no re-prompt); answering **`n`** asks for
-a fresh username/passcode instead. This is always an explicit per-device
+Answering **Enter/`y`** reuses it (no re-prompt); answering **`n`/`no`** asks
+for a fresh username/passcode instead. This is always an explicit per-device
 choice, never automatic — you're expected to know whether you're still
 inside your environment's actual cache window. A failed connection attempt
 immediately invalidates the cache (a rejected passcode isn't trustworthy to
@@ -222,19 +281,30 @@ dropped and polling for that device stops (the other devices keep going).
 Everything else falls back to raw text in the same JSON line if its parser
 lookup fails, so a tick is never silently lost.
 
-Each tick also prints one scrolling status line to stdout (and
-`session.log` — see below), e.g.:
+#### Status line output
+
+Each tick also prints its status to stdout (and `session.log` — see below)
+as one header line plus an indented interface table, e.g.:
 
 ```
-22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383 | BE45 in 6.2Gbps/out 4.1Gbps
+22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383
+  | VRF                 | Interface             | Inbound |  Outbound |
+  | core                | BE45                  | 6.2Gbps |   4.1Gbps |
+  | CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/8 |    0bps | 272.0Kbps |
 ```
 
-A device monitoring more than one VRF gets one `<vrf> routes <N>` segment
-per VRF, sorted by VRF name, the same way multiple interfaces each get their
-own segment. To keep the terminal readable, only the first few interface
-segments are shown on the live status line followed by `+N interfaces` when
-more are being polled; the JSONL output still contains every interface
-result for that tick.
+Interfaces are never packed onto the header line — a device with many
+interfaces would otherwise produce a single line far longer than a typical
+terminal's column limit (a shared VRF can easily have 40+ interfaces; see
+[Auto-detecting a customer VRF](#auto-detecting-a-customer-vrf)). The table's
+`VRF` column shows `core` for manually specified core-facing interfaces
+(e.g. Bundle-Ether uplinks) and the customer VRF for auto-detected
+customer-facing interfaces when there is exactly one monitored VRF. A
+device monitoring more than one VRF gets one `<vrf> routes <N>` segment per
+VRF on the header line, sorted by VRF name. To keep the terminal readable,
+the table shows every interface whose inbound or outbound rate is non-zero
+and summarizes idle interfaces with a `+N zero-rate interfaces not shown`
+line; the JSONL output still contains every interface result for that tick.
 
 Lines are only ever appended, never overwritten, so the full history of the
 change window stays visible in the terminal and looks the same whether
@@ -294,11 +364,22 @@ diff <(jq -S . "$before_json") <(jq -S . "$after_json")
 ### `session.log`
 
 Every scrolling status line, plus every operational log event (device
-connected, session dropped, snapshot write failures), is mirrored to
-`<output-dir>/session.log` in addition to your terminal — so the terminal's
+connected, session dropped, snapshot write failures), is mirrored to a log
+file in `<output-dir>` in addition to your terminal — so the terminal's
 scrollback isn't the only record of what happened. Interactive prompts and
 credentials are never written to it; only `os.Stderr` ever sees those, and
 they're never duplicated anywhere else.
+
+The filename is `[<devices-file>-]<start-timestamp>-session.log`, e.g.
+`CRQ00004-20260709-220726-session.log` — not a fixed `session.log`. This
+matters if you run one instance per device (recommended if you find several
+devices' interleaved status lines on one terminal hard to follow) pointed at
+a shared `--output-dir`: a fixed filename would have two processes appending
+to the same file, and their writes can interleave line-by-line since the
+in-process mutex that keeps one run's own output tidy can't coordinate
+across separate processes. Each run's devices-file name plus start
+timestamp keeps its log distinct, the same reasoning as the before/after
+snapshot filenames above.
 
 ## Example
 
@@ -312,7 +393,7 @@ Core-facing Bundle-Ether interface(s) on pe-router-1, comma-separated (blank to 
 BGP neighbor IP(s) on pe-router-1 to snapshot routes for before/after the change, comma-separated (blank to skip): 198.51.100.101
 Username: automation
 Password: ********
-auto-detected VRF(s) [CUSTOMER-A-INTERNET] with interface(s) [TenGigE0/0/0/2.200] on pe-router-1
+auto-detected VRF(s) [CUSTOMER-A-INTERNET] with interface(s) [GigabitEthernet0/0/0/1.100] on pe-router-1
 connected to pe-router-1
 
 Router hostname/IP (blank to finish onboarding): pe-router-2
@@ -327,11 +408,21 @@ Router hostname/IP (blank to finish onboarding):
 
 2 device(s) connected; polling every 30s, writing to ./change-2026-07-08/. Press Ctrl+C to stop.
 
-22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383 | BE45 in 6.2Gbps/out 4.1Gbps | TenGigE0/0/0/2.200 in 1.0Gbps/out 0.8Gbps
-22:07:27 | pe-router-2    | BGP 4/4 up  | BE10 in 1.1Gbps/out 0.9Gbps
+22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383
+  | VRF                 | Interface                 | Inbound | Outbound |
+  | core                | BE45                      | 6.2Gbps |  4.1Gbps |
+  | CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/1.100 | 1.0Gbps |  0.8Gbps |
+22:07:27 | pe-router-2    | BGP 4/4 up
+  | VRF  | Interface | Inbound | Outbound |
+  | core | BE10      | 1.1Gbps |  0.9Gbps |
 
-22:07:56 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383 | BE45 in 6.3Gbps/out 4.0Gbps | TenGigE0/0/0/2.200 in 1.0Gbps/out 0.8Gbps
-22:07:57 | pe-router-2    | BGP 4/4 up  | BE10 in 1.1Gbps/out 0.9Gbps
+22:07:56 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383
+  | VRF                 | Interface                 | Inbound | Outbound |
+  | core                | BE45                      | 6.3Gbps |  4.0Gbps |
+  | CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/1.100 | 1.0Gbps |  0.8Gbps |
+22:07:57 | pe-router-2    | BGP 4/4 up
+  | VRF  | Interface | Inbound | Outbound |
+  | core | BE10      | 1.1Gbps |  0.9Gbps |
 ^C
 all device sessions stopped, exiting
 ```
@@ -340,7 +431,7 @@ Resulting files:
 
 ```
 change-2026-07-08/
-  session.log
+  20260708-220555-session.log
   pe-router-1.jsonl
   pe-router-1-20260708-220555-before.txt
   pe-router-1-20260708-220555-before.json

@@ -269,7 +269,7 @@ func TestPollDeviceCapturesBeforeAndAfterSnapshots(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "")
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
 		close(done)
 	}()
 

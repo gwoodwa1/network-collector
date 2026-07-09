@@ -14,6 +14,29 @@ import (
 	"time"
 )
 
+// TestResolveCollectionSpecOverridesOnlyNonEmptyFields guards the
+// --devices file "commands:" override mechanism (added so an operator can
+// point this tool at a different show-command or parser without patching
+// Go source and rebuilding): every unset override field must fall back to
+// defaultSpec, and setting one field must never blank out the others.
+func TestResolveCollectionSpecOverridesOnlyNonEmptyFields(t *testing.T) {
+	spec := resolveCollectionSpec(commandOverrides{BGPCommand: "show bgp summary"})
+	if spec.BGPCommand != "show bgp summary" {
+		t.Fatalf("expected overridden BGP command, got %q", spec.BGPCommand)
+	}
+	if spec.BGPParser != defaultSpec.BGPParser || spec.RouteCommand != defaultSpec.RouteCommand ||
+		spec.RouteParser != defaultSpec.RouteParser || spec.InterfaceCommand != defaultSpec.InterfaceCommand ||
+		spec.InterfaceParser != defaultSpec.InterfaceParser {
+		t.Fatalf("expected every other field to fall back to defaultSpec, got %+v", spec)
+	}
+}
+
+func TestResolveCollectionSpecNoOverridesMatchesDefault(t *testing.T) {
+	if got := resolveCollectionSpec(commandOverrides{}); got != defaultSpec {
+		t.Fatalf("expected defaultSpec unchanged, got %+v", got)
+	}
+}
+
 // fakeExecutor is a sessionExecutor whose Execute behavior is scripted per
 // command prefix, letting tests simulate healthy ticks, a dropped session
 // (BGP command failing), and Close() being called on shutdown.
@@ -45,9 +68,9 @@ func (f *fakeExecutor) Close() error {
 
 func TestCollectTickHappyPathAllFieldsPopulated(t *testing.T) {
 	exec := &fakeExecutor{}
-	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A"}, interfaces: []string{"Bundle-Ether10"}, client: exec}
+	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A"}, coreInterfaces: []string{"Bundle-Ether10"}, client: exec}
 
-	result, alive := collectTick(session, map[string]parserModule{})
+	result, alive := collectTick(session, map[string]parserModule{}, defaultSpec)
 	if !alive {
 		t.Fatal("expected session to remain alive")
 	}
@@ -86,7 +109,7 @@ func TestCollectTickMultipleVRFsEachGetOwnRouteCommand(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A", "4000001"}, client: exec}
 
-	result, alive := collectTick(session, map[string]parserModule{})
+	result, alive := collectTick(session, map[string]parserModule{}, defaultSpec)
 	if !alive {
 		t.Fatal("expected session to remain alive")
 	}
@@ -113,11 +136,56 @@ func TestCollectTickMultipleVRFsEachGetOwnRouteCommand(t *testing.T) {
 	}
 }
 
+func TestCollectTickOnlyExecutesIdentifiedVRFAndInterfaces(t *testing.T) {
+	exec := &fakeExecutor{}
+	session := &deviceSession{
+		hostname:           "xr1",
+		vrfs:               []string{"4000001"},
+		coreInterfaces:     []string{"BE45"},
+		customerInterfaces: []string{"GigabitEthernet0/0/0/1.100"},
+		client:             exec,
+	}
+
+	result, alive := collectTick(session, map[string]parserModule{}, defaultSpec)
+	if !alive {
+		t.Fatal("expected session to remain alive")
+	}
+	if len(result.Routes) != 1 {
+		t.Fatalf("expected exactly one VRF route result, got %+v", result.Routes)
+	}
+	if _, ok := result.Routes["4000001"]; !ok {
+		t.Fatalf("expected route result only for identified VRF 4000001, got %+v", result.Routes)
+	}
+	if len(result.Interfaces) != 2 {
+		t.Fatalf("expected exactly the identified core and customer interfaces, got %+v", result.Interfaces)
+	}
+	for _, iface := range []string{"BE45", "GigabitEthernet0/0/0/1.100"} {
+		if _, ok := result.Interfaces[iface]; !ok {
+			t.Fatalf("expected interface result for %s, got %+v", iface, result.Interfaces)
+		}
+	}
+
+	wantCalls := []string{
+		"show bgp vpnv4 unicast summary",
+		"show route vrf 4000001 summary",
+		`show int BE45 | inc "rate|Description:"`,
+		`show int GigabitEthernet0/0/0/1.100 | inc "rate|Description:"`,
+	}
+	if strings.Join(exec.calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("expected only identified tick commands:\n%v\ngot:\n%v", wantCalls, exec.calls)
+	}
+	for _, forbidden := range []string{"CUSTOMER-A-INTERNET", "TenGigE0/0/0/2.200"} {
+		if strings.Contains(strings.Join(exec.calls, "\n"), forbidden) {
+			t.Fatalf("tick executed command for non-identified target %q: %v", forbidden, exec.calls)
+		}
+	}
+}
+
 func TestCollectTickSkipsOptionalFieldsWhenNotConfigured(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &deviceSession{hostname: "xr1", client: exec}
 
-	result, alive := collectTick(session, map[string]parserModule{})
+	result, alive := collectTick(session, map[string]parserModule{}, defaultSpec)
 	if !alive {
 		t.Fatal("expected session to remain alive")
 	}
@@ -133,7 +201,7 @@ func TestCollectTickBGPExecuteFailureMarksSessionDead(t *testing.T) {
 	exec := &fakeExecutor{failBGP: true}
 	session := &deviceSession{hostname: "xr1", client: exec}
 
-	result, alive := collectTick(session, map[string]parserModule{})
+	result, alive := collectTick(session, map[string]parserModule{}, defaultSpec)
 	if alive {
 		t.Fatal("expected session to be reported dead when the BGP command fails to execute")
 	}
@@ -152,7 +220,7 @@ func TestPollDeviceWritesJSONLAndStopsOnContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		pollDevice(ctx, session, 30*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "")
+		pollDevice(ctx, session, 30*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
 		close(done)
 	}()
 
@@ -202,11 +270,11 @@ func TestPollDeviceStopsOnDroppedSessionWithoutBlockingOthers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		pollDevice(ctx, dyingSession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "")
+		pollDevice(ctx, dyingSession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
 	}()
 	go func() {
 		defer wg.Done()
-		pollDevice(ctx, healthySession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "")
+		pollDevice(ctx, healthySession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
 	}()
 
 	done := make(chan struct{})

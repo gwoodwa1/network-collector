@@ -55,16 +55,52 @@ VRF: **iid
 RP/0/RSP0/CPU0:pe-router-1#
 `
 
-// sampleRouteVRFConnectedInterfacesOutput mirrors "show route vrf <vrf> |
-// inc \"is directly connected\"": each connected subnet produces both a C
-// (connected) and an L (local) line naming the same interface, which the
-// caller is expected to dedupe.
-const sampleRouteVRFConnectedInterfacesOutput = `RP/0/RSP0/CPU0:pe-router-1#show route vrf 4000001 | inc "is directly connected"
-Thu Jul  9 11:33:24.449 BST
-C    10.255.1.0/30 is directly connected, 1y51w, GigabitEthernet0/0/0/1.100
-L    10.255.1.1/32 is directly connected, 1y51w, GigabitEthernet0/0/0/1.100
-C    10.255.2.0/31 is directly connected, 3w3d, TenGigE0/0/0/2.200
-L    10.255.2.0/32 is directly connected, 3w3d, TenGigE0/0/0/2.200
+// sampleVRFDetailInterfacesOutput mirrors "show vrf <vrf> ipv4 detail": the
+// "Interfaces:" section lists the interfaces actually assigned to the VRF.
+// Discovery must parse only that section, not later indented non-interface
+// details in the same command output.
+const sampleVRFDetailInterfacesOutput = `RP/0/RSP1/CPU0:entthw-bpe-1a#show vrf 1115679 ipv4 detail
+Thu Jul  9 21:52:46.033 BST
+
+VRF 1115679; RD 56460:901115679; VPN ID not set
+VRF mode: Regular
+Description Sainsburys DDoS VRF
+Interfaces:
+  TenGigE0/7/0/18.38540079
+  TenGigE0/7/0/19.39890079
+  TenGigE0/0/0/22.11240078
+  TenGigE0/7/0/18.38010079
+  TenGigE0/7/0/18.39890079
+  TenGigE0/7/0/18.39930079
+Address family IPV4 Unicast
+  Import VPN route-target communities:
+    RT:35228:3000000
+    RT:56460:1115679
+  Export VPN route-target communities:
+    RT:56460:1115679
+  No import route policy
+  No export route policy
+RP/0/RSP1/CPU0:entthw-bpe-1a#
+`
+
+// sampleVRFDetailNoInterfacesOutput mirrors the same command for a VRF with
+// no interfaces assigned at all (e.g. RI-INTERNET-ENTERPRISE on a device
+// where it carries no local circuit) — an empty "Interfaces:" section
+// immediately followed by "Address family ..." must parse to zero records,
+// not one bogus empty one.
+const sampleVRFDetailNoInterfacesOutput = `RP/0/RSP0/CPU0:pe-router-1#show vrf CUSTOMER-A-INTERNET ipv4 detail
+Thu Jul  9 11:33:30.112 BST
+
+VRF CUSTOMER-A-INTERNET; RD 65001:100; VPN ID not set
+VRF mode: Regular
+Interfaces:
+Address family IPV4 Unicast
+  Import VPN route-target communities:
+    RT:65001:100
+  Export VPN route-target communities:
+    RT:65001:100
+  No import route policy
+  No export route policy
 RP/0/RSP0/CPU0:pe-router-1#
 `
 
@@ -567,12 +603,12 @@ RP/0/RSP0/CPU0:pe-router-1#
 	}
 }
 
-func TestParseRouteVRFConnectedInterfaces(t *testing.T) {
+func TestParseVRFDetailInterfaces(t *testing.T) {
 	parsers, err := loadDefaultParsers()
 	if err != nil {
 		t.Fatalf("failed to load embedded parsers: %v", err)
 	}
-	parsed, err := parseOutputWithModule(sampleRouteVRFConnectedInterfacesOutput, "xr_route_vrf_connected_interfaces", parsers)
+	parsed, err := parseOutputWithModule(sampleVRFDetailInterfacesOutput, "xr_vrf_detail_interfaces", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -582,15 +618,74 @@ func TestParseRouteVRFConnectedInterfaces(t *testing.T) {
 	if err := json.Unmarshal([]byte(parsed), &decoded); err != nil {
 		t.Fatalf("failed to decode parsed output: %v", err)
 	}
-	// 4 raw records (C+L per subnet) — dedup is the caller's job, not the parser's.
-	if len(decoded.Interfaces) != 4 {
-		t.Fatalf("expected 4 raw C/L records, got %d: %s", len(decoded.Interfaces), parsed)
+	if len(decoded.Interfaces) != 6 {
+		t.Fatalf("expected 6 interface records, got %d: %s", len(decoded.Interfaces), parsed)
 	}
 	seen := map[string]bool{}
 	for _, record := range decoded.Interfaces {
 		seen[record["INTERFACE"]] = true
 	}
-	if !seen["GigabitEthernet0/0/0/1.100"] || !seen["TenGigE0/0/0/2.200"] {
+	for _, want := range []string{
+		"TenGigE0/7/0/18.38540079",
+		"TenGigE0/7/0/19.39890079",
+		"TenGigE0/0/0/22.11240078",
+		"TenGigE0/7/0/18.38010079",
+		"TenGigE0/7/0/18.39890079",
+		"TenGigE0/7/0/18.39930079",
+	} {
+		if !seen[want] {
+			t.Fatalf("expected interface %s to be present, got: %+v", want, seen)
+		}
+	}
+	if seen["Import"] || seen["Export"] || seen["No"] {
 		t.Fatalf("expected both interfaces to be present, got: %+v", seen)
+	}
+}
+
+// TestParseVRFDetailInterfacesEmptySection guards against gotextfsm's
+// implicit end-of-input record: a VRF with no interfaces assigned produces
+// an "Interfaces:" section immediately followed by "Address family ..." —
+// zero interface records, not one bogus empty one.
+func TestParseVRFDetailInterfacesEmptySection(t *testing.T) {
+	parsers, err := loadDefaultParsers()
+	if err != nil {
+		t.Fatalf("failed to load embedded parsers: %v", err)
+	}
+	parsed, err := parseOutputWithModule(sampleVRFDetailNoInterfacesOutput, "xr_vrf_detail_interfaces", parsers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded struct {
+		Interfaces []map[string]string `json:"interfaces"`
+	}
+	if err := json.Unmarshal([]byte(parsed), &decoded); err != nil {
+		t.Fatalf("failed to decode parsed output: %v", err)
+	}
+	if len(decoded.Interfaces) != 0 {
+		t.Fatalf("expected 0 interface records for a VRF with none assigned, got %d: %s", len(decoded.Interfaces), parsed)
+	}
+}
+
+// TestParseVRFDetailInterfacesStopsAtAddressFamily guards against lines after
+// the Interfaces section being mistaken for interface names.
+func TestParseVRFDetailInterfacesStopsAtAddressFamily(t *testing.T) {
+	parsers, err := loadDefaultParsers()
+	if err != nil {
+		t.Fatalf("failed to load embedded parsers: %v", err)
+	}
+	parsed, err := parseOutputWithModule(sampleVRFDetailInterfacesOutput, "xr_vrf_detail_interfaces", parsers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded struct {
+		Interfaces []map[string]string `json:"interfaces"`
+	}
+	if err := json.Unmarshal([]byte(parsed), &decoded); err != nil {
+		t.Fatalf("failed to decode parsed output: %v", err)
+	}
+	for _, record := range decoded.Interfaces {
+		if record["INTERFACE"] == "Import" || record["INTERFACE"] == "Export" || record["INTERFACE"] == "Address" || record["INTERFACE"] == "No" {
+			t.Fatalf("expected non-interface lines to never be captured as interfaces, got: %+v", decoded.Interfaces)
+		}
 	}
 }

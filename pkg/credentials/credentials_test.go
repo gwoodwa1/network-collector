@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,36 @@ func TestResolveCredentialsReturnsInputError(t *testing.T) {
 	_, _, err := ResolveCredentials(true, strings.NewReader("alice\n"), io.Discard)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF while reading password, got %v", err)
+	}
+}
+
+// TestResolveCredentialsWithTerminalFallsBackToBufferedReading covers the
+// case a caller like xr-routing-monitor hits: input is a long-lived
+// *bufio.Reader (not a *os.File), so ResolveCredentials's own
+// input.(*os.File) check can never succeed and would always disable
+// echo-suppressed password entry, even run interactively at a real
+// terminal. ResolveCredentialsWithTerminal fixes that by taking the
+// terminal file descriptor separately. Here terminal is a real *os.File but
+// not a TTY (a regular temp file, as in any test environment), so this
+// exercises the fallback to buffered line reading and confirms it still
+// returns the right credentials — the terminal-mode path itself (raw
+// echo-off reads) needs a real pty to exercise, which no unit test has.
+func TestResolveCredentialsWithTerminalFallsBackToBufferedReading(t *testing.T) {
+	t.Setenv("NET_USER", "")
+	t.Setenv("NET_PASSWORD", "")
+
+	notATTY, err := os.CreateTemp(t.TempDir(), "not-a-tty")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer notATTY.Close()
+
+	var output bytes.Buffer
+	username, password, err := ResolveCredentialsWithTerminal(true, strings.NewReader("alice\nsecret\n"), notATTY, &output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if username != "alice" || password != "secret" {
+		t.Fatalf("unexpected credentials: username=%q password=%q", username, password)
 	}
 }

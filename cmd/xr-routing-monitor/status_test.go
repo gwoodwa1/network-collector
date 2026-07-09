@@ -43,7 +43,7 @@ func TestSyncWriterSerializesConcurrentWrites(t *testing.T) {
 
 func TestPrintTickStatusLineSessionDropped(t *testing.T) {
 	var buf bytes.Buffer
-	printTickStatusLine(&buf, tickResult{Hostname: "pe-router-1"}, false)
+	printTickStatusLine(&buf, tickResult{Hostname: "pe-router-1"}, false, nil)
 	if !strings.Contains(buf.String(), "SESSION DROPPED") || !strings.Contains(buf.String(), "pe-router-1") {
 		t.Fatalf("unexpected output: %q", buf.String())
 	}
@@ -58,20 +58,33 @@ func TestPrintTickStatusLineHealthyTick(t *testing.T) {
 		{"SOURCE": "static", "ROUTES": "15"},
 		{"SOURCE": "Total", "ROUTES": "383"},
 	}})
-	iface, _ := json.Marshal(map[string]any{"stats": []map[string]string{
+	coreIface, _ := json.Marshal(map[string]any{"stats": []map[string]string{
 		{"INPUT_RATE_BPS": "6200210000", "OUTPUT_RATE_BPS": "4067093000"},
+	}})
+	custIface, _ := json.Marshal(map[string]any{"stats": []map[string]string{
+		{"INPUT_RATE_BPS": "0", "OUTPUT_RATE_BPS": "272000"},
 	}})
 
 	var buf bytes.Buffer
 	printTickStatusLine(&buf, tickResult{
-		Hostname:   "pe-router-1",
-		BGP:        bgp,
-		Routes:     map[string]json.RawMessage{"CUSTOMER-A-INTERNET": route},
-		Interfaces: map[string]json.RawMessage{"BE45": iface},
-	}, true)
+		Hostname: "pe-router-1",
+		BGP:      bgp,
+		Routes:   map[string]json.RawMessage{"CUSTOMER-A-INTERNET": route},
+		Interfaces: map[string]json.RawMessage{
+			"BE45":                   coreIface,
+			"GigabitEthernet0/0/0/1": custIface,
+		},
+	}, true, []string{"BE45"})
 
 	line := buf.String()
-	for _, want := range []string{"pe-router-1", "BGP 1/2 up", "CUSTOMER-A-INTERNET routes 383", "BE45 in   6.2Gbps/out   4.1Gbps"} {
+	for _, want := range []string{
+		"pe-router-1",
+		"BGP 1/2 up",
+		"CUSTOMER-A-INTERNET routes 383",
+		"| VRF                 | Interface              | Inbound |  Outbound |",
+		"| core                | BE45                   | 6.2Gbps |   4.1Gbps |",
+		"| CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/1 |    0bps | 272.0Kbps |",
+	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("expected line to contain %q, got: %q", want, line)
 		}
@@ -86,10 +99,10 @@ func TestTickStatusPrinterBlankLineBetweenRounds(t *testing.T) {
 	var buf bytes.Buffer
 	p := newTickStatusPrinter(&buf)
 
-	p.printTick(tickResult{Hostname: "dev-a"}, true)
-	p.printTick(tickResult{Hostname: "dev-b"}, true)
-	p.printTick(tickResult{Hostname: "dev-a"}, true) // dev-b has dropped out; round 2 has only dev-a
-	p.printTick(tickResult{Hostname: "dev-a"}, true) // round 3
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil)
+	p.printTick(tickResult{Hostname: "dev-b"}, true, nil)
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil) // dev-b has dropped out; round 2 has only dev-a
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil) // round 3
 
 	lines := strings.Split(buf.String(), "\n")
 	var blankLineIndexes []int
@@ -148,32 +161,67 @@ func TestSummarizeRoutesMultipleSortedByName(t *testing.T) {
 	}
 }
 
-func TestSummarizeInterfacesMultipleSortedByName(t *testing.T) {
+// TestInterfaceTableLinesMultipleSortedByName proves the table keeps
+// interfaces sorted by name and uses the coreInterfaces argument for the
+// VRF/role column: BE46 sorts after BE45 but is the one not in
+// coreInterfaces here, so it must still come out as the customer VRF.
+func TestInterfaceTableLinesMultipleSortedByName(t *testing.T) {
 	be45, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "1500000000", "OUTPUT_RATE_BPS": "500000"}}})
 	be46, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "900", "OUTPUT_RATE_BPS": "0"}}})
-	got := summarizeInterfaces(map[string]json.RawMessage{"BE46": be46, "BE45": be45})
-	want := "BE45 in   1.5Gbps/out 500.0Kbps | BE46 in    900bps/out      0bps"
-	if got != want {
+	got := interfaceTableLines(tickResult{
+		Routes: map[string]json.RawMessage{"4000001": nil},
+		Interfaces: map[string]json.RawMessage{
+			"BE46": be46,
+			"BE45": be45,
+		},
+	}, []string{"BE45"})
+	want := []string{
+		"| VRF     | Interface | Inbound |  Outbound |",
+		"| core    | BE45      | 1.5Gbps | 500.0Kbps |",
+		"| 4000001 | BE46      |  900bps |      0bps |",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
-func TestSummarizeInterfacesCapsLongLists(t *testing.T) {
-	raw, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "0", "OUTPUT_RATE_BPS": "0"}}})
-	got := summarizeInterfaces(map[string]json.RawMessage{
-		"BE40":           raw,
-		"BE45":           raw,
-		"TenGigE0/0/0/1": raw,
-		"TenGigE0/0/0/2": raw,
-		"TenGigE0/0/0/3": raw,
-	})
-	for _, want := range []string{"BE40 in", "BE45 in", "TenGigE0/0/0/1 in", "TenGigE0/0/0/2 in", "+1 interfaces"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected summary to contain %q, got %q", want, got)
+func TestInterfaceTableLinesShowsAllNonZeroAndSummarizesZeroRate(t *testing.T) {
+	zero, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "0", "OUTPUT_RATE_BPS": "0"}}})
+	nonZeroIn, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "1000", "OUTPUT_RATE_BPS": "0"}}})
+	nonZeroOut, _ := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "0", "OUTPUT_RATE_BPS": "2000"}}})
+	got := interfaceTableLines(tickResult{
+		Routes: map[string]json.RawMessage{"4000001": nil},
+		Interfaces: map[string]json.RawMessage{
+			"BE40":           nonZeroIn,
+			"BE45":           nonZeroOut,
+			"TenGigE0/0/0/1": nonZeroIn,
+			"TenGigE0/0/0/2": nonZeroOut,
+			"TenGigE0/0/0/3": nonZeroIn,
+			"TenGigE0/0/0/4": zero,
+			"TenGigE0/0/0/5": zero,
+		},
+	}, []string{"BE40", "BE45"})
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{
+		"| VRF",
+		"| core    | BE40",
+		"| core    | BE45",
+		"| 4000001 | TenGigE0/0/0/1",
+		"| 4000001 | TenGigE0/0/0/2",
+		"| 4000001 | TenGigE0/0/0/3",
+		"+2 zero-rate interfaces not shown",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected lines to contain %q, got %q", want, joined)
 		}
 	}
-	if strings.Contains(got, "TenGigE0/0/0/3 in") {
-		t.Fatalf("expected fifth interface to be summarized, got %q", got)
+	for _, hidden := range []string{"TenGigE0/0/0/4", "TenGigE0/0/0/5"} {
+		if strings.Contains(joined, hidden) {
+			t.Fatalf("expected zero-rate interface %s to be summarized, got %q", hidden, joined)
+		}
+	}
+	if len(got) != 7 {
+		t.Fatalf("expected header + 5 active interfaces + 1 zero-rate summary line, got %d lines: %q", len(got), got)
 	}
 }
 

@@ -1,13 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"io"
 	"regexp"
-	"time"
 
-	"github.com/scrapli/scrapligo/driver/network"
-	"github.com/scrapli/scrapligo/driver/options"
-	"github.com/scrapli/scrapligo/platform"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 )
 
 // passcodePromptPattern matches this fleet's RSA SecurID challenge prompt
@@ -19,84 +16,27 @@ import (
 // falls back to that instead.
 var passcodePromptPattern = regexp.MustCompile(`(?im)(password|passcode):\s?$`)
 
-// xrSSHClient is a minimal, isolated scrapligo wrapper — deliberately not
-// pkg/drivers/ssh.Client. That type's fields are all unexported, so there is
-// no way to override its password-prompt regex from outside the ssh
-// package, and the regex mismatch above means the shared client cannot
-// authenticate against this fleet as configured. This wrapper exists solely
-// to set that one option; everything else (timeouts, insecure host key
-// handling) matches ssh.Client's own defaults.
-type xrSSHClient struct {
-	driver *network.Driver
-}
-
-// connectXRDevice opens exactly one SSH session. Channel logging is left
-// disabled (unlike pkg/drivers/ssh.Client, which defaults it to stdout) so
-// raw device output never mixes into this tool's status-line stream; the
-// scrapligo channel logger only ever captures data received from the
-// device, never what this process sends, so this is about output
-// cleanliness, not credential exposure either way.
-func connectXRDevice(host, username, password, deviceType string) (*xrSSHClient, error) {
-	platformConfig, err := platform.NewPlatform(
-		deviceType,
-		host,
-		options.WithAuthUsername(username),
-		options.WithAuthPassword(password),
-		options.WithAuthNoStrictKey(),
-		options.WithTimeoutSocket(45*time.Second),
-		options.WithTimeoutOps(90*time.Second),
-		options.WithPasswordPattern(passcodePromptPattern),
+// connectXRDevice opens exactly one SSH session via the shared
+// pkg/drivers/ssh.Client, overriding only the password-prompt pattern (this
+// fleet's RSA passcode challenge) and channel log (left disabled, unlike
+// ssh.Client's stdout default, so raw device output never mixes into this
+// tool's status-line stream — the scrapligo channel logger only ever
+// captures data received from the device, never what this process sends, so
+// this is about output cleanliness, not credential exposure either way).
+// Everything else (timeouts, insecure host key handling) uses ssh.Client's
+// own defaults, which already match what this fleet needs.
+func connectXRDevice(host, username, password, deviceType string) (sessionExecutor, error) {
+	client := ssh.NewClient(
+		ssh.WithPasswordPattern(passcodePromptPattern),
+		ssh.WithChannelLog(io.Discard),
 	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create platform: %w", err)
+	if err := client.Connect(host, username, password, deviceType); err != nil {
+		return nil, err
 	}
-
-	driver, err := platformConfig.GetNetworkDriver()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get network driver: %w", err)
-	}
-
-	if err := driver.Open(); err != nil {
-		// scrapligo's self-cleanup on a failed Open() is inconsistent: if the
-		// transport itself fails to open (host unreachable, dial timeout),
-		// nothing is closed internally and driver.Close() is required to
-		// avoid leaking the connection. But if the transport opens
-		// successfully and a later step fails (in-channel auth, PTY/shell
-		// setup — e.g. hitting a VTY session limit), scrapligo's own defer
-		// (channel.Channel.Open) already closes the channel, and calling
-		// Close() again double-closes Channel.Errs and panics. There's no
-		// way to tell from here which case occurred, so attempt the close
-		// and recover if scrapligo already did it.
-		closeAfterFailedOpen(driver)
-		return nil, fmt.Errorf("failed to open driver: %w", err)
-	}
-
-	return &xrSSHClient{driver: driver}, nil
+	return client, nil
 }
 
-// closeAfterFailedOpen calls driver.Close(), swallowing the panic scrapligo
-// raises if it already closed the channel internally as part of its own
-// Open() failure cleanup (see the comment in connectXRDevice). This makes
-// close-after-failed-open safe regardless of which of scrapligo's two
-// inconsistent self-cleanup behaviors applies.
-func closeAfterFailedOpen(driver *network.Driver) {
-	defer func() {
-		_ = recover()
-	}()
-	_ = driver.Close()
-}
-
-func (c *xrSSHClient) Execute(cmd string) (string, error) {
-	output, err := c.driver.Channel.SendInput(cmd)
-	if err != nil {
-		return "", fmt.Errorf("failed to send input command: %w", err)
-	}
-	return string(output), nil
-}
-
-func (c *xrSSHClient) Close() error {
-	if c == nil || c.driver == nil {
-		return nil
-	}
-	return c.driver.Close()
-}
+// sessionExecutor (main.go) is satisfied directly by *ssh.Client's
+// Execute/Close methods, so a fake can still stand in for it in tests
+// without a real SSH connection.
+var _ sessionExecutor = (*ssh.Client)(nil)
