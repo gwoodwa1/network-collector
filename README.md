@@ -44,6 +44,7 @@ To build from source instead:
     go build -o netconf-client ./cmd/netconf-client
     go build -o gnmi-client ./cmd/gnmi-client
     go build -o restconf-client ./cmd/restconf-client
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o xr-routing-monitor ./cmd/xr-routing-monitor
     ```
 
 4. **Provide credentials:**
@@ -170,6 +171,7 @@ if err := client.Close(); err != nil {
 - `cmd/netconf-client`: NETCONF example using `pkg/drivers/netconf`
 - `cmd/gnmi-client`: gNMI example using `pkg/drivers/gnmi`
 - `cmd/restconf-client`: RESTCONF example using `pkg/drivers/restconf`
+- `cmd/xr-routing-monitor`: standalone Cisco IOS-XR change-window monitor
 
 ## CLI validation and output
 
@@ -192,6 +194,18 @@ Example: run validations and exit non-zero if any check fails
 ```bash
 ./network-collector --fail-on-fail
 ```
+
+## XR Routing Monitor
+
+`cmd/xr-routing-monitor` is a standalone IOS-XR operational tool for live change windows. It opens persistent SSH sessions to a small set of routers, polls BGP, route, and interface health on an interval, and captures before/after BGP snapshots for later comparison.
+
+It is separate from the playbook-driven `network-collector` CLI and has its own embedded TextFSM parser set. Build it as a static binary for jump hosts:
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o xr-routing-monitor ./cmd/xr-routing-monitor
+```
+
+See [`cmd/xr-routing-monitor/README.md`](cmd/xr-routing-monitor/README.md) for devices-file examples, RSA passcode reuse behavior, VRF auto-detection, snapshot output, and live status formatting.
      
 ## Configuration
 
