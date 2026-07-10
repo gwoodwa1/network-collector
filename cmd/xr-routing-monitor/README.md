@@ -54,7 +54,7 @@ files are required.
 | Flag                      | Default       | Meaning                                                                                                                          |
 |---------------------------|---------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `--interval`               | `60s`         | How often each device is polled (Go duration syntax, e.g. `30s`, `2m`).                                                          |
-| `--output-dir`             | `artifacts`   | Directory for all output files (created if missing).                                                                             |
+| `--output-dir`             | `artifacts`   | Parent directory for output files. Every run creates and writes into its own subfolder underneath it, named after `--devices` (or a start timestamp without one) — see below. |
 | `--parsers`                | *(embedded)*  | Path to an external `parsers.yaml` to use instead of the binary's built-in parser set.                                           |
 | `--type`                   | `cisco_iosxr` | scrapligo platform/driver name used for every device you onboard.                                                                |
 | `--devices`                | *(none)*      | Optional YAML file pre-listing hostname/vrf/interfaces/neighbors per device. See [below](#providing-devices-via-a-yaml-file-optional). |
@@ -296,7 +296,24 @@ automatic resend.
 
 ## What gets collected
 
-### Every `--interval`, per device (written to `<output-dir>/<hostname>.jsonl`, one JSON line per tick)
+Every run creates one subfolder under `--output-dir` and writes everything
+below into it: `<output-dir>/<devices-file>/` when run with `--devices
+CRQXXX.yaml` (named after that file's basename, without extension), or
+`<output-dir>/<start-timestamp>-<pid>/` for a purely interactive run with no
+`--devices` file (the PID guards against two such processes launched within
+the same second, e.g. a wrapper script starting one instance per node,
+landing on the same folder name). This keeps one change window's artifacts
+— the per-device JSONL, before/after snapshots, running-config captures,
+and `session.log` — together in one clearly-named folder instead of a flat
+directory of similarly-prefixed files. Re-running against the *same*
+`--devices` file deliberately reuses the same folder (it's named for the
+change, not the run) — that's fine, since every file inside it still has
+its own capture timestamp (see below), so a second run's captures don't
+overwrite the first's; only the per-device `.jsonl` accumulates across
+repeat runs against the same file, same as it always has. The paths below
+all omit the `<output-dir>/<change>/` prefix for brevity.
+
+### Every `--interval`, per device (written to `<hostname>.jsonl`, one JSON line per tick)
 
 | Data point         | Command                                              | Condition                  |
 |---------------------|-------------------------------------------------------|-----------------------------|
@@ -354,7 +371,15 @@ auto-detected, or both):
 
 "Before" is captured right after onboarding finishes (right before your
 change starts); "after" is captured when you hit Ctrl+C (right when your
-change is done) — no extra interaction needed mid-run.
+change is done) — no extra interaction needed mid-run. Immediately after the
+"after" capture, the tool automatically diffs the before/after pair itself
+(the same route-level diff `-diff-before`/`-diff-after` produces, described
+further down in this section) and prints the report to the terminal and
+`session.log`, right there in the same run. If
+`--capture-running-config` was set, the running-config before/after pair is
+diffed the same way immediately after. You only need to reach for the
+standalone `-diff-*` flags later — to re-diff, or to diff a pair from a past
+run.
 
 Each snapshot's filename is `[<devices-file>-]<hostname>-<capture-timestamp>-<label>`,
 e.g. `CRQXXX-pe-router-1-20260709-143022-before.txt` when run as

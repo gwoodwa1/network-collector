@@ -291,3 +291,64 @@ func TestPollDeviceCapturesBeforeAndAfterSnapshots(t *testing.T) {
 		}
 	}
 }
+
+// TestPollDeviceAutomaticallyPrintsSnapshotDiffOnCtrlC proves pollDevice
+// diffs the before/after snapshots itself right after capturing "after" on
+// context cancellation (Ctrl+C), instead of requiring a second, separate
+// -diff-before/-diff-after invocation to see what changed.
+func TestPollDeviceAutomaticallyPrintsSnapshotDiffOnCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	exec := &fakeExecutor{}
+	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A"}, client: exec}
+
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, false)
+		close(done)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollDevice did not return after context cancellation")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "snapshot diff for xr1") {
+		t.Fatalf("expected an automatic snapshot diff to be printed, got: %q", got)
+	}
+}
+
+// TestPollDeviceAutomaticallyPrintsRunningConfigDiffOnCtrlC proves the same
+// automatic behavior extends to the running-config diff when
+// --capture-running-config is enabled.
+func TestPollDeviceAutomaticallyPrintsRunningConfigDiffOnCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	exec := &fakeExecutor{}
+	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A"}, client: exec}
+
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, true)
+		close(done)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollDevice did not return after context cancellation")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "running-config diff:") {
+		t.Fatalf("expected an automatic running-config diff to be printed, got: %q", got)
+	}
+}

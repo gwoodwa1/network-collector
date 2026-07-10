@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func routeRecordsRaw(t *testing.T, records ...map[string]string) json.RawMessage {
@@ -309,6 +310,89 @@ func TestRunSnapshotDiffCaptureFailureDoesNotProduceFalseAddedDiff(t *testing.T)
 func TestRunSnapshotDiffMissingFile(t *testing.T) {
 	if err := runSnapshotDiff(filepath.Join(t.TempDir(), "missing.json"), filepath.Join(t.TempDir(), "also-missing.json"), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected an error for a missing snapshot file")
+	}
+}
+
+// TestPrintAutoDiffAfterChangeSkipsWhenCaptureFailed proves a failed
+// before/after capture (snapshotCapturesOK=false) skips the diff attempt
+// entirely rather than trying to read a file that was never written and
+// logging a confusing second error on top of the original capture failure.
+func TestPrintAutoDiffAfterChangeSkipsWhenCaptureFailed(t *testing.T) {
+	dir := t.TempDir()
+	session := &deviceSession{hostname: "pe-router-1", vrfs: []string{"1115679"}}
+	beforeCapturedAt := time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)
+	afterCapturedAt := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	// Deliberately don't write the "before" snapshot file, simulating a
+	// failed before-capture. If snapshotCapturesOK weren't honored, this
+	// would try runSnapshotDiff against a nonexistent file.
+	after := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+	}}
+	afterPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "after", afterCapturedAt)+".json")
+	writeSnapshotFixture(t, afterPath, after)
+
+	var buf bytes.Buffer
+	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, false, false, true, &buf)
+
+	if got := buf.String(); got != "" {
+		t.Fatalf("expected no output when the capture failed (diff should be skipped, not attempted), got %q", got)
+	}
+}
+
+// countingWriter records how many separate Write calls it received, so
+// tests can assert a multi-line report was delivered as one atomic write.
+type countingWriter struct {
+	calls int
+	buf   bytes.Buffer
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.calls++
+	return w.buf.Write(p)
+}
+
+// TestPrintAutoDiffAfterChangeWritesAtomically proves the combined
+// snapshot + running-config diff report is delivered to the writer in
+// exactly one Write call, not many small ones — the shared syncWriter's
+// mutex only serializes one Write call at a time, so concurrent devices'
+// auto-diffs (all triggered by the same Ctrl+C) would otherwise be able to
+// interleave line-by-line into unreadable output.
+func TestPrintAutoDiffAfterChangeWritesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	session := &deviceSession{hostname: "pe-router-1", vrfs: []string{"1115679"}}
+	beforeCapturedAt := time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)
+	afterCapturedAt := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	before := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+	}}
+	after := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.9"}),
+	}}
+	beforePath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "before", beforeCapturedAt)+".json")
+	afterPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "after", afterCapturedAt)+".json")
+	writeSnapshotFixture(t, beforePath, before)
+	writeSnapshotFixture(t, afterPath, after)
+
+	beforeCfgPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "before", beforeCapturedAt)+"-running-config.txt")
+	afterCfgPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "after", afterCapturedAt)+"-running-config.txt")
+	if err := os.WriteFile(beforeCfgPath, []byte("interface X\n"), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	if err := os.WriteFile(afterCfgPath, []byte("interface Y\n"), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+
+	wc := &countingWriter{}
+	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, true, true, true, wc)
+
+	if wc.calls != 1 {
+		t.Fatalf("expected the whole combined report in exactly one Write call, got %d calls: %q", wc.calls, wc.buf.String())
+	}
+	got := wc.buf.String()
+	if !strings.Contains(got, "snapshot diff for") || !strings.Contains(got, "running-config diff:") {
+		t.Fatalf("expected both diff reports in the single write, got %q", got)
 	}
 }
 

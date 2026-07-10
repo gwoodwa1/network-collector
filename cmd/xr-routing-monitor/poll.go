@@ -113,12 +113,16 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 	}
 
 	beforeCapturedAt := time.Now().UTC()
+	beforeSnapshotOK := true
 	if err := captureSnapshot(session, "before", outputDir, runLabel, beforeCapturedAt, parsers, snapshotOut); err != nil {
 		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
+		beforeSnapshotOK = false
 	}
+	beforeConfigOK := true
 	if captureRunningConfigEnabled {
 		if err := captureRunningConfig(session, "before", outputDir, runLabel, beforeCapturedAt, snapshotOut); err != nil {
 			slog.Error("failed to capture before-change running-config", "hostname", session.hostname, "error", err)
+			beforeConfigOK = false
 		}
 	}
 
@@ -132,14 +136,19 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 		select {
 		case <-ctx.Done():
 			afterCapturedAt := time.Now().UTC()
+			afterSnapshotOK := true
 			if err := captureSnapshot(session, "after", outputDir, runLabel, afterCapturedAt, parsers, snapshotOut); err != nil {
 				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
+				afterSnapshotOK = false
 			}
+			afterConfigOK := true
 			if captureRunningConfigEnabled {
 				if err := captureRunningConfig(session, "after", outputDir, runLabel, afterCapturedAt, snapshotOut); err != nil {
 					slog.Error("failed to capture after-change running-config", "hostname", session.hostname, "error", err)
+					afterConfigOK = false
 				}
 			}
+			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, captureRunningConfigEnabled, beforeSnapshotOK && afterSnapshotOK, beforeConfigOK && afterConfigOK, snapshotOut)
 			return
 		case <-ticker.C:
 			if !tick() {

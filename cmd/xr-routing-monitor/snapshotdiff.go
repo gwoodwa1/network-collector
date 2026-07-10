@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
+	"time"
 )
 
 // snapshotDiffSection is one labeled route table's before/after comparison
@@ -254,4 +257,70 @@ func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 	}
 	printSnapshotDiff(out, before, after)
 	return nil
+}
+
+// printAutoDiffAfterChange runs the same route-level diff (and, if
+// captureRunningConfigEnabled, the same running-config diff) as the
+// standalone -diff-before/-diff-after and -diff-before-config/
+// -diff-after-config flags, automatically right after the after-change
+// capture on Ctrl+C — so an operator sees what changed immediately,
+// without a second invocation to point the diff flags at the files by
+// hand. Both diffs are read back from the files captureSnapshot/
+// captureRunningConfig just wrote (rather than threading the in-memory
+// capture results through pollDevice), reusing exactly the same offline
+// diff path the manual flags use, keyed by the same capturedAt timestamps
+// and filename convention (snapshotFilenameBase) used to write them.
+//
+// Mirrors captureSnapshot's own "nothing to do" gate: no route-level diff
+// is attempted for a device with no VRFs and no neighbors configured,
+// since captureSnapshot itself wrote no files to diff in that case.
+// snapshotCapturesOK/configCapturesOK report whether the before *and*
+// after captures this diff would read back both actually succeeded
+// (poll.go tracks this from captureSnapshot/captureRunningConfig's own
+// return values) — skipping a diff attempt here when either side failed
+// avoids a second, confusing "file not found" error on top of the
+// already-logged capture failure.
+//
+// Every device polls on its own goroutine, and Ctrl+C fires all of their
+// auto-diffs at nearly the same instant against the shared snapshotOut
+// writer — so the whole report is built in a local buffer and written to
+// out in one Write call, rather than the many small Fprintf/Fprintln
+// calls printSnapshotDiff/runConfigDiff would otherwise make directly
+// against out. out's underlying syncWriter only serializes one Write call
+// at a time, not a whole sequence of them, so multiple small writes from
+// concurrent devices could otherwise interleave into unreadable output.
+func printAutoDiffAfterChange(session *deviceSession, outputDir, runLabel string, beforeCapturedAt, afterCapturedAt time.Time, captureRunningConfigEnabled, snapshotCapturesOK, configCapturesOK bool, out io.Writer) {
+	var buf bytes.Buffer
+	wroteAny := false
+
+	if len(session.vrfs) > 0 || len(session.neighbors) > 0 {
+		if !snapshotCapturesOK {
+			slog.Warn("skipping automatic snapshot diff: before or after capture failed, see prior error", "hostname", session.hostname)
+		} else {
+			beforePath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "before", beforeCapturedAt)+".json")
+			afterPath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "after", afterCapturedAt)+".json")
+			fmt.Fprintln(&buf)
+			if err := runSnapshotDiff(beforePath, afterPath, &buf); err != nil {
+				slog.Error("failed to print automatic snapshot diff", "hostname", session.hostname, "error", err)
+			}
+			wroteAny = true
+		}
+	}
+	if captureRunningConfigEnabled {
+		if !configCapturesOK {
+			slog.Warn("skipping automatic running-config diff: before or after capture failed, see prior error", "hostname", session.hostname)
+		} else {
+			beforePath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "before", beforeCapturedAt)+"-running-config.txt")
+			afterPath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "after", afterCapturedAt)+"-running-config.txt")
+			fmt.Fprintln(&buf)
+			if err := runConfigDiff(beforePath, afterPath, &buf); err != nil {
+				slog.Error("failed to print automatic running-config diff", "hostname", session.hostname, "error", err)
+			}
+			wroteAny = true
+		}
+	}
+
+	if wroteAny {
+		out.Write(buf.Bytes())
+	}
 }

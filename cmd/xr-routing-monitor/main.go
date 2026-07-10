@@ -96,20 +96,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		slog.Error("failed to create output directory", "output_dir", outputDir, "error", err)
-		os.Exit(1)
-	}
+	// startedAt is this run's single "now" for every fallback timestamp
+	// below (the change folder's name and the session log's filename) —
+	// computed once, in UTC, so the two can never disagree on timezone or
+	// skew by a second the way two independent time.Now() calls could.
+	startedAt := time.Now().UTC()
 
 	// runLabel identifies this change window: the --devices YAML's basename
 	// (without extension), e.g. "CRQXXX" for --devices CRQXXX.yaml — empty
 	// when devices were onboarded interactively instead. Computed here
-	// (rather than after session-log setup, where it used to live) so the
-	// session log filename below can use it too.
+	// (before outputDir is finalized) so every artifact this run produces
+	// can be nested under one folder named for the change instead of a flat
+	// directory of prefixed files.
 	var runLabel string
 	if trimmed := strings.TrimSpace(devicesFile); trimmed != "" {
 		base := filepath.Base(trimmed)
 		runLabel = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+
+	// Every artifact this run produces (jsonl, snapshots, running-config,
+	// session.log) is nested under <output-dir>/<changeDirName>/ — runLabel
+	// when a --devices file named this change, or a start timestamp plus
+	// this process's PID when onboarding was purely interactive (no file to
+	// name the folder after); the PID guards against two such processes
+	// launched within the same second (e.g. a wrapper script starting one
+	// instance per node) landing on an identical folder name and merging
+	// their artifacts. Re-running against the *same* --devices file, by
+	// contrast, deliberately reuses the same folder every time — it's named
+	// for the change, not the run — so its per-file timestamps (see
+	// snapshotFilenameBase) are what keep repeat runs from overwriting each
+	// other within it.
+	changeDirName := runLabel
+	if changeDirName == "" {
+		changeDirName = fmt.Sprintf("%s-%d", startedAt.Format("20060102-150405"), os.Getpid())
+	}
+	outputDir = filepath.Join(outputDir, changeDirName)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		slog.Error("failed to create output directory", "output_dir", outputDir, "error", err)
+		os.Exit(1)
 	}
 
 	// session.log mirrors every scrolling status line plus all slog events
@@ -131,7 +155,7 @@ func main() {
 	if runLabel != "" {
 		sessionLogNameParts = append(sessionLogNameParts, runLabel)
 	}
-	sessionLogNameParts = append(sessionLogNameParts, time.Now().Format("20060102-150405"), "session.log")
+	sessionLogNameParts = append(sessionLogNameParts, startedAt.Format("20060102-150405"), "session.log")
 	sessionLogPath := filepath.Join(outputDir, strings.Join(sessionLogNameParts, "-"))
 	sessionLogFile, err := os.OpenFile(sessionLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
