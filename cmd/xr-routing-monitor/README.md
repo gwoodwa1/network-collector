@@ -59,6 +59,9 @@ files are required.
 | `--type`                   | `cisco_iosxr` | scrapligo platform/driver name used for every device you onboard.                                                                |
 | `--devices`                | *(none)*      | Optional YAML file pre-listing hostname/vrf/interfaces/neighbors per device. See [below](#providing-devices-via-a-yaml-file-optional). |
 | `--passcode-reuse-window`  | `45s`         | How long a just-entered passcode may be offered for reuse on the next device. `0` disables reuse. See [below](#passcode-reuse).  |
+| `--diff-before`, `--diff-after` | *(none)* | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end-written-to-output-dirdevices-file-hostname-timestamp-labeltxtjson). |
+| `--capture-running-config` | `false`       | Also capture `show running-config` before and after the change window, as a separate `<base>-running-config.txt` file per label. See [below](#running-config-optional). |
+| `--diff-before-config`, `--diff-after-config` | *(none)* | Paths to a captured before/after running-config `.txt` pair. When both are set, prints a unified line diff and exits instead of connecting to any device. See [below](#running-config-optional). |
 
 ### Onboarding (once at startup)
 
@@ -136,10 +139,11 @@ reuse](#passcode-reuse)) regardless of `--devices`. After the file is
 processed you're dropped into the normal interactive prompt to add any
 further ad hoc devices, or just hit Enter immediately to start polling.
 
-Two more top-level, fleet-wide settings are optional:
+A few more top-level, fleet-wide settings are optional:
 
 ```yaml
-exclude_interface_prefixes: [loopback, bvi]
+exclude_interface_prefixes: [loopback]
+hub_top_interfaces: 2
 
 commands:
   bgp_command: show bgp vpnv4 unicast summary
@@ -155,6 +159,12 @@ commands:
   above is applied automatically if omitted. Set this if your fleet's
   customer VRFs carry connected routes on some other non-core virtual
   interface type (e.g. `tunnel-ip`) that should also be excluded.
+- `hub_top_interfaces` caps how many of a hub VRF's interfaces get sampled,
+  *per hub VRF* (a device matching two hub VRFs samples up to
+  `hub_top_interfaces` from each, not `hub_top_interfaces` total), for any
+  device with `auto_detect_vrf: true` — see [Auto-detecting a customer
+  VRF](#auto-detecting-a-customer-vrf). Defaults to 2 if omitted; set it to
+  `0` to disable hub-VRF interface sampling entirely; must not be negative.
 - `commands` overrides the show-commands/parser modules this tool polls
   every tick (see `defaultSpec` in `poll.go`). Every field is optional; only
   the ones you set are overridden. Use this if your fleet needs a different
@@ -187,31 +197,50 @@ importing VRF's table — indistinguishable from the VRF's own genuine
 interfaces. `show vrf <vrf> ipv4 detail` comes from VRF configuration
 instead, so it isn't affected by that. If more than one *customer* VRF
 matches (real fleets often have more than one), all of them are monitored,
-and their interfaces are combined and deduplicated. `Loopback*` and `BVI*`
-interfaces are still ignored by auto-discovery so they don't flood the live
-status output; add one manually under `interfaces:` if you explicitly want
-to poll it.
+and their interfaces are combined and deduplicated. `Loopback*` interfaces
+are still ignored by auto-discovery (they're never customer traffic); `BVI*`
+interfaces are not — a BVI is a customer-facing bridge-group interface and
+can carry real traffic worth polling. Add `bvi` to `exclude_interface_prefixes`
+if your fleet's BVIs shouldn't be auto-discovered.
 
 A shared internet-breakout/hub VRF (e.g. `RI-INTERNET-ENTERPRISE`) can
 independently peer with the same route-reflector range and match the
 gateway heuristic too — but it isn't a single customer's circuit, and
 legitimately carries dozens of unrelated customers' interfaces and BGP
-sessions. To avoid pulling all of that into polling, matches are further
-filtered to this fleet's customer-VRF naming conventions: a purely numeric
-circuit/account ID (`1115679`), or a `V<circuit-id>:<SERVICE>` tag
+sessions. To avoid pulling all of that into per-tick polling, matches are
+further filtered to this fleet's customer-VRF naming conventions: a purely
+numeric circuit/account ID (`1115679`), or a `V<circuit-id>:<SERVICE>` tag
 (`V10:CDN`, `V100:SDN`). A match that doesn't fit either style is treated as
-a hub VRF — excluded from polling, but still reported, with its interface
-count, in a `skipped hub VRF(s) on <host> ...` line so it's visible rather
-than silently dropped. If your fleet uses yet another customer-VRF naming
-style, that VRF will show up in this line instead of being picked up — the
-match rule (`customerVRFName` in `discover.go`) needs extending for it.
+a hub VRF instead of a customer VRF. If your fleet uses yet another
+customer-VRF naming style, that VRF will show up as a hub VRF instead of
+being picked up as a customer's own — the match rule (`customerVRFName` in
+`discover.go`) needs extending for it.
 
-This runs two read-only commands per device once, right after connecting,
-not on every poll tick:
+A customer's own designated interface doesn't always carry traffic during a
+change window — the traffic that matters may be flowing over the hub VRF
+instead. Polling *every* interface on a hub VRF isn't viable (one real
+device showed ~33 distinct connected subnets on it), so instead each hub
+VRF's own interfaces are ranked by current utilization (input+output
+bits/sec) independently, and only the busiest `hub_top_interfaces` (default
+2, see above) *of that hub VRF* are added to polling — a device matching
+two hub VRFs samples up to `hub_top_interfaces` from each, so one
+especially busy hub VRF can't crowd out visibility into a second, unrelated
+one. Selected interfaces are sampled the same way as any other interface on
+every subsequent tick and labeled `hub` on the status line. The hub VRF's
+own route table is never polled — only a small, ranked sample of its
+interfaces is. What was found/selected is reported per hub VRF in a
+`hub VRFs: ...` line after connecting, e.g.
+`RI-INTERNET-ENTERPRISE (41 interfaces, sampling top 2: Gi0/0/0/1,
+Gi0/0/0/7)`, so it's visible rather than silently dropped.
+
+This runs at least two read-only commands per device once, right after
+connecting, not on every poll tick — plus one more per hub VRF interface
+being ranked:
 
 ```
 show route vrf all | inc "Gateway of last resort|VRF:"
 show vrf <matched-vrf> ipv4 detail
+show int <hub-vrf-interface> | inc "rate|Description:"
 ```
 
 If discovery finds no matching VRF, or a follow-up interface lookup fails
@@ -354,12 +383,74 @@ Pick the most recent pair with `ls -t | head -1` instead:
 before=$(ls -t CRQXXX-pe-router-1-*-before.txt | head -1)
 after=$(ls -t CRQXXX-pe-router-1-*-after.txt | head -1)
 diff "$before" "$after"
+```
 
-# structured diff, same pattern:
+For a route-level diff instead of a raw text diff, pass the two `.json`
+snapshots to `-diff-before`/`-diff-after` — this runs entirely offline (no
+SSH session, no credential prompt) and exits after printing the report:
+
+```sh
 before_json=$(ls -t CRQXXX-pe-router-1-*-before.json | head -1)
 after_json=$(ls -t CRQXXX-pe-router-1-*-after.json | head -1)
+./xr-routing-monitor -diff-before "$before_json" -diff-after "$after_json"
+```
+
+```
+snapshot diff for pe-router-1: 2026-07-10T08:00:00Z -> 2026-07-10T09:00:00Z
+
+vrf 1115679:
+  + added (1): [10.0.9.0/24]
+  ~ changed (1): [10.0.0.0/24 (192.0.2.1 -> 192.0.2.9)]
+
+neighbor 198.51.100.1 routes:
+  no changes
+
+1 of 2 section(s) changed
+```
+
+Each VRF table and each neighbor's received/advertised routes gets its own
+section, diffed by prefix (`NETWORK`) rather than by position — BGP route
+tables can reorder between two captures with no real change, so only a
+genuinely new/withdrawn prefix, or one whose next hop changed, is reported.
+A section that failed to parse into structured records on either side (rare;
+falls back to `{"raw": "..."}`) is reported as `(raw output only, skipped)`
+instead of a misleading full add/remove — fall back to `jq -S` against the
+raw JSON, or `diff` against the `.txt` pair, for that section:
+
+```sh
 diff <(jq -S . "$before_json") <(jq -S . "$after_json")
 ```
+
+### Running config (optional)
+
+Pass `--capture-running-config` to also capture the full `show
+running-config` before and after the change window. This is a heavier
+capture (one extra SSH round trip per label, and a potentially large file
+on a big router) so it's off by default — the BGP/route snapshot above
+captures regardless of this flag.
+
+Each capture is written as its own raw text file, `<base>-running-config.txt`,
+where `<base>` is the exact same `[<devices-file>-]<hostname>-<capture-timestamp>-<label>`
+that the BGP snapshot for that same moment uses (see
+[above](#once-at-the-start-and-once-at-the-end-written-to-output-dirdevices-file-hostname-timestamp-labeltxtjson)) —
+a separate file, correlated by name, not merged into the BGP snapshot's
+`.txt`/`.json` pair.
+
+Diff a captured before/after config pair with `-diff-before-config`/
+`-diff-after-config` — like `-diff-before`/`-diff-after`, this runs entirely
+offline and exits after printing the report:
+
+```sh
+before_cfg=$(ls -t CRQXXX-pe-router-1-*-before-running-config.txt | head -1)
+after_cfg=$(ls -t CRQXXX-pe-router-1-*-after-running-config.txt | head -1)
+./xr-routing-monitor -diff-before-config "$before_cfg" -diff-after-config "$after_cfg"
+```
+
+Unlike the route-level snapshot diff (diffed by prefix, order-independent),
+config text is diffed as an ordinary ordered unified diff — config needs
+surrounding context and line order to stay readable, and there's no natural
+key to diff it by. Both diff modes can be combined in one invocation by
+passing all four `-diff-*` flags together.
 
 ### `session.log`
 

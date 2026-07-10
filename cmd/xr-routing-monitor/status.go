@@ -45,7 +45,7 @@ func newTickStatusPrinter(w io.Writer) *tickStatusPrinter {
 	return &tickStatusPrinter{w: w, seen: map[string]bool{}}
 }
 
-func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, coreInterfaces []string) {
+func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, coreInterfaces, hubInterfaces []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.seen[result.Hostname] {
@@ -53,7 +53,7 @@ func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, core
 		p.seen = map[string]bool{}
 	}
 	p.seen[result.Hostname] = true
-	printTickStatusLine(p.w, result, sessionAlive, coreInterfaces)
+	printTickStatusLine(p.w, result, sessionAlive, coreInterfaces, hubInterfaces)
 }
 
 // tickHeaderLine formats the fixed-width, single-line part of a tick's
@@ -86,12 +86,12 @@ func tickHeaderLine(result tickResult, sessionAlive bool) string {
 // are only ever appended, never overwritten or rewritten in place, so
 // scrollback (and a session.log redirect) stays a faithful, replayable
 // record either way.
-func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool, coreInterfaces []string) {
+func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool, coreInterfaces, hubInterfaces []string) {
 	fmt.Fprintln(out, tickHeaderLine(result, sessionAlive))
 	if !sessionAlive {
 		return
 	}
-	for _, line := range interfaceTableLines(result, coreInterfaces) {
+	for _, line := range interfaceTableLines(result, coreInterfaces, hubInterfaces) {
 		fmt.Fprintln(out, "  "+line)
 	}
 }
@@ -166,19 +166,26 @@ type interfaceStatusRow struct {
 //	| VRF | Interface | Inbound | Outbound |
 //
 // Core interfaces are manually supplied uplinks rather than VRF-specific
-// targets, so their VRF column is "core". Auto-discovered customer
-// interfaces show the single monitored VRF when there is exactly one; with
-// multiple monitored VRFs, the current tick result has no interface-to-VRF
-// mapping, so the column uses "customer" rather than inventing precision.
-// Only interfaces with non-zero inbound or outbound rates are expanded into
-// rows; idle 0/0 interfaces are counted in a summary line instead.
-func interfaceTableLines(result tickResult, coreInterfaces []string) []string {
+// targets, so their VRF column is "core". Hub-sampled interfaces (the
+// busiest of a shared hub VRF, picked during discovery — see
+// rankInterfacesByUtilization) show "hub", since they don't belong to any
+// single monitored VRF. Auto-discovered customer interfaces show the single
+// monitored VRF when there is exactly one; with multiple monitored VRFs,
+// the current tick result has no interface-to-VRF mapping, so the column
+// uses "customer" rather than inventing precision. Only interfaces with
+// non-zero inbound or outbound rates are expanded into rows; idle 0/0
+// interfaces are counted in a summary line instead.
+func interfaceTableLines(result tickResult, coreInterfaces, hubInterfaces []string) []string {
 	if len(result.Interfaces) == 0 {
 		return nil
 	}
 	core := make(map[string]bool, len(coreInterfaces))
 	for _, name := range coreInterfaces {
 		core[name] = true
+	}
+	hub := make(map[string]bool, len(hubInterfaces))
+	for _, name := range hubInterfaces {
+		hub[name] = true
 	}
 
 	names := make([]string, 0, len(result.Interfaces))
@@ -191,15 +198,12 @@ func interfaceTableLines(result tickResult, coreInterfaces []string) []string {
 	rows := make([]interfaceStatusRow, 0, len(names))
 	hiddenZeroRate := 0
 	for _, name := range names {
-		row := interfaceStatusRow{vrf: interfaceVRFLabel(name, core, routeNames), iface: name, inbound: "?", outbound: "?"}
-		var decoded struct {
-			Stats []map[string]string `json:"stats"`
-		}
-		if err := json.Unmarshal(result.Interfaces[name], &decoded); err != nil || len(decoded.Stats) == 0 {
+		row := interfaceStatusRow{vrf: interfaceVRFLabel(name, core, hub, routeNames), iface: name, inbound: "?", outbound: "?"}
+		stat, ok := firstInterfaceStat(result.Interfaces[name])
+		if !ok {
 			rows = append(rows, row)
 			continue
 		}
-		stat := decoded.Stats[0]
 		if isZeroRate(stat["INPUT_RATE_BPS"]) && isZeroRate(stat["OUTPUT_RATE_BPS"]) {
 			hiddenZeroRate++
 			continue
@@ -213,6 +217,24 @@ func interfaceTableLines(result tickResult, coreInterfaces []string) []string {
 		lines = append(lines, fmt.Sprintf("+%d zero-rate interfaces not shown", hiddenZeroRate))
 	}
 	return lines
+}
+
+// firstInterfaceStat decodes one interface's {"stats": [...]} result (as
+// produced by parseOrRaw with the xr_bundle_interface_stats parser, see
+// poll.go/collectTick) and returns its first record, or ok=false if the
+// JSON doesn't decode or has no records. Shared by the status line
+// renderer here and hub-VRF interface ranking (queryInterfaceUtilization in
+// discover.go) so both interpret the same parser output shape the same
+// way, rather than each keeping its own copy of the decode struct to drift
+// out of sync if that shape ever changes.
+func firstInterfaceStat(raw json.RawMessage) (map[string]string, bool) {
+	var decoded struct {
+		Stats []map[string]string `json:"stats"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil || len(decoded.Stats) == 0 {
+		return nil, false
+	}
+	return decoded.Stats[0], true
 }
 
 func isZeroRate(raw string) bool {
@@ -229,9 +251,12 @@ func sortedRouteNames(routes map[string]json.RawMessage) []string {
 	return names
 }
 
-func interfaceVRFLabel(name string, core map[string]bool, routeNames []string) string {
+func interfaceVRFLabel(name string, core, hub map[string]bool, routeNames []string) string {
 	if core[name] {
 		return "core"
+	}
+	if hub[name] {
+		return "hub"
 	}
 	if len(routeNames) == 1 {
 		return routeNames[0]

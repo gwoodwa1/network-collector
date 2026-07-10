@@ -77,7 +77,7 @@ type tickResult struct {
 // error, since BGP is collected on every tick and acts as a session
 // liveness canary). It never reconnects: a dropped session requires a fresh
 // RSA passcode, which this loop cannot supply unattended.
-func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec) {
+func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec, captureRunningConfigEnabled bool) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -105,15 +105,21 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 			slog.Error("failed to write tick result", "hostname", session.hostname, "error", err)
 		}
 		writer.Flush()
-		statusOut.printTick(result, sessionAlive, session.coreInterfaces)
+		statusOut.printTick(result, sessionAlive, session.coreInterfaces, session.hubInterfaces)
 		if !sessionAlive {
 			slog.Error("session appears to have dropped; stopping polling for this device", "hostname", session.hostname)
 		}
 		return sessionAlive
 	}
 
-	if err := captureSnapshot(session, "before", outputDir, runLabel, parsers, snapshotOut); err != nil {
+	beforeCapturedAt := time.Now().UTC()
+	if err := captureSnapshot(session, "before", outputDir, runLabel, beforeCapturedAt, parsers, snapshotOut); err != nil {
 		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
+	}
+	if captureRunningConfigEnabled {
+		if err := captureRunningConfig(session, "before", outputDir, runLabel, beforeCapturedAt, snapshotOut); err != nil {
+			slog.Error("failed to capture before-change running-config", "hostname", session.hostname, "error", err)
+		}
 	}
 
 	if !tick() {
@@ -125,8 +131,14 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 	for {
 		select {
 		case <-ctx.Done():
-			if err := captureSnapshot(session, "after", outputDir, runLabel, parsers, snapshotOut); err != nil {
+			afterCapturedAt := time.Now().UTC()
+			if err := captureSnapshot(session, "after", outputDir, runLabel, afterCapturedAt, parsers, snapshotOut); err != nil {
 				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
+			}
+			if captureRunningConfigEnabled {
+				if err := captureRunningConfig(session, "after", outputDir, runLabel, afterCapturedAt, snapshotOut); err != nil {
+					slog.Error("failed to capture after-change running-config", "hostname", session.hostname, "error", err)
+				}
 			}
 			return
 		case <-ticker.C:

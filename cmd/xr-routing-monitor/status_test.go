@@ -43,7 +43,7 @@ func TestSyncWriterSerializesConcurrentWrites(t *testing.T) {
 
 func TestPrintTickStatusLineSessionDropped(t *testing.T) {
 	var buf bytes.Buffer
-	printTickStatusLine(&buf, tickResult{Hostname: "pe-router-1"}, false, nil)
+	printTickStatusLine(&buf, tickResult{Hostname: "pe-router-1"}, false, nil, nil)
 	if !strings.Contains(buf.String(), "SESSION DROPPED") || !strings.Contains(buf.String(), "pe-router-1") {
 		t.Fatalf("unexpected output: %q", buf.String())
 	}
@@ -74,7 +74,7 @@ func TestPrintTickStatusLineHealthyTick(t *testing.T) {
 			"BE45":                   coreIface,
 			"GigabitEthernet0/0/0/1": custIface,
 		},
-	}, true, []string{"BE45"})
+	}, true, []string{"BE45"}, nil)
 
 	line := buf.String()
 	for _, want := range []string{
@@ -99,10 +99,10 @@ func TestTickStatusPrinterBlankLineBetweenRounds(t *testing.T) {
 	var buf bytes.Buffer
 	p := newTickStatusPrinter(&buf)
 
-	p.printTick(tickResult{Hostname: "dev-a"}, true, nil)
-	p.printTick(tickResult{Hostname: "dev-b"}, true, nil)
-	p.printTick(tickResult{Hostname: "dev-a"}, true, nil) // dev-b has dropped out; round 2 has only dev-a
-	p.printTick(tickResult{Hostname: "dev-a"}, true, nil) // round 3
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil, nil)
+	p.printTick(tickResult{Hostname: "dev-b"}, true, nil, nil)
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil, nil) // dev-b has dropped out; round 2 has only dev-a
+	p.printTick(tickResult{Hostname: "dev-a"}, true, nil, nil) // round 3
 
 	lines := strings.Split(buf.String(), "\n")
 	var blankLineIndexes []int
@@ -174,7 +174,7 @@ func TestInterfaceTableLinesMultipleSortedByName(t *testing.T) {
 			"BE46": be46,
 			"BE45": be45,
 		},
-	}, []string{"BE45"})
+	}, []string{"BE45"}, nil)
 	want := []string{
 		"| VRF     | Interface | Inbound |  Outbound |",
 		"| core    | BE45      | 1.5Gbps | 500.0Kbps |",
@@ -200,7 +200,7 @@ func TestInterfaceTableLinesShowsAllNonZeroAndSummarizesZeroRate(t *testing.T) {
 			"TenGigE0/0/0/4": zero,
 			"TenGigE0/0/0/5": zero,
 		},
-	}, []string{"BE40", "BE45"})
+	}, []string{"BE40", "BE45"}, nil)
 	joined := strings.Join(got, "\n")
 	for _, want := range []string{
 		"| VRF",
@@ -222,6 +222,31 @@ func TestInterfaceTableLinesShowsAllNonZeroAndSummarizesZeroRate(t *testing.T) {
 	}
 	if len(got) != 7 {
 		t.Fatalf("expected header + 5 active interfaces + 1 zero-rate summary line, got %d lines: %q", len(got), got)
+	}
+}
+
+// TestInterfaceTableLinesLabelsHubSampledInterfaces proves an interface
+// that discovery sampled from a hub VRF (deviceSession.hubInterfaces) is
+// labeled "hub" on the status line rather than falling into the
+// single-VRF/"customer" fallback used for auto-detected customer VRF
+// interfaces.
+func TestInterfaceTableLinesLabelsHubSampledInterfaces(t *testing.T) {
+	iface, _ := json.Marshal(map[string]any{"stats": []map[string]string{
+		{"INPUT_RATE_BPS": "1000", "OUTPUT_RATE_BPS": "0"},
+	}})
+	got := interfaceTableLines(tickResult{
+		Routes: map[string]json.RawMessage{"4000001": nil},
+		Interfaces: map[string]json.RawMessage{
+			"TenGigE0/0/0/2": iface,
+		},
+	}, nil, []string{"TenGigE0/0/0/2"})
+	want := []string{
+		"| VRF | Interface      | Inbound | Outbound |",
+		"| hub | TenGigE0/0/0/2 |  1000bps |     0bps |",
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "| hub ") {
+		t.Fatalf("expected the hub-sampled interface to be labeled \"hub\", got %q (want something like %v)", joined, want)
 	}
 }
 

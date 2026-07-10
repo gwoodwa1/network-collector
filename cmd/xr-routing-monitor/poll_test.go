@@ -220,7 +220,7 @@ func TestPollDeviceWritesJSONLAndStopsOnContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		pollDevice(ctx, session, 30*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
+		pollDevice(ctx, session, 30*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false)
 		close(done)
 	}()
 
@@ -270,11 +270,11 @@ func TestPollDeviceStopsOnDroppedSessionWithoutBlockingOthers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		pollDevice(ctx, dyingSession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
+		pollDevice(ctx, dyingSession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false)
 	}()
 	go func() {
 		defer wg.Done()
-		pollDevice(ctx, healthySession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
+		pollDevice(ctx, healthySession, 20*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false)
 	}()
 
 	done := make(chan struct{})

@@ -70,12 +70,22 @@ type devicesDocument struct {
 	CustomerGatewayPrefix string `yaml:"customer_gateway_prefix"`
 	// ExcludeInterfacePrefixes overrides the default set of (lowercase)
 	// interface-name prefixes excluded from auto-detected polling targets
-	// (default: "loopback", "bvi" — see defaultExcludeInterfacePrefixes in
+	// (default: "loopback" — see defaultExcludeInterfacePrefixes in
 	// discover.go). Fleet-wide, like CustomerGatewayPrefix, since it
 	// describes what counts as a "core-facing" interface on this network.
-	ExcludeInterfacePrefixes []string         `yaml:"exclude_interface_prefixes"`
-	Commands                 commandOverrides `yaml:"commands"`
-	Devices                  []deviceSpec     `yaml:"devices"`
+	ExcludeInterfacePrefixes []string `yaml:"exclude_interface_prefixes"`
+	// HubTopInterfaces caps how many of a hub VRF's interfaces (ranked by
+	// current utilization — see rankInterfacesByUtilization in discover.go)
+	// get sampled, device-wide, for any device with auto_detect_vrf: true.
+	// A *int (rather than int) so an explicit "hub_top_interfaces: 0"
+	// (disable hub-VRF sampling entirely) is distinguishable from the field
+	// being left out of the file altogether (nil falls back to
+	// defaultHubTopInterfaces) — see resolveHubTopInterfaces. Fleet-wide,
+	// like CustomerGatewayPrefix, since a hub VRF's interface count varies
+	// by device, not by any per-device setting.
+	HubTopInterfaces *int             `yaml:"hub_top_interfaces"`
+	Commands         commandOverrides `yaml:"commands"`
+	Devices          []deviceSpec     `yaml:"devices"`
 }
 
 func countStringPlaceholders(format string) (count int, ok bool) {
@@ -129,14 +139,14 @@ func validateCommandTemplate(path, field, value string) error {
 // the returned excludeInterfacePrefixes is nil when the file didn't set
 // exclude_interface_prefixes, signaling the caller should fall back to
 // defaultExcludeInterfacePrefixes.
-func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, gatewayPrefix string, commands commandOverrides, excludeInterfacePrefixes []string, err error) {
+func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, gatewayPrefix string, commands commandOverrides, excludeInterfacePrefixes []string, hubTopInterfaces *int, err error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 0, "", commandOverrides{}, nil, err
+		return nil, 0, "", commandOverrides{}, nil, nil, err
 	}
 	var doc devicesDocument
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, 0, "", commandOverrides{}, nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, 0, "", commandOverrides{}, nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	// Collected across every device rather than returning on the first hit,
 	// so a file with more than one problem (e.g. device 0 missing a
@@ -159,19 +169,22 @@ func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, g
 	if err := validateCommandTemplate(path, "interface_command", doc.Commands.InterfaceCommand); err != nil {
 		errs = append(errs, err)
 	}
+	if doc.HubTopInterfaces != nil && *doc.HubTopInterfaces < 0 {
+		errs = append(errs, fmt.Errorf("%s: hub_top_interfaces must not be negative", path))
+	}
 	if err := errors.Join(errs...); err != nil {
-		return nil, 0, "", commandOverrides{}, nil, err
+		return nil, 0, "", commandOverrides{}, nil, nil, err
 	}
 	if raw := strings.TrimSpace(doc.Interval); raw != "" {
 		interval, err = time.ParseDuration(raw)
 		if err != nil {
-			return nil, 0, "", commandOverrides{}, nil, fmt.Errorf("%s: invalid interval %q: %w", path, raw, err)
+			return nil, 0, "", commandOverrides{}, nil, nil, fmt.Errorf("%s: invalid interval %q: %w", path, raw, err)
 		}
 		if interval <= 0 {
-			return nil, 0, "", commandOverrides{}, nil, fmt.Errorf("%s: interval %q must be positive", path, raw)
+			return nil, 0, "", commandOverrides{}, nil, nil, fmt.Errorf("%s: interval %q must be positive", path, raw)
 		}
 	}
-	return doc.Devices, interval, doc.CustomerGatewayPrefix, doc.Commands, doc.ExcludeInterfacePrefixes, nil
+	return doc.Devices, interval, doc.CustomerGatewayPrefix, doc.Commands, doc.ExcludeInterfacePrefixes, doc.HubTopInterfaces, nil
 }
 
 // onboardDevicesFromSpecs connects to each device from a --devices file in
@@ -183,7 +196,7 @@ func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, g
 // attempting to connect again. gatewayPrefix is the document's top-level
 // customer_gateway_prefix, used for any spec with AutoDetectVRF set —
 // loadDeviceSpecs already guarantees it's non-empty in that case.
-func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, gatewayPrefix string, excludeInterfacePrefixes []string) []*deviceSession {
+func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, gatewayPrefix string, excludeInterfacePrefixes []string, collectSpec collectionSpec, hubTopInterfaces int) []*deviceSession {
 	var sessions []*deviceSession
 	for _, spec := range specs {
 		if exists, existing := registry.has(spec.Hostname); exists {
@@ -200,9 +213,9 @@ func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceTyp
 
 		vrfs := spec.vrfs()
 		coreInterfaces := dedupeSorted(spec.Interfaces)
-		var customerInterfaces []string
+		var customerInterfaces, hubInterfaces []string
 		if spec.AutoDetectVRF {
-			vrfs, customerInterfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, excludeInterfacePrefixes, spec.Hostname, vrfs, os.Stderr)
+			vrfs, customerInterfaces, hubInterfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, excludeInterfacePrefixes, collectSpec, hubTopInterfaces, spec.Hostname, vrfs, os.Stderr)
 		}
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", spec.Hostname)
 		sessions = append(sessions, &deviceSession{
@@ -210,6 +223,7 @@ func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceTyp
 			vrfs:               vrfs,
 			coreInterfaces:     coreInterfaces,
 			customerInterfaces: customerInterfaces,
+			hubInterfaces:      hubInterfaces,
 			neighbors:          spec.Neighbors,
 			client:             client,
 		})

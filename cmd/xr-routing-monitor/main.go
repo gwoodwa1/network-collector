@@ -30,13 +30,50 @@ func main() {
 	var deviceType string
 	var devicesFile string
 	var passcodeReuseWindow time.Duration
+	var diffBeforePath, diffAfterPath string
+	var diffBeforeConfigPath, diffAfterConfigPath string
+	var captureRunningConfigEnabled bool
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "directory to write one <hostname>.jsonl file per device")
 	flag.StringVar(&parsersFile, "parsers", "", "path to an external parser module file; defaults to this binary's embedded parser definitions")
 	flag.StringVar(&deviceType, "type", "cisco_iosxr", "scrapligo platform/driver name for all onboarded devices")
 	flag.StringVar(&devicesFile, "devices", "", "optional YAML file listing hostname/vrf/interfaces/neighbors per device; credentials are still always prompted interactively")
 	flag.DurationVar(&passcodeReuseWindow, "passcode-reuse-window", 45*time.Second, "how long an entered RSA passcode may be offered for reuse on the next device, matching your ISE cache duration with a safety margin; 0 disables reuse")
+	flag.BoolVar(&captureRunningConfigEnabled, "capture-running-config", false, "also capture \"show running-config\" before and after the change window, as a separate <base>-running-config.txt file per label; off by default since it's a heavier capture")
+	flag.StringVar(&diffBeforePath, "diff-before", "", "path to a captured *-before.json snapshot; combine with -diff-after to print a route-level diff and exit, instead of connecting to any device")
+	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
+	flag.StringVar(&diffBeforeConfigPath, "diff-before-config", "", "path to a captured *-before-running-config.txt file; combine with -diff-after-config to print a running-config diff and exit, instead of connecting to any device")
+	flag.StringVar(&diffAfterConfigPath, "diff-after-config", "", "path to a captured *-after-running-config.txt file; combine with -diff-before-config")
 	flag.Parse()
+
+	snapshotDiffRequested := diffBeforePath != "" || diffAfterPath != ""
+	configDiffRequested := diffBeforeConfigPath != "" || diffAfterConfigPath != ""
+	if snapshotDiffRequested || configDiffRequested {
+		if snapshotDiffRequested && (diffBeforePath == "" || diffAfterPath == "") {
+			fmt.Fprintln(os.Stderr, "both -diff-before and -diff-after are required together")
+			os.Exit(1)
+		}
+		if configDiffRequested && (diffBeforeConfigPath == "" || diffAfterConfigPath == "") {
+			fmt.Fprintln(os.Stderr, "both -diff-before-config and -diff-after-config are required together")
+			os.Exit(1)
+		}
+		if snapshotDiffRequested {
+			if err := runSnapshotDiff(diffBeforePath, diffAfterPath, os.Stdout); err != nil {
+				slog.Error("snapshot diff failed", "error", err)
+				os.Exit(1)
+			}
+		}
+		if configDiffRequested {
+			if snapshotDiffRequested {
+				fmt.Fprintln(os.Stdout)
+			}
+			if err := runConfigDiff(diffBeforeConfigPath, diffAfterConfigPath, os.Stdout); err != nil {
+				slog.Error("running-config diff failed", "error", err)
+				os.Exit(1)
+			}
+		}
+		return
+	}
 
 	// Tracked so an interval set at the top of a --devices file can be
 	// overridden by an explicit CLI flag, but not by its own default.
@@ -125,8 +162,11 @@ func main() {
 	var gatewayPrefix string
 	var commands commandOverrides
 	var excludeInterfacePrefixes []string
+	var deviceSpecsFromFile []deviceSpec
+	var haveDevicesFile bool
+	var hubTopInterfacesConfigured *int
 	if strings.TrimSpace(devicesFile) != "" {
-		specs, fileInterval, fileGatewayPrefix, fileCommands, fileExcludePrefixes, err := loadDeviceSpecs(devicesFile)
+		specs, fileInterval, fileGatewayPrefix, fileCommands, fileExcludePrefixes, fileHubTopInterfaces, err := loadDeviceSpecs(devicesFile)
 		if err != nil {
 			slog.Error("failed to load devices file", "devices_file", devicesFile, "error", err)
 			os.Exit(1)
@@ -138,17 +178,29 @@ func main() {
 		gatewayPrefix = fileGatewayPrefix
 		commands = fileCommands
 		excludeInterfacePrefixes = resolveExcludeInterfacePrefixes(fileExcludePrefixes)
-		sessions = append(sessions, onboardDevicesFromSpecs(reader, specs, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes)...)
+		hubTopInterfacesConfigured = fileHubTopInterfaces
+		deviceSpecsFromFile = specs
+		haveDevicesFile = true
 	} else {
 		excludeInterfacePrefixes = resolveExcludeInterfacePrefixes(nil)
 	}
+	// spec and hubTopInterfaces are resolved once, here, from whatever the
+	// --devices file set (if anything, nil otherwise — see
+	// resolveHubTopInterfaces) — both the file-driven and interactive
+	// onboarding paths below need them fully resolved before they run
+	// auto-detection, since discovering a hub VRF's interfaces now also
+	// ranks them by current utilization using spec's interface command.
 	spec := resolveCollectionSpec(commands)
+	hubTopInterfaces := resolveHubTopInterfaces(hubTopInterfacesConfigured)
+	if haveDevicesFile {
+		sessions = append(sessions, onboardDevicesFromSpecs(reader, deviceSpecsFromFile, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes, spec, hubTopInterfaces)...)
+	}
 	// Always fall through to interactive onboarding afterward: blank
 	// hostname finishes immediately if the file already covered everything,
 	// or lets the operator add ad hoc devices not listed in it. gatewayPrefix
 	// (if the devices file set one) is offered as the default answer if the
 	// operator opts into VRF auto-detection for one of these devices too.
-	sessions = append(sessions, onboardDevices(reader, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes)...)
+	sessions = append(sessions, onboardDevices(reader, deviceType, cache, registry, connectDevice, parsers, gatewayPrefix, excludeInterfacePrefixes, spec, hubTopInterfaces)...)
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "no devices connected, exiting")
 		return
@@ -166,7 +218,7 @@ func main() {
 		wg.Add(1)
 		go func(s *deviceSession) {
 			defer wg.Done()
-			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel, spec)
+			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel, spec, captureRunningConfigEnabled)
 		}(session)
 	}
 	wg.Wait()
@@ -192,25 +244,31 @@ type connectFunc func(reader *bufio.Reader, host, deviceType string, cache *cred
 // session plus the collection parameters gathered for it during onboarding.
 // vrfs holds every VRF to monitor for this device: manually specified
 // ones, auto-detected customer VRFs (see autoDetectCustomerVRFs), or both.
-// coreInterfaces/customerInterfaces are kept as two separate lists (rather
-// than one merged list) purely so the status line (status.go) can label
-// each interface "Core Int" or "Cust Int" by provenance — manually typed
-// vs. auto-discovered — instead of losing that distinction the moment
-// they're onboarded; both are still polled together (see allInterfaces).
+// coreInterfaces/customerInterfaces/hubInterfaces are kept as three separate
+// lists (rather than one merged list) purely so the status line (status.go)
+// can label each interface "core", the single monitored customer VRF (or
+// "customer"), or "hub" by provenance — manually typed, auto-discovered
+// customer-VRF, or sampled from a hub VRF (see autoDetectCustomerVRFs) —
+// instead of losing that distinction the moment they're onboarded; all
+// three are still polled together (see allInterfaces).
 type deviceSession struct {
 	hostname           string
 	vrfs               []string
 	coreInterfaces     []string
 	customerInterfaces []string
+	hubInterfaces      []string
 	neighbors          []string
 	client             sessionExecutor
 }
 
-// allInterfaces returns every interface to poll for this device — core and
-// customer — deduped and sorted, since an operator could in principle type
-// an interface manually that auto-detect also discovers.
+// allInterfaces returns every interface to poll for this device — core,
+// customer, and hub-sampled — deduped and sorted, since an operator could in
+// principle type an interface manually that auto-detect also discovers.
 func (s *deviceSession) allInterfaces() []string {
-	return dedupeSorted(append(append([]string{}, s.coreInterfaces...), s.customerInterfaces...))
+	all := append([]string{}, s.coreInterfaces...)
+	all = append(all, s.customerInterfaces...)
+	all = append(all, s.hubInterfaces...)
+	return dedupeSorted(all)
 }
 
 func splitCommaList(line string) []string {
@@ -228,7 +286,7 @@ func splitCommaList(line string) []string {
 // (typically a --devices file's top-level customer_gateway_prefix, empty if none was
 // loaded) is offered as the default answer when the operator opts into VRF
 // auto-detection, so it only needs to be typed once per run rather than once per device.
-func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, defaultGatewayPrefix string, excludeInterfacePrefixes []string) []*deviceSession {
+func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc, parsers map[string]parserModule, defaultGatewayPrefix string, excludeInterfacePrefixes []string, spec collectionSpec, hubTopInterfaces int) []*deviceSession {
 	var sessions []*deviceSession
 	for {
 		fmt.Fprintf(os.Stderr, "Router hostname/IP (blank to finish onboarding): ")
@@ -267,14 +325,14 @@ func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCa
 		}
 		registry.claim(host)
 
-		var customerInterfaces []string
+		var customerInterfaces, hubInterfaces []string
 		if autoDetect {
-			vrfs, customerInterfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, excludeInterfacePrefixes, host, vrfs, os.Stderr)
+			vrfs, customerInterfaces, hubInterfaces = applyAutoDetectResult(client, gatewayPrefix, parsers, excludeInterfacePrefixes, spec, hubTopInterfaces, host, vrfs, os.Stderr)
 		}
 
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", host)
-		slog.Info("device connected", "hostname", host, "vrfs", vrfs, "core_interfaces", coreInterfaces, "customer_interfaces", customerInterfaces, "neighbors", neighbors)
-		sessions = append(sessions, &deviceSession{hostname: host, vrfs: vrfs, coreInterfaces: coreInterfaces, customerInterfaces: customerInterfaces, neighbors: neighbors, client: client})
+		slog.Info("device connected", "hostname", host, "vrfs", vrfs, "core_interfaces", coreInterfaces, "customer_interfaces", customerInterfaces, "hub_interfaces", hubInterfaces, "neighbors", neighbors)
+		sessions = append(sessions, &deviceSession{hostname: host, vrfs: vrfs, coreInterfaces: coreInterfaces, customerInterfaces: customerInterfaces, hubInterfaces: hubInterfaces, neighbors: neighbors, client: client})
 	}
 	return sessions
 }

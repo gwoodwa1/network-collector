@@ -242,7 +242,7 @@ RP/0/RSP0/CPU0:pe-router-1#
 		`show vrf 5000002 ipv4 detail`:                           "",
 	}}
 
-	vrfs, interfaces, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes)
+	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected a non-nil warning error for the malformed matching VRF")
 	}
@@ -352,7 +352,11 @@ RP/0/RSP0/CPU0:pe-router-1#
 	}
 }
 
-func TestDiscoverConnectedInterfacesSkipsLoopbackAndBVI(t *testing.T) {
+// TestDiscoverConnectedInterfacesSkipsLoopbackKeepsBVI proves Loopback is
+// still excluded by default (never customer traffic), while BVI is not — a
+// BVI is a customer-facing bridge-group interface that can carry real
+// traffic worth polling, unlike a loopback.
+func TestDiscoverConnectedInterfacesSkipsLoopbackKeepsBVI(t *testing.T) {
 	parsers, err := loadDefaultParsers()
 	if err != nil {
 		t.Fatalf("failed to load embedded parsers: %v", err)
@@ -377,14 +381,14 @@ RP/0/RSP0/CPU0:pe-router-1#
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Join(interfaces, ",") != "TenGigE200/0/0/10.10" {
-		t.Fatalf("expected only the physical/sub-interface poll target, got %v", interfaces)
+	if strings.Join(interfaces, ",") != "BVI101,TenGigE200/0/0/10.10" {
+		t.Fatalf("expected Loopback30000 excluded but BVI101 kept, got %v", interfaces)
 	}
 }
 
 // TestIsAutoDiscoveredPollInterfaceHonorsCustomExcludePrefixes guards the
 // --devices file "exclude_interface_prefixes:" override (added because the
-// default loopback/bvi denylist is hardcoded and can't cover every fleet's
+// default loopback-only denylist is hardcoded and can't cover every fleet's
 // other non-core virtual interface types, e.g. tunnel-ip): a custom list
 // must be used verbatim instead of silently falling back to the default.
 func TestIsAutoDiscoveredPollInterfaceHonorsCustomExcludePrefixes(t *testing.T) {
@@ -392,10 +396,10 @@ func TestIsAutoDiscoveredPollInterfaceHonorsCustomExcludePrefixes(t *testing.T) 
 	if isAutoDiscoveredPollInterface("tunnel-ip100", custom) {
 		t.Fatal("expected tunnel-ip100 to be excluded by the custom prefix list")
 	}
-	// bvi is only excluded by the default list; a custom list replaces it
-	// entirely rather than merging with the default.
-	if !isAutoDiscoveredPollInterface("BVI101", custom) {
-		t.Fatal("expected BVI101 to be included since the custom list doesn't exclude bvi")
+	// loopback is only excluded by the default list; a custom list replaces
+	// it entirely rather than merging with the default.
+	if !isAutoDiscoveredPollInterface("Loopback0", custom) {
+		t.Fatal("expected Loopback0 to be included since the custom list doesn't exclude loopback")
 	}
 }
 
@@ -431,7 +435,7 @@ func TestAutoDetectCustomerVRFsCombinesVRFsAndInterfaces(t *testing.T) {
 		`show vrf CUSTOMER-A-INTERNET ipv4 detail`:               "",
 	}}
 
-	vrfs, interfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes)
+	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -453,7 +457,10 @@ func TestAutoDetectCustomerVRFsCombinesVRFsAndInterfaces(t *testing.T) {
 	if strings.Join(interfaces, ",") != strings.Join(wantInterfaces, ",") {
 		t.Fatalf("expected interfaces %v, got %v", wantInterfaces, interfaces)
 	}
-	wantHubNotes := []string{"CUSTOMER-A-INTERNET (0 interfaces)"}
+	if len(hubInterfaces) != 0 {
+		t.Fatalf("expected no hub interfaces sampled (CUSTOMER-A-INTERNET has none), got %v", hubInterfaces)
+	}
+	wantHubNotes := []string{"CUSTOMER-A-INTERNET (0 interfaces, sampling top 0: [])"}
 	if strings.Join(hubVRFNotes, ",") != strings.Join(wantHubNotes, ",") {
 		t.Fatalf("expected hub VRF notes %v, got %v", wantHubNotes, hubVRFNotes)
 	}
@@ -486,7 +493,7 @@ RP/0/RSP0/CPU0:pe-router-1#
 		},
 	}
 
-	vrfs, interfaces, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes)
+	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected a non-nil error summarizing the failed VRF's interface lookup")
 	}
@@ -516,11 +523,11 @@ func TestAutoDetectCustomerVRFsPropagatesVRFDiscoveryFailure(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: fmt.Errorf("channel closed"),
 	}}
 
-	vrfs, interfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes)
+	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected an error when VRF discovery itself fails")
 	}
-	if vrfs != nil || interfaces != nil || hubVRFNotes != nil {
-		t.Fatalf("expected no results when VRF discovery fails, got vrfs=%v interfaces=%v hubVRFNotes=%v", vrfs, interfaces, hubVRFNotes)
+	if vrfs != nil || interfaces != nil || hubInterfaces != nil || hubVRFNotes != nil {
+		t.Fatalf("expected no results when VRF discovery fails, got vrfs=%v interfaces=%v hubInterfaces=%v hubVRFNotes=%v", vrfs, interfaces, hubInterfaces, hubVRFNotes)
 	}
 }

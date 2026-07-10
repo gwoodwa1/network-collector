@@ -23,7 +23,7 @@ func TestLoadDeviceSpecsValidFile(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	specs, interval, gatewayPrefix, _, _, err := loadDeviceSpecs(path)
+	specs, interval, gatewayPrefix, _, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,13 +59,13 @@ func TestLoadDeviceSpecsMissingHostname(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a device spec missing hostname")
 	}
 }
 
 func TestLoadDeviceSpecsMissingFile(t *testing.T) {
-	if _, _, _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
 		t.Fatal("expected an error for a missing devices file")
 	}
 }
@@ -75,7 +75,7 @@ func TestLoadDeviceSpecsInvalidYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("devices: [this is not valid: yaml:"), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for malformed YAML")
 	}
 }
@@ -90,7 +90,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, interval, _, _, _, err := loadDeviceSpecs(path)
+	_, interval, _, _, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for an invalid interval")
 	}
 }
@@ -124,7 +124,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a negative interval instead of it being silently discarded")
 	}
 }
@@ -140,7 +140,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	specs, _, gatewayPrefix, _, _, err := loadDeviceSpecs(path)
+	specs, _, gatewayPrefix, _, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestLoadDeviceSpecsAutoDetectVRFRequiresGatewayPrefix(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for auto_detect_vrf without a top-level customer_gateway_prefix")
 	}
 }
@@ -184,7 +184,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, _, _, commands, excludePrefixes, err := loadDeviceSpecs(path)
+	_, _, _, commands, excludePrefixes, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -193,6 +193,90 @@ devices:
 	}
 	if strings.Join(excludePrefixes, ",") != "loopback,tunnel-ip" {
 		t.Fatalf("unexpected exclude prefixes: %v", excludePrefixes)
+	}
+}
+
+// TestLoadDeviceSpecsHubTopInterfaces proves hub_top_interfaces round-trips
+// when set, comes back nil (not zero) when unset so the caller can tell
+// "unset" apart from an explicit "0" (see resolveHubTopInterfaces), and is
+// rejected when negative.
+func TestLoadDeviceSpecsHubTopInterfaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `hub_top_interfaces: 4
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, _, _, hubTopInterfaces, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hubTopInterfaces == nil || *hubTopInterfaces != 4 {
+		t.Fatalf("expected hub_top_interfaces 4, got %v", hubTopInterfaces)
+	}
+}
+
+func TestLoadDeviceSpecsHubTopInterfacesDefaultsWhenUnset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, _, _, hubTopInterfaces, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hubTopInterfaces != nil {
+		t.Fatalf("expected unset hub_top_interfaces to come back as nil, got %d", *hubTopInterfaces)
+	}
+	if resolveHubTopInterfaces(hubTopInterfaces) != defaultHubTopInterfaces {
+		t.Fatalf("expected resolveHubTopInterfaces(nil) to fall back to the default")
+	}
+}
+
+// TestLoadDeviceSpecsHubTopInterfacesZeroDisablesSampling proves an
+// explicit "hub_top_interfaces: 0" is preserved as a real, non-default 0
+// (disabling hub-VRF interface sampling) rather than being treated the
+// same as the field being left out of the file entirely.
+func TestLoadDeviceSpecsHubTopInterfacesZeroDisablesSampling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `hub_top_interfaces: 0
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, _, _, hubTopInterfaces, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hubTopInterfaces == nil || *hubTopInterfaces != 0 {
+		t.Fatalf("expected an explicit 0 to round-trip as a non-nil pointer to 0, got %v", hubTopInterfaces)
+	}
+	if got := resolveHubTopInterfaces(hubTopInterfaces); got != 0 {
+		t.Fatalf("expected resolveHubTopInterfaces to keep an explicit 0 rather than defaulting it, got %d", got)
+	}
+}
+
+func TestLoadDeviceSpecsRejectsNegativeHubTopInterfaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `hub_top_interfaces: -1
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil {
+		t.Fatal("expected a negative hub_top_interfaces to be rejected")
 	}
 }
 
@@ -208,7 +292,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, _, _, _, _, err := loadDeviceSpecs(path)
+	_, _, _, _, _, _, err := loadDeviceSpecs(path)
 	if err == nil {
 		t.Fatal("expected invalid command placeholders to be rejected")
 	}
@@ -300,7 +384,7 @@ func TestLoadDeviceSpecsReportsAllValidationErrorsNotJustTheFirst(t *testing.T) 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, _, _, _, _, err := loadDeviceSpecs(path)
+	_, _, _, _, _, _, err := loadDeviceSpecs(path)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

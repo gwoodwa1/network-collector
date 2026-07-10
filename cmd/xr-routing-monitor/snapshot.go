@@ -40,17 +40,19 @@ type neighborSnapshot struct {
 // devices file from overwriting a previous change window's snapshots, and
 // runLabel (typically the devices YAML file's basename, one dedicated file
 // per change) keeps concurrent change windows' snapshots apart in a shared
-// output directory. label is typically "before" or "after". A device with
-// no VRF and no neighbors configured produces no files. On success, a
-// confirmation line is written to out (mirrored to session.log by the
-// caller, not just the terminal, so the confirmation survives even if
-// nobody is watching the terminal live).
-func captureSnapshot(session *deviceSession, label, outputDir, runLabel string, parsers map[string]parserModule, out io.Writer) error {
+// output directory. label is typically "before" or "after". capturedAt is
+// supplied by the caller (rather than captured internally) so a sibling
+// capture for the same moment — see captureRunningConfig — can share the
+// exact same timestamp and <base>, even though it's a separate,
+// independently-triggered capture. A device with no VRF and no neighbors
+// configured produces no files. On success, a confirmation line is written
+// to out (mirrored to session.log by the caller, not just the terminal, so
+// the confirmation survives even if nobody is watching the terminal live).
+func captureSnapshot(session *deviceSession, label, outputDir, runLabel string, capturedAt time.Time, parsers map[string]parserModule, out io.Writer) error {
 	if len(session.vrfs) == 0 && len(session.neighbors) == 0 {
 		return nil
 	}
 
-	capturedAt := time.Now().UTC()
 	result := snapshotResult{
 		Timestamp: capturedAt.Format(time.RFC3339),
 		Hostname:  session.hostname,

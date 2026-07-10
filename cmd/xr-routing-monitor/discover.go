@@ -7,6 +7,7 @@ import (
 	"io"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -177,11 +178,13 @@ func discoverConnectedInterfaces(client sessionExecutor, vrf string, parsers map
 // defaultExcludeInterfacePrefixes lists the (lowercase) interface-name
 // prefixes excluded from auto-discovered polling targets by default: these
 // are never core-facing links, just per-VRF virtual interfaces that happen
-// to carry a connected route too. Overridable via a --devices file's
+// to carry a connected route too. BVI is deliberately not in this list —
+// unlike Loopback, a BVI is a customer-facing bridge-group interface that
+// can carry real traffic worth polling. Overridable via a --devices file's
 // top-level exclude_interface_prefixes (see resolveExcludeInterfacePrefixes)
-// for fleets where some other virtual interface type (e.g. tunnel-ip) also
+// for fleets where some other virtual interface type (e.g. tunnel-ip)
 // needs excluding, without a code change and rebuild.
-var defaultExcludeInterfacePrefixes = []string{"loopback", "bvi"}
+var defaultExcludeInterfacePrefixes = []string{"loopback"}
 
 // resolveExcludeInterfacePrefixes falls back to
 // defaultExcludeInterfacePrefixes when a --devices file didn't set
@@ -208,6 +211,93 @@ func isAutoDiscoveredPollInterface(name string, excludePrefixes []string) bool {
 	return true
 }
 
+// defaultHubTopInterfaces is how many of a hub VRF's interfaces get sampled
+// when a --devices file doesn't set hub_top_interfaces: enough to catch the
+// traffic that matters (a customer's own designated interface doesn't
+// always carry it) without polling every one of a hub VRF's potentially
+// dozens of unrelated interfaces every tick.
+const defaultHubTopInterfaces = 2
+
+// resolveHubTopInterfaces falls back to defaultHubTopInterfaces when a
+// --devices file left hub_top_interfaces unset (configured == nil).
+// configured == 0 is a deliberate, valid value — an operator explicitly
+// disabling hub-VRF interface sampling entirely — so it must be
+// distinguishable from "unset", which a plain int can't do on its own
+// (YAML's zero value for an omitted int field is indistinguishable from an
+// explicit 0). loadDeviceSpecs only sets a non-nil pointer when the
+// --devices file actually set hub_top_interfaces (mirroring the
+// nil-vs-explicit-empty convention resolveExcludeInterfacePrefixes already
+// uses for exclude_interface_prefixes). Negative values are rejected during
+// --devices file validation before this is ever called, so callers should
+// only ever pass nil or a non-negative pointer.
+func resolveHubTopInterfaces(configured *int) int {
+	if configured == nil {
+		return defaultHubTopInterfaces
+	}
+	return *configured
+}
+
+// interfaceUtilization pairs an interface name with its scored current
+// rate, as ranked by rankInterfacesByUtilization.
+type interfaceUtilization struct {
+	name  string
+	score float64
+}
+
+// rankInterfacesByUtilization queries each interface's current traffic rate
+// (the same command/parser used for per-tick polling, spec.InterfaceCommand
+// / spec.InterfaceParser — see collectTick in poll.go) and returns the
+// names sorted by combined input+output bps, busiest first. Used during hub
+// VRF discovery to pick which of a hub VRF's (potentially dozens of)
+// interfaces are worth polling on every subsequent tick, rather than all of
+// them.
+//
+// A query or parse failure for one interface scores it 0 (lowest priority)
+// rather than aborting discovery for the rest — an interface that's down or
+// briefly unreadable during onboarding shouldn't block ranking the ones
+// that did respond. Ties (including all-zero scores) are broken
+// alphabetically so the selection is deterministic across runs.
+func rankInterfacesByUtilization(client sessionExecutor, interfaces []string, parsers map[string]parserModule, spec collectionSpec) []string {
+	scored := make([]interfaceUtilization, 0, len(interfaces))
+	for _, name := range interfaces {
+		scored = append(scored, interfaceUtilization{name: name, score: queryInterfaceUtilization(client, name, parsers, spec)})
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].name < scored[j].name
+	})
+	names := make([]string, len(scored))
+	for i, s := range scored {
+		names[i] = s.name
+	}
+	return names
+}
+
+// queryInterfaceUtilization runs spec.InterfaceCommand for one interface
+// and returns its input+output rate in bits/sec, or 0 if the command fails,
+// the output doesn't parse, or the rate fields are missing/malformed.
+// Decoding is shared with the status line renderer via firstInterfaceStat
+// (status.go) so both interpret the parser's output shape identically.
+func queryInterfaceUtilization(client sessionExecutor, name string, parsers map[string]parserModule, spec collectionSpec) float64 {
+	output, err := client.Execute(fmt.Sprintf(spec.InterfaceCommand, name))
+	if err != nil {
+		return 0
+	}
+	parsed, err := parseOutputWithModule(output, spec.InterfaceParser, parsers)
+	if err != nil {
+		return 0
+	}
+	stat, ok := firstInterfaceStat(json.RawMessage(parsed))
+	if !ok {
+		return 0
+	}
+	inRate, _ := strconv.ParseFloat(stat["INPUT_RATE_BPS"], 64)
+	outRate, _ := strconv.ParseFloat(stat["OUTPUT_RATE_BPS"], 64)
+	return inRate + outRate
+}
+
 // autoDetectCustomerVRFs runs the full discovery flow for one device: finds
 // the customer VRF(s) whose default route is sourced from gatewayPrefix,
 // then for each one, the physical/sub-interfaces carrying its connected
@@ -220,17 +310,29 @@ func isAutoDiscoveredPollInterface(name string, excludePrefixes []string) bool {
 // error — callers can choose to proceed with that partial result rather
 // than discard a working VRF match over one failed follow-up command.
 //
-// Any hub VRF discoverCustomerVRFs also saw (matched the gateway heuristic
-// but is non-numeric, so excluded from vrfs/interfaces) is reported back via
-// hubVRFNotes as "<name> (<N> interfaces)" — a purely informational,
-// best-effort count so the operator can see it was recognized and
-// deliberately skipped rather than silently vanishing. Counting a hub VRF's
+// Every hub VRF discoverCustomerVRFs also saw (matched the gateway
+// heuristic but is non-numeric, so excluded from vrfs/interfaces) has its
+// own interfaces ranked by current utilization (rankInterfacesByUtilization)
+// independently, and the top hubTopInterfaces (see resolveHubTopInterfaces)
+// *of that hub VRF* — not device-wide across every hub VRF matched — are
+// added to the returned hubInterfaces. This is deliberate: each hub VRF is
+// its own shared entity, and capping device-wide would let one especially
+// busy hub VRF crowd out any visibility into a second, unrelated hub VRF on
+// the same device. A customer's own designated interface doesn't always
+// carry the traffic that matters during a change window, and the busiest
+// hub-VRF interfaces are a proxy for where it actually is. The full hub VRF
+// is deliberately never added to vrfs/interfaces: it's shared by dozens of
+// unrelated customers, so only a small, ranked sample of its interfaces is
+// worth polling on every tick, and its route table is never queried at all.
+// hubVRFNotes reports what was found/selected per hub VRF as "<name> (<N>
+// interfaces, sampling top <M>: ...)" so the operator can see what's being
+// watched rather than it vanishing silently. Ranking/counting a hub VRF's
 // interfaces is never fatal: if that lookup fails, the note just says
 // "interface count unavailable" instead of dropping the VRF from the list.
-func autoDetectCustomerVRFs(client sessionExecutor, gatewayPrefix string, parsers map[string]parserModule, excludePrefixes []string) (vrfs []string, interfaces []string, hubVRFNotes []string, err error) {
+func autoDetectCustomerVRFs(client sessionExecutor, gatewayPrefix string, parsers map[string]parserModule, excludePrefixes []string, spec collectionSpec, hubTopInterfaces int) (vrfs []string, interfaces []string, hubInterfaces []string, hubVRFNotes []string, err error) {
 	vrfs, hubVRFs, err := discoverCustomerVRFs(client, gatewayPrefix, parsers)
 	if err != nil && len(vrfs) == 0 {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	var errs []error
@@ -247,16 +349,24 @@ func autoDetectCustomerVRFs(client sessionExecutor, gatewayPrefix string, parser
 		allInterfaces = append(allInterfaces, vrfInterfaces...)
 	}
 
+	topN := hubTopInterfaces
+	var allHubInterfaces []string
 	for _, vrf := range hubVRFs {
-		hubInterfaces, ifaceErr := discoverConnectedInterfaces(client, vrf, parsers, excludePrefixes)
+		vrfInterfaces, ifaceErr := discoverConnectedInterfaces(client, vrf, parsers, excludePrefixes)
 		if ifaceErr != nil {
 			hubVRFNotes = append(hubVRFNotes, fmt.Sprintf("%s (interface count unavailable)", vrf))
 			continue
 		}
-		hubVRFNotes = append(hubVRFNotes, fmt.Sprintf("%s (%d interfaces)", vrf, len(hubInterfaces)))
+		ranked := rankInterfacesByUtilization(client, vrfInterfaces, parsers, spec)
+		top := ranked
+		if len(top) > topN {
+			top = top[:topN]
+		}
+		allHubInterfaces = append(allHubInterfaces, top...)
+		hubVRFNotes = append(hubVRFNotes, fmt.Sprintf("%s (%d interfaces, sampling top %d: %v)", vrf, len(vrfInterfaces), len(top), top))
 	}
 
-	return vrfs, dedupeSorted(allInterfaces), hubVRFNotes, errors.Join(errs...)
+	return vrfs, dedupeSorted(allInterfaces), dedupeSorted(allHubInterfaces), hubVRFNotes, errors.Join(errs...)
 }
 
 // applyAutoDetectResult runs auto-detection for one device and merges the
@@ -267,22 +377,23 @@ func autoDetectCustomerVRFs(client sessionExecutor, gatewayPrefix string, parser
 // onboardDevicesFromSpecs) — is calling it, so the two don't drift.
 // Discovered interfaces are returned separately (not merged with any
 // manually-specified ones) so the caller can keep them labeled as
-// customer-facing — see deviceSession's coreInterfaces/customerInterfaces
-// split in main.go.
-func applyAutoDetectResult(client sessionExecutor, gatewayPrefix string, parsers map[string]parserModule, excludePrefixes []string, host string, vrfs []string, out io.Writer) (mergedVRFs, customerInterfaces []string) {
-	discoveredVRFs, discoveredInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(client, gatewayPrefix, parsers, excludePrefixes)
+// customer-facing or hub-facing — see deviceSession's
+// coreInterfaces/customerInterfaces/hubInterfaces split in main.go.
+func applyAutoDetectResult(client sessionExecutor, gatewayPrefix string, parsers map[string]parserModule, excludePrefixes []string, spec collectionSpec, hubTopInterfaces int, host string, vrfs []string, out io.Writer) (mergedVRFs, customerInterfaces, hubInterfaces []string) {
+	discoveredVRFs, discoveredInterfaces, discoveredHubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(client, gatewayPrefix, parsers, excludePrefixes, spec, hubTopInterfaces)
 	if err != nil {
 		fmt.Fprintf(out, "auto-detection issue on %s: %v\n", host, err)
 	}
 	vrfs = dedupeSorted(append(vrfs, discoveredVRFs...))
 	customerInterfaces = dedupeSorted(discoveredInterfaces)
+	hubInterfaces = dedupeSorted(discoveredHubInterfaces)
 	fmt.Fprintf(out, "auto-detected on %s:\n", host)
 	fmt.Fprintf(out, "  VRFs (%d): %s\n", len(discoveredVRFs), formatListSummary(discoveredVRFs, 4))
 	fmt.Fprintf(out, "  customer interfaces (%d): %s\n", len(discoveredInterfaces), formatListSummary(discoveredInterfaces, 3))
 	if len(hubVRFNotes) > 0 {
-		fmt.Fprintf(out, "  skipped hub VRFs: %s\n", formatListSummary(hubVRFNotes, 3))
+		fmt.Fprintf(out, "  hub VRFs: %s\n", formatListSummary(hubVRFNotes, 3))
 	}
-	return vrfs, customerInterfaces
+	return vrfs, customerInterfaces, hubInterfaces
 }
 
 func formatListSummary(values []string, limit int) string {

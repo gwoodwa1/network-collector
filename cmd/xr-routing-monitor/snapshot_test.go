@@ -51,7 +51,7 @@ func TestCaptureSnapshotUsesRunLabelInFilename(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &deviceSession{hostname: "pe-router-1", vrfs: []string{"CUSTOMER-A-INTERNET"}, client: exec}
 
-	if err := captureSnapshot(session, "before", dir, "CRQXXX", map[string]parserModule{}, io.Discard); err != nil {
+	if err := captureSnapshot(session, "before", dir, "CRQXXX", time.Now().UTC(), map[string]parserModule{}, io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestCaptureSnapshotSkippedWhenNothingConfigured(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &deviceSession{hostname: "xr1", client: exec}
 
-	if err := captureSnapshot(session, "before", dir, "", map[string]parserModule{}, io.Discard); err != nil {
+	if err := captureSnapshot(session, "before", dir, "", time.Now().UTC(), map[string]parserModule{}, io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(exec.calls) != 0 {
@@ -94,7 +94,7 @@ func TestCaptureSnapshotWritesVRFAndNeighborSections(t *testing.T) {
 		client:    exec,
 	}
 
-	if err := captureSnapshot(session, "before", dir, "", map[string]parserModule{}, io.Discard); err != nil {
+	if err := captureSnapshot(session, "before", dir, "", time.Now().UTC(), map[string]parserModule{}, io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestCaptureSnapshotMultipleVRFsEachGetOwnSection(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A-INTERNET", "4000001"}, client: exec}
 
-	if err := captureSnapshot(session, "before", dir, "", map[string]parserModule{}, io.Discard); err != nil {
+	if err := captureSnapshot(session, "before", dir, "", time.Now().UTC(), map[string]parserModule{}, io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestCaptureSnapshotWritesConfirmationToProvidedWriter(t *testing.T) {
 	session := &deviceSession{hostname: "xr1", vrfs: []string{"CUSTOMER-A-INTERNET"}, client: exec}
 
 	var buf bytes.Buffer
-	if err := captureSnapshot(session, "before", dir, "", map[string]parserModule{}, &buf); err != nil {
+	if err := captureSnapshot(session, "before", dir, "", time.Now().UTC(), map[string]parserModule{}, &buf); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestCaptureSnapshotParsesRealNeighborRoutesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load embedded parsers: %v", err)
 	}
-	if err := captureSnapshot(session, "before", dir, "", parsers, io.Discard); err != nil {
+	if err := captureSnapshot(session, "before", dir, "", time.Now().UTC(), parsers, io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -269,7 +269,7 @@ func TestPollDeviceCapturesBeforeAndAfterSnapshots(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec)
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false)
 		close(done)
 	}()
 

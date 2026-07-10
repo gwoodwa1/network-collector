@@ -8,6 +8,7 @@ require (
 	github.com/openconfig/gnmi v0.14.1
 	github.com/openconfig/gnmic v0.46.0
 	github.com/openconfig/gnmic/pkg/api v0.1.11
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/scrapli/scrapligo v1.4.0
 	github.com/sirikothe/gotextfsm v1.1.0
 	github.com/spf13/viper v1.21.0
