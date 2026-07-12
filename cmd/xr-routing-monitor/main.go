@@ -23,6 +23,9 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
+// version is replaced by GoReleaser at build time.
+var version = "dev"
+
 func main() {
 	var interval time.Duration
 	var outputDir string
@@ -33,6 +36,7 @@ func main() {
 	var diffBeforePath, diffAfterPath string
 	var diffBeforeConfigPath, diffAfterConfigPath string
 	var captureRunningConfigEnabled bool
+	var showVersion bool
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "directory to write one <hostname>.jsonl file per device")
 	flag.StringVar(&parsersFile, "parsers", "", "path to an external parser module file; defaults to this binary's embedded parser definitions")
@@ -44,7 +48,12 @@ func main() {
 	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
 	flag.StringVar(&diffBeforeConfigPath, "diff-before-config", "", "path to a captured *-before-running-config.txt file; combine with -diff-after-config to print a running-config diff and exit, instead of connecting to any device")
 	flag.StringVar(&diffAfterConfigPath, "diff-after-config", "", "path to a captured *-after-running-config.txt file; combine with -diff-before-config")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
+	if showVersion {
+		fmt.Printf("xr-routing-monitor %s\n", version)
+		return
+	}
 
 	snapshotDiffRequested := diffBeforePath != "" || diffAfterPath != ""
 	configDiffRequested := diffBeforeConfigPath != "" || diffAfterConfigPath != ""

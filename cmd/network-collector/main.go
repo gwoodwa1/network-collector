@@ -23,6 +23,7 @@ func main() {
 	var showVersion bool
 	var cliFailOnFail bool
 	var cliCredsInput bool
+	var cliRSAToken bool
 	var prettyOut bool
 	var approveAll bool
 	var configFile string
@@ -43,6 +44,7 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
 	flag.BoolVar(&cliCredsInput, "creds_input", false, "prompt for username and password interactively")
+	flag.BoolVar(&cliRSAToken, "rsa-token", false, "use an interactive RSA passcode, reuse it for startup connections, and prompt again before reconnecting")
 	flag.BoolVar(&prettyOut, "pretty", false, "show a coloured human-readable run summary")
 	flag.BoolVar(&approveAll, "approve-all", false, "approve all manual workflow gates non-interactively")
 	flag.Parse()
@@ -108,10 +110,12 @@ func main() {
 	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(sshDevices) == 0 {
 		slog.Warn("inventory selection matched no SSH devices")
 	}
+	rsaToken := cliRSAToken || config.Credentials.RSAToken
 	deviceCredentials := make([]credentials.Credentials, len(sshDevices))
+	var rsaAuth *rsaTokenAuth
 	if len(sshDevices) > 0 {
 		providerType := config.Credentials.Provider
-		if cliCredsInput {
+		if cliCredsInput || rsaToken {
 			providerType = "interactive"
 		}
 		credentialFile := strings.TrimSpace(config.Credentials.File)
@@ -131,6 +135,9 @@ func main() {
 			}
 			for index := range deviceCredentials {
 				deviceCredentials[index] = shared
+			}
+			if rsaToken {
+				rsaAuth = newRSATokenAuth(shared.Username, os.Stdin, os.Stderr)
 			}
 		} else {
 			for index, device := range sshDevices {
@@ -229,7 +236,7 @@ func main() {
 			state.cond.Wait()
 		}
 		credential := deviceCredentials[index]
-		result := runSSHDevice(index, occurrence, device, config, credential.Username, credential.Password, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
+		result := runSSHDevice(index, occurrence, device, config, credential.Username, credential.Password, rsaAuth, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()

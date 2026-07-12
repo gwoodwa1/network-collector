@@ -4,6 +4,10 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+## [1.1.0] - 2026-07-12
+
+- Added the standalone IOS-XR routing observability monitor with interactive onboarding, route and interface polling, snapshots, running-configuration capture, and shutdown diffs.
+- Added RSA SecurID mode to Network Collector, including `PASSCODE:` challenge recognition, startup-token reuse across devices, persistent workflow sessions, and fresh human-in-the-loop passcode prompts before reconnecting.
 - Add bounded gNMI `once` and `stream` subscriptions with `target_defined`, `on_change`, and `sample` modes, available in playbook steps and the gNMI client.
 - Add asynchronous webhook and RFC 5424 syslog lifecycle-event sinks, including optional webhook HMAC signing.
 
@@ -56,3 +60,4 @@ First stable release.
 [1.0.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.0
 [1.0.1]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.1
 [1.0.2]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.2
+[1.1.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.1.0

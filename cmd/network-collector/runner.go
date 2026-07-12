@@ -13,7 +13,7 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/orchestrator"
 )
 
-func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
+func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, rsaAuth *rsaTokenAuth, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
 	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
@@ -61,12 +61,26 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
 
 	opts := sshOptionsForDevice(device, config.SSHSecurity)
+	if rsaAuth != nil {
+		opts = append(opts, ssh.WithPasswordPattern(rsaPasscodePromptPattern))
+	}
 	channelLog := io.Writer(sessionLog)
 	if !jsonOut && !pretty {
 		channelLog = io.MultiWriter(os.Stdout, sessionLog)
 	}
 	opts = append(opts, ssh.WithChannelLog(channelLog))
 
+	// A scheduled occurrence starts a new session because the previous one was
+	// closed. Never replay an old RSA passcode across that boundary.
+	if rsaAuth != nil && occurrence > 0 {
+		username, password, err = rsaAuth.prompt()
+		if err != nil {
+			result.failed = true
+			slog.Error("error reading fresh RSA passcode", "hostname", hostname, "ip", ip, "error", err)
+			_ = sessionLog.Close()
+			return result
+		}
+	}
 	client := ssh.NewClient(opts...)
 	if err := client.Connect(ip, username, password, deviceType); err != nil {
 		result.failed = true
@@ -89,6 +103,9 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
 		factsDefaults:  config.Facts,
 		events:         events,
+	}
+	if rsaAuth != nil {
+		ctx.reauthenticate = rsaAuth.prompt
 	}
 	if executeSteps(&ctx, &client, steps) {
 		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)

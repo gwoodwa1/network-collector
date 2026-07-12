@@ -205,6 +205,7 @@ type CredentialProviderConfig struct {
 	Provider string   `mapstructure:"provider" yaml:"provider"`
 	File     string   `mapstructure:"file" yaml:"file"`
 	Command  []string `mapstructure:"command" yaml:"command"`
+	RSAToken bool     `mapstructure:"rsa_token" yaml:"rsa_token"`
 }
 
 type FactsDefaultsConfig struct {
@@ -372,6 +373,7 @@ type stepExecutionContext struct {
 	artifactPrefix string
 	factsDefaults  FactsDefaultsConfig
 	events         *eventDispatcher
+	reauthenticate func() (string, string, error)
 }
 
 type approvalAnswer struct {

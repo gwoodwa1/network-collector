@@ -22,10 +22,26 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
+  - id: xr-routing-monitor
+    main: ./cmd/xr-routing-monitor
+    binary: xr-routing-monitor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
 archives:
   - id: network-collector
     ids:
       - network-collector
+      - xr-routing-monitor
     formats: [tar.gz]
     format_overrides:
       - goos: windows

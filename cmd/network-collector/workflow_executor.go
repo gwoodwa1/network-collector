@@ -936,7 +936,17 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 
 			*client = ssh.NewClient(ctx.opts...)
-			if err := (*client).Connect(ctx.ip, ctx.username, ctx.password, ctx.deviceType); err != nil {
+			username, password := ctx.username, ctx.password
+			if ctx.reauthenticate != nil {
+				username, password, err = ctx.reauthenticate()
+				if err != nil {
+					*ctx.runFailed = true
+					stopDeviceSteps = true
+					recordStepFailure(ctx, stepName, fmt.Sprintf("RSA re-authentication failed: %v", err))
+					break
+				}
+			}
+			if err := (*client).Connect(ctx.ip, username, password, ctx.deviceType); err != nil {
 				*ctx.runFailed = true
 				stopDeviceSteps = true
 				slog.Error("error reconnecting to SSH device after probe", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)

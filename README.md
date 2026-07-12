@@ -64,6 +64,19 @@ Alternatively, pass `--creds_input` to any of the built commands to be
     ./network-collector --creds_input
     ```
 
+For RSA SecurID authentication, use `--rsa-token` (or set
+`credentials.rsa_token: true`). The collector prompts once at startup and
+reuses that token while opening the selected devices, including devices
+started in parallel. Each device then keeps one SSH session for its complete
+workflow. If a workflow deliberately closes and reconnects the session, or a
+later scheduled occurrence needs a new session, the collector pauses for a
+fresh masked RSA passcode; it never silently retries with the old token.
+
+```yaml
+credentials:
+  rsa_token: true
+```
+
 For unattended or mixed-credential estates, select a credential provider in the playbook. Existing environment behavior remains the default:
 
 ```yaml
@@ -180,6 +193,7 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--json`: emit consolidated machine-readable JSON for all validation results (suppresses raw command output)
 - `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`, or if a device/step cannot run successfully
 - `--creds_input`: securely prompt for credentials instead of using `NET_USER` and `NET_PASSWORD`
+- `--rsa-token`: recognize RSA `PASSCODE:` challenges, cache the startup token across devices, and require fresh human input before reconnecting
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
