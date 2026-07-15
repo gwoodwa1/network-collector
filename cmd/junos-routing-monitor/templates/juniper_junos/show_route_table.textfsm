@@ -1,0 +1,8 @@
+Value Filldown NETWORK (\S+/\d+)
+Value Filldown PROTOCOL (\S+)
+Value Required NEXTHOP (\S+)
+
+Start
+  ^${NETWORK}\s+\*?\[${PROTOCOL}/\d+\]
+  ^\s*>?\s*to\s+${NEXTHOP}\s+via\s+\S+ -> Record
+  ^\s*>?\s*(?:Local\s+)?via\s+${NEXTHOP} -> Record

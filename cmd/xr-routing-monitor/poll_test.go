@@ -124,7 +124,9 @@ func TestCollectTickMultipleVRFsEachGetOwnRouteCommand(t *testing.T) {
 	wantCalls := []string{
 		"show bgp vpnv4 unicast summary",
 		"show route vrf CUSTOMER-A summary",
+		"show route vrf CUSTOMER-A 0.0.0.0/0 detail",
 		"show route vrf 4000001 summary",
+		"show route vrf 4000001 0.0.0.0/0 detail",
 	}
 	if len(exec.calls) != len(wantCalls) {
 		t.Fatalf("expected calls %v, got %v", wantCalls, exec.calls)
@@ -168,6 +170,7 @@ func TestCollectTickOnlyExecutesIdentifiedVRFAndInterfaces(t *testing.T) {
 	wantCalls := []string{
 		"show bgp vpnv4 unicast summary",
 		"show route vrf 4000001 summary",
+		"show route vrf 4000001 0.0.0.0/0 detail",
 		`show int BE45 | inc "rate|Description:"`,
 		`show int GigabitEthernet0/0/0/1.100 | inc "rate|Description:"`,
 	}

@@ -150,6 +150,8 @@ commands:
   bgp_parser: xr_bgp_vpnv4_summary
   route_command: show route vrf %s summary
   route_parser: xr_route_vrf_summary
+  default_route_command: show route vrf %s 0.0.0.0/0 detail
+  default_route_parser: xr_route_vrf_default_nexthop
   interface_command: 'show int %s | inc "rate|Description:"'
   interface_parser: xr_bundle_interface_stats
 ```
@@ -170,8 +172,8 @@ commands:
   the ones you set are overridden. Use this if your fleet needs a different
   command — e.g. a code variant without `show bgp vpnv4 unicast summary`, or
   a `... detail` variant — without patching Go source and rebuilding.
-  `route_command` and `interface_command` must each contain exactly one `%s`
-  placeholder for the VRF or interface name.
+  `route_command`, `default_route_command`, and `interface_command` must
+  each contain exactly one `%s` placeholder for the VRF or interface name.
 
 ### Auto-detecting a customer VRF
 
@@ -315,11 +317,12 @@ all omit the `<output-dir>/<change>/` prefix for brevity.
 
 ### Every `--interval`, per device (written to `<hostname>.jsonl`, one JSON line per tick)
 
-| Data point         | Command                                              | Condition                  |
-|---------------------|-------------------------------------------------------|-----------------------------|
-| BGP session health  | `show bgp vpnv4 unicast summary`                      | always                      |
-| Route table health  | `show route vrf <vrf> summary`                        | once per monitored VRF (manually specified, auto-detected, or both) |
-| Interface traffic   | `show int <iface> \| inc "rate\|Description:"`        | once per configured interface (Bundle-Ether, physical, or sub-interface — any interface name works) |
+| Data point                   | Command                                              | Condition                  |
+|-------------------------------|-------------------------------------------------------|-----------------------------|
+| BGP session health            | `show bgp vpnv4 unicast summary`                      | always                      |
+| Route table health            | `show route vrf <vrf> summary`                        | once per monitored VRF (manually specified, auto-detected, or both) |
+| Default route BGP next hop    | `show route vrf <vrf> 0.0.0.0/0 detail`               | once per monitored VRF |
+| Interface traffic             | `show int <iface> \| inc "rate\|Description:"`        | once per configured interface (Bundle-Ether, physical, or sub-interface — any interface name works) |
 
 BGP is collected on every tick and doubles as a liveness check: if the BGP
 command itself fails to execute, that device's session is assumed to have
@@ -327,13 +330,32 @@ dropped and polling for that device stops (the other devices keep going).
 Everything else falls back to raw text in the same JSON line if its parser
 lookup fails, so a tick is never silently lost.
 
+After Ctrl+C, the tool reads this run's samples from the `.jsonl` files and
+writes `interface-traffic.html` in the same artifact folder when it finds
+parseable interface-rate data. The report is self-contained and graphs
+input/output bps over time for each device/interface. Older samples already
+present in an accumulated `.jsonl` from a previous run against the same
+`--devices` file are ignored.
+
+The default route's BGP next hop (the originating PE, from the "Routing
+Descriptor Blocks" section of `show route vrf ... detail`) is tracked
+specifically to catch it moving to a different upstream during a change
+window. Unlike Junos's "extensive" output (which repeats the next hop once
+per route reflector that advertised the path — see
+[cmd/junos-routing-monitor](../junos-routing-monitor/README.md)), IOS-XR's
+`detail` output normally shows only the single installed/best path, so no
+route-reflector-count dedup is usually needed here — though a genuine ECMP
+default route with multiple `Routing Descriptor Blocks` entries is still
+deduped down to its distinct next-hop value(s) before being displayed or
+logged.
+
 #### Status line output
 
 Each tick also prints its status to stdout (and `session.log` — see below)
 as one header line plus an indented interface table, e.g.:
 
 ```
-22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383
+22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383, nexthop 172.16.252.37
   | VRF                 | Interface             | Inbound |  Outbound |
   | core                | BE45                  | 6.2Gbps |   4.1Gbps |
   | CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/8 |    0bps | 272.0Kbps |

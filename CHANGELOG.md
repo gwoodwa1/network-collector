@@ -4,6 +4,9 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Add `cmd/junos-routing-monitor`, a self-contained binary for watching Junos routers during a change window (BGP/routing-table/interface polling, per-table default-route BGP protocol-next-hop tracking, plus a before/after route snapshot diff), mirroring `cmd/xr-routing-monitor`'s workflow with Junos-native commands and parsers, validated against real `show bgp summary`/`show route summary table`/`show route table`/`show interfaces` output.
+- Add end-of-run `interface-traffic.html` reports for Junos and IOS-XR routing monitors, generated from current-run JSONL interface samples.
+
 ## [1.1.0] - 2026-07-12
 
 - Added the standalone IOS-XR routing observability monitor with interactive onboarding, route and interface polling, snapshots, running-configuration capture, and shutdown diffs.

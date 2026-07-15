@@ -9,49 +9,57 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
 
-// collectionSpec maps each data point to the IOS-XR command and parser
-// module used to collect it, built from real IOS-XR command output.
+// collectionSpec maps each data point to the Junos command and parser
+// module used to collect it, built from real Junos command output.
 type collectionSpec struct {
 	BGPCommand          string
 	BGPParser           string
-	RouteCommand        string // %s is replaced with the device's VRF name
+	RouteCommand        string // %s is replaced with the device's routing table name (e.g. "CUSTOMER-A.inet.0")
 	RouteParser         string
-	DefaultRouteCommand string // %s is replaced with the device's VRF name
+	DefaultRouteCommand string // %s is replaced with the device's routing table name
 	DefaultRouteParser  string
 	InterfaceCommand    string // %s is replaced with the interface name
 	InterfaceParser     string
 }
 
+// defaultSpec's RouteCommand/RouteParser deliberately take a full routing
+// table name (e.g. "CUSTOMER-A.inet.0", or "inet.0" for the default/master
+// instance) rather than a bare routing-instance name: Junos's "show route
+// summary table" keyword wants the table, not the instance, and there is no
+// universal instance-name-to-table-name mapping this tool could safely
+// invent (a routing-instance can carry more than one address family/table).
+// Requiring the operator to type the table name they actually want polled
+// keeps this a plain, honest fmt.Sprintf substitution — see
+// resolveCollectionSpec/commandOverrides for how a fleet with a different
+// convention can override this without a rebuild.
+//
+// DefaultRouteCommand/DefaultRouteParser separately track the default
+// route's BGP protocol next hop (the originating PE/RR, stable across
+// underlay rerouting) for each monitored table — distinct from
+// RouteCommand's route *count* summary. "0/0 exact" restricts the match to
+// the default route itself, not any more-specific prefix; "extensive" is
+// required for Junos to print the "Protocol next hop:" line at all.
 var defaultSpec = collectionSpec{
-	BGPCommand:   "show bgp vpnv4 unicast summary",
-	BGPParser:    "xr_bgp_vpnv4_summary",
-	RouteCommand: "show route vrf %s summary",
-	RouteParser:  "xr_route_vrf_summary",
-	// DefaultRouteCommand separately tracks the default route's BGP next
-	// hop (the originating PE, from the "<nexthop>, from <peer>" line under
-	// "Routing Descriptor Blocks") for each monitored VRF — distinct from
-	// RouteCommand's route *count* summary. Unlike Junos's "show route ...
-	// extensive" (which repeats the next hop once per route reflector that
-	// advertised the path), "show route vrf ... detail" already shows only
-	// the installed/best path(s), so no route-reflector-count dedup
-	// surprises are expected here — see summarizeDefaultRouteNextHops
-	// (status.go), which still dedupes defensively for genuine ECMP.
-	DefaultRouteCommand: "show route vrf %s 0.0.0.0/0 detail",
-	DefaultRouteParser:  "xr_route_vrf_default_nexthop",
-	InterfaceCommand:    `show int %s | inc "rate|Description:"`,
-	InterfaceParser:     "xr_bundle_interface_stats",
+	BGPCommand:          "show bgp summary",
+	BGPParser:           "junos_bgp_summary",
+	RouteCommand:        "show route summary table %s",
+	RouteParser:         "junos_route_table_summary",
+	DefaultRouteCommand: `show route table %s 0/0 exact extensive | match "Protocol next hop:"`,
+	DefaultRouteParser:  "junos_default_route_nexthop",
+	InterfaceCommand:    `show interfaces %s | match "Description:|Input :|Output:"`,
+	InterfaceParser:     "junos_interface_stats",
 }
 
 // resolveCollectionSpec merges any non-empty overrides from a --devices
 // file's top-level "commands:" section onto defaultSpec, so an operator can
-// point this tool at a different show-command or parser (e.g. a code
-// variant without "show bgp vpnv4 unicast summary", or one needing a
-// "... detail" variant) by editing the devices file instead of patching Go
-// source and rebuilding the static binary mid-engagement.
+// point this tool at a different show-command or parser by editing the
+// devices file instead of patching Go source and rebuilding the static
+// binary mid-engagement.
 func resolveCollectionSpec(overrides commandOverrides) collectionSpec {
 	spec := defaultSpec
 	if v := strings.TrimSpace(overrides.BGPCommand); v != "" {
@@ -85,7 +93,7 @@ type tickResult struct {
 	Timestamp            string                     `json:"timestamp"`
 	Hostname             string                     `json:"hostname"`
 	BGP                  json.RawMessage            `json:"bgp,omitempty"`
-	Routes               map[string]json.RawMessage `json:"routes,omitempty"`
+	Tables               map[string]json.RawMessage `json:"tables,omitempty"`
 	DefaultRouteNextHops map[string]json.RawMessage `json:"default_route_next_hops,omitempty"`
 	Interfaces           map[string]json.RawMessage `json:"interfaces,omitempty"`
 	Errors               []string                   `json:"errors,omitempty"`
@@ -95,9 +103,9 @@ type tickResult struct {
 // against the device's already-open session, until ctx is cancelled or the
 // session appears to have dropped (detected via the BGP command's Execute
 // error, since BGP is collected on every tick and acts as a session
-// liveness canary). It never reconnects: a dropped session requires a fresh
-// RSA passcode, which this loop cannot supply unattended.
-func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec, captureRunningConfigEnabled bool) {
+// liveness canary). It never reconnects: a dropped session requires fresh
+// credentials, which this loop cannot supply unattended.
+func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -125,7 +133,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 			slog.Error("failed to write tick result", "hostname", session.hostname, "error", err)
 		}
 		writer.Flush()
-		statusOut.printTick(result, sessionAlive, session.coreInterfaces, session.hubInterfaces)
+		statusOut.printTick(result, sessionAlive)
 		if !sessionAlive {
 			slog.Error("session appears to have dropped; stopping polling for this device", "hostname", session.hostname)
 		}
@@ -137,13 +145,6 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 	if err := captureSnapshot(session, "before", outputDir, runLabel, beforeCapturedAt, parsers, snapshotOut); err != nil {
 		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
 		beforeSnapshotOK = false
-	}
-	beforeConfigOK := true
-	if captureRunningConfigEnabled {
-		if err := captureRunningConfig(session, "before", outputDir, runLabel, beforeCapturedAt, snapshotOut); err != nil {
-			slog.Error("failed to capture before-change running-config", "hostname", session.hostname, "error", err)
-			beforeConfigOK = false
-		}
 	}
 
 	if !tick() {
@@ -161,14 +162,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
 				afterSnapshotOK = false
 			}
-			afterConfigOK := true
-			if captureRunningConfigEnabled {
-				if err := captureRunningConfig(session, "after", outputDir, runLabel, afterCapturedAt, snapshotOut); err != nil {
-					slog.Error("failed to capture after-change running-config", "hostname", session.hostname, "error", err)
-					afterConfigOK = false
-				}
-			}
-			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, captureRunningConfigEnabled, beforeSnapshotOK && afterSnapshotOK, beforeConfigOK && afterConfigOK, snapshotOut)
+			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, beforeSnapshotOK && afterSnapshotOK, snapshotOut)
 			return
 		case <-ticker.C:
 			if !tick() {
@@ -192,29 +186,36 @@ func collectTick(session *deviceSession, parsers map[string]parserModule, spec c
 	}
 	result.BGP = parseOrRaw(bgpOutput, spec.BGPParser, parsers, &result.Errors, "bgp")
 
-	if len(session.vrfs) > 0 {
-		result.Routes = map[string]json.RawMessage{}
+	if len(session.tables) > 0 {
+		result.Tables = map[string]json.RawMessage{}
 		result.DefaultRouteNextHops = map[string]json.RawMessage{}
-		for _, vrf := range session.vrfs {
-			routeOutput, err := session.client.Execute(fmt.Sprintf(spec.RouteCommand, vrf))
+		for _, table := range session.tables {
+			routeOutput, err := session.client.Execute(fmt.Sprintf(spec.RouteCommand, table))
 			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("route vrf %s: execute failed: %v", vrf, err))
+				result.Errors = append(result.Errors, fmt.Sprintf("route table %s: execute failed: %v", table, err))
 			} else {
-				result.Routes[vrf] = parseOrRaw(routeOutput, spec.RouteParser, parsers, &result.Errors, "route vrf "+vrf)
+				result.Tables[table] = parseOrRaw(routeOutput, spec.RouteParser, parsers, &result.Errors, "route table "+table)
 			}
 
-			nextHopOutput, err := session.client.Execute(fmt.Sprintf(spec.DefaultRouteCommand, vrf))
+			// Junos repeats "Protocol next hop: <ip>" once per route
+			// reflector that advertised the path (a fleet with 3 RRs
+			// commonly emits the same next hop 3 times over here) plus a
+			// second, more detailed line per path — see
+			// summarizeDefaultRouteNextHops (status.go), which dedupes
+			// down to the distinct next-hop value(s) rather than reporting
+			// a raw, RR-count-inflated total.
+			nextHopOutput, err := session.client.Execute(fmt.Sprintf(spec.DefaultRouteCommand, table))
 			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("default route next hop vrf %s: execute failed: %v", vrf, err))
+				result.Errors = append(result.Errors, fmt.Sprintf("default route next hop %s: execute failed: %v", table, err))
 				continue
 			}
-			result.DefaultRouteNextHops[vrf] = parseOrRaw(nextHopOutput, spec.DefaultRouteParser, parsers, &result.Errors, "default route next hop vrf "+vrf)
+			result.DefaultRouteNextHops[table] = parseOrRaw(nextHopOutput, spec.DefaultRouteParser, parsers, &result.Errors, "default route next hop "+table)
 		}
 	}
 
-	if interfaces := session.allInterfaces(); len(interfaces) > 0 {
+	if len(session.interfaces) > 0 {
 		result.Interfaces = map[string]json.RawMessage{}
-		for _, ifaceName := range interfaces {
+		for _, ifaceName := range session.interfaces {
 			ifaceOutput, err := session.client.Execute(fmt.Sprintf(spec.InterfaceCommand, ifaceName))
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("interface %s: execute failed: %v", ifaceName, err))
@@ -243,4 +244,23 @@ func parseOrRaw(output, parserName string, parsers map[string]parserModule, errs
 func sanitizeFilename(name string) string {
 	replacer := strings.NewReplacer("/", "_", ":", "_", " ", "_")
 	return replacer.Replace(strings.TrimSpace(name))
+}
+
+// dedupeSorted trims, drops empty entries from, deduplicates, and sorts
+// values. Used everywhere a table/interface/neighbor list gets merged from
+// more than one source (manually specified plus a legacy singular field),
+// so the same target never ends up polled twice.
+func dedupeSorted(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	var out []string
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -49,12 +49,14 @@ func (spec deviceSpec) vrfs() []string {
 // binary mid-engagement. Every field is optional; only non-empty ones
 // override defaultSpec (see resolveCollectionSpec).
 type commandOverrides struct {
-	BGPCommand       string `yaml:"bgp_command"`
-	BGPParser        string `yaml:"bgp_parser"`
-	RouteCommand     string `yaml:"route_command"`
-	RouteParser      string `yaml:"route_parser"`
-	InterfaceCommand string `yaml:"interface_command"`
-	InterfaceParser  string `yaml:"interface_parser"`
+	BGPCommand          string `yaml:"bgp_command"`
+	BGPParser           string `yaml:"bgp_parser"`
+	RouteCommand        string `yaml:"route_command"`
+	RouteParser         string `yaml:"route_parser"`
+	DefaultRouteCommand string `yaml:"default_route_command"`
+	DefaultRouteParser  string `yaml:"default_route_parser"`
+	InterfaceCommand    string `yaml:"interface_command"`
+	InterfaceParser     string `yaml:"interface_parser"`
 }
 
 type devicesDocument struct {
@@ -164,6 +166,9 @@ func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, g
 		}
 	}
 	if err := validateCommandTemplate(path, "route_command", doc.Commands.RouteCommand); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateCommandTemplate(path, "default_route_command", doc.Commands.DefaultRouteCommand); err != nil {
 		errs = append(errs, err)
 	}
 	if err := validateCommandTemplate(path, "interface_command", doc.Commands.InterfaceCommand); err != nil {

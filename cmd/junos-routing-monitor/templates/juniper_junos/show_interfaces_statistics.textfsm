@@ -1,0 +1,14 @@
+Value DESCRIPTION (.+?)
+Value INPUT_PACKETS (\d+)
+Value INPUT_RATE_PPS (\d+)
+Value INPUT_BYTES (\d+)
+Value INPUT_RATE_BPS (\d+)
+Value OUTPUT_PACKETS (\d+)
+Value OUTPUT_RATE_PPS (\d+)
+Value OUTPUT_BYTES (\d+)
+Value OUTPUT_RATE_BPS (\d+)
+
+Start
+  ^\s*Description:\s+${DESCRIPTION}\s*$$
+  ^\s*Input\s*:\s*${INPUT_PACKETS}\s+${INPUT_RATE_PPS}\s+${INPUT_BYTES}\s+${INPUT_RATE_BPS}\s*$$
+  ^\s*Output\s*:\s*${OUTPUT_PACKETS}\s+${OUTPUT_RATE_PPS}\s+${OUTPUT_BYTES}\s+${OUTPUT_RATE_BPS}\s*$$ -> Record

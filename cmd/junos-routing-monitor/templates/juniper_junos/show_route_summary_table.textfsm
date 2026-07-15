@@ -1,0 +1,9 @@
+Value Required TABLE (\S+)
+Value DESTINATIONS (\d+)
+Value TOTAL_ROUTES (\d+)
+Value ACTIVE_ROUTES (\d+)
+Value HOLDDOWN (\d+)
+Value HIDDEN (\d+)
+
+Start
+  ^${TABLE}:\s+${DESTINATIONS}\s+destinations,\s+${TOTAL_ROUTES}\s+routes\s+\(${ACTIVE_ROUTES}\s+active,\s+${HOLDDOWN}\s+holddown,\s+${HIDDEN}\s+hidden\)\s*$$ -> Record

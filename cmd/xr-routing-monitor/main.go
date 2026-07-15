@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/monitorreport"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
@@ -255,6 +256,11 @@ func main() {
 		}(session)
 	}
 	wg.Wait()
+	if reportPath, err := monitorreport.GenerateInterfaceReport(outputDir, startedAt); err != nil {
+		slog.Warn("failed to write interface traffic report", "error", err)
+	} else if reportPath != "" {
+		fmt.Fprintf(snapshotOut, "interface traffic report written to %s\n", reportPath)
+	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")
 }

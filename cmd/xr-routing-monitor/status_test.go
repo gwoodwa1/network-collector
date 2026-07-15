@@ -131,7 +131,7 @@ func TestSummarizeRoutesFindsTotal(t *testing.T) {
 		{"SOURCE": "static", "ROUTES": "15"},
 		{"SOURCE": "Total", "ROUTES": "383"},
 	}})
-	got := summarizeRoutes(map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw})
+	got := summarizeRoutes(map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw}, nil)
 	if got != "CUSTOMER-A-INTERNET routes 383" {
 		t.Fatalf("unexpected summary: %q", got)
 	}
@@ -141,7 +141,7 @@ func TestSummarizeRoutesMissingTotal(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"routes": []map[string]string{
 		{"SOURCE": "static", "ROUTES": "15"},
 	}})
-	got := summarizeRoutes(map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw})
+	got := summarizeRoutes(map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw}, nil)
 	if got != "CUSTOMER-A-INTERNET routes unavailable" {
 		t.Fatalf("unexpected summary: %q", got)
 	}
@@ -154,10 +154,46 @@ func TestSummarizeRoutesMissingTotal(t *testing.T) {
 func TestSummarizeRoutesMultipleSortedByName(t *testing.T) {
 	a, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"SOURCE": "Total", "ROUTES": "40"}}})
 	b, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"SOURCE": "Total", "ROUTES": "12"}}})
-	got := summarizeRoutes(map[string]json.RawMessage{"4000001": a, "CUSTOMER-A-INTERNET": b})
+	got := summarizeRoutes(map[string]json.RawMessage{"4000001": a, "CUSTOMER-A-INTERNET": b}, nil)
 	want := "4000001 routes 40 | CUSTOMER-A-INTERNET routes 12"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+// TestSummarizeRoutesAppendsDedupedNextHop proves the default-route next
+// hop clause is appended per VRF, and that repeated NEXTHOP values dedupe
+// to the distinct set rather than being reported as multiple separate next
+// hops.
+func TestSummarizeRoutesAppendsDedupedNextHop(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"SOURCE": "Total", "ROUTES": "383"}}})
+	nextHops, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
+		{"NEXTHOP": "172.16.252.37"},
+	}})
+	got := summarizeRoutes(
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw},
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": nextHops},
+	)
+	want := "CUSTOMER-A-INTERNET routes 383, nexthop 172.16.252.37"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestSummarizeDefaultRouteNextHopsMultipleDistinctValues(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
+		{"NEXTHOP": "172.16.252.38"},
+		{"NEXTHOP": "172.16.252.37"},
+		{"NEXTHOP": "172.16.252.37"},
+	}})
+	if got := summarizeDefaultRouteNextHops(raw); got != "172.16.252.37,172.16.252.38" {
+		t.Fatalf("expected sorted distinct next hops, got %q", got)
+	}
+}
+
+func TestSummarizeDefaultRouteNextHopsEmpty(t *testing.T) {
+	if got := summarizeDefaultRouteNextHops(nil); got != "" {
+		t.Fatalf("expected empty string for nil input (optional data, not \"unavailable\"), got %q", got)
 	}
 }
 

@@ -47,7 +47,7 @@ func newTickStatusPrinter(w io.Writer) *tickStatusPrinter {
 	return &tickStatusPrinter{w: w, seen: map[string]bool{}}
 }
 
-func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, coreInterfaces, hubInterfaces []string) {
+func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.seen[result.Hostname] {
@@ -55,16 +55,14 @@ func (p *tickStatusPrinter) printTick(result tickResult, sessionAlive bool, core
 		p.seen = map[string]bool{}
 	}
 	p.seen[result.Hostname] = true
-	printTickStatusLine(p.w, result, sessionAlive, coreInterfaces, hubInterfaces)
+	printTickStatusLine(p.w, result, sessionAlive)
 }
 
 // tickHeaderLine formats the fixed-width, single-line part of a tick's
 // status — timestamp, hostname, BGP, routes — with no per-interface detail.
 // This is what a device with many interfaces would otherwise blow well past
 // a terminal's column limit on, so interfaces are printed as their own
-// lines instead (see interfaceTableLines/printTickStatusLine); it's also what
-// tickStatusPrinter stores for the round-boundary recap, keeping that
-// compact regardless of how many interfaces a device has.
+// lines instead (see interfaceTableLines/printTickStatusLine).
 func tickHeaderLine(result tickResult, sessionAlive bool) string {
 	timestamp := time.Now().Format("15:04:05")
 	if !sessionAlive {
@@ -75,7 +73,7 @@ func tickHeaderLine(result tickResult, sessionAlive bool) string {
 	if bgp := summarizeBGP(result.BGP); bgp != "" {
 		fields = append(fields, fmt.Sprintf("%-11s", bgp))
 	}
-	if routes := summarizeRoutes(result.Routes, result.DefaultRouteNextHops); routes != "" {
+	if routes := summarizeRoutes(result.Tables, result.DefaultRouteNextHops); routes != "" {
 		fields = append(fields, routes)
 	}
 	return fmt.Sprintf("%s | %s", timestamp, strings.Join(fields, " | "))
@@ -88,16 +86,23 @@ func tickHeaderLine(result tickResult, sessionAlive bool) string {
 // are only ever appended, never overwritten or rewritten in place, so
 // scrollback (and a session.log redirect) stays a faithful, replayable
 // record either way.
-func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool, coreInterfaces, hubInterfaces []string) {
+func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool) {
 	fmt.Fprintln(out, tickHeaderLine(result, sessionAlive))
 	if !sessionAlive {
 		return
 	}
-	for _, line := range interfaceTableLines(result, coreInterfaces, hubInterfaces) {
+	for _, line := range interfaceTableLines(result) {
 		fmt.Fprintln(out, "  "+line)
 	}
 }
 
+// summarizeBGP reports "BGP N/M up" from a junos_bgp_summary result. Unlike
+// IOS-XR's "show bgp vpnv4 unicast summary" (which shows a digit prefix
+// count in the state column for an established session and the state name
+// otherwise), Junos's "show bgp summary" always shows a state word in that
+// column — "Establ" for an established session, "Active"/"Connect"/"Idle"/
+// etc. otherwise — so up/down here is a literal STATE comparison instead of
+// a digits-vs-word heuristic.
 func summarizeBGP(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -110,34 +115,33 @@ func summarizeBGP(raw json.RawMessage) string {
 	}
 	up := 0
 	for _, neighbor := range decoded.Neighbors {
-		if isDigits(neighbor["STATE_OR_PFXRCD"]) {
+		if strings.EqualFold(neighbor["STATE"], "Establ") {
 			up++
 		}
 	}
 	return fmt.Sprintf("BGP %d/%d up", up, len(decoded.Neighbors))
 }
 
-// summarizeRoutes formats one "<vrf> routes <N>[, nexthop <ip>[,<ip>...]]"
-// segment per monitored VRF, sorted by VRF name and joined like
-// summarizeInterfaces, since a device can now monitor more than one VRF
-// (manually specified, auto-detected, or both). The nexthop clause is
-// omitted for a VRF with no default-route-next-hop data (nextHops is nil,
-// or has no entry for that VRF) rather than printed as "unavailable" —
-// unlike the route count, this is optional per-VRF data, not always
+// summarizeRoutes formats one "<table> routes <N>[, nexthop <ip>[,<ip>...]]"
+// segment per monitored routing table, sorted by table name and joined,
+// since a device can monitor more than one table. The nexthop clause is
+// omitted for a table with no default-route-next-hop data (nextHops is nil,
+// or has no entry for that table) rather than printed as "unavailable" —
+// unlike the route count, this is optional per-table data, not always
 // collected.
-func summarizeRoutes(routes, nextHops map[string]json.RawMessage) string {
-	if len(routes) == 0 {
+func summarizeRoutes(tables, nextHops map[string]json.RawMessage) string {
+	if len(tables) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(routes))
-	for name := range routes {
+	names := make([]string, 0, len(tables))
+	for name := range tables {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		part := name + " " + summarizeRouteTotal(routes[name])
+		part := name + " " + summarizeRouteTotal(tables[name])
 		if nextHop := summarizeDefaultRouteNextHops(nextHops[name]); nextHop != "" {
 			part += ", nexthop " + nextHop
 		}
@@ -153,28 +157,27 @@ func summarizeRouteTotal(raw json.RawMessage) string {
 	var decoded struct {
 		Routes []map[string]string `json:"routes"`
 	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := json.Unmarshal(raw, &decoded); err != nil || len(decoded.Routes) == 0 {
 		return "routes unavailable"
 	}
-	for _, record := range decoded.Routes {
-		if record["SOURCE"] == "Total" {
-			return "routes " + record["ROUTES"]
-		}
+	total := decoded.Routes[0]["TOTAL_ROUTES"]
+	if total == "" {
+		return "routes unavailable"
 	}
-	return "routes unavailable"
+	return "routes " + total
 }
 
-// summarizeDefaultRouteNextHops decodes an xr_route_vrf_default_nexthop
+// summarizeDefaultRouteNextHops decodes a junos_default_route_nexthop
 // result ({"next_hops": [...]}) and returns the distinct NEXTHOP values,
-// sorted and comma-joined via the same dedupeSorted (discover.go) every
-// other VRF/interface list in this binary uses. "show route vrf ...
-// 0.0.0.0/0 detail" normally shows only the installed/best path (unlike
-// Junos's "extensive" output, which repeats the next hop once per route
-// reflector that advertised the path), but a genuine ECMP default route can
-// still list more than one "Routing Descriptor Blocks" entry with
-// different next hops — dedup here makes both cases behave the same way.
-// Returns "" (not "unavailable") for empty/unparseable input, matching the
-// "optional per-VRF data" contract summarizeRoutes relies on.
+// sorted and comma-joined via the same dedupeSorted (poll.go) every other
+// table/interface list in this binary uses. Junos's "show route ... 0/0
+// exact extensive" repeats "Protocol next hop: <ip>" once per route
+// reflector that advertised the path (a fleet with 3 RRs commonly emits the
+// same value 3 times) plus a second, more detailed line per path — deduping
+// here is what turns that RR-count-inflated raw line count into "the
+// default route's next hop(s) actually changed" signal. Returns "" (not
+// "unavailable") for empty/unparseable input, matching the "optional
+// per-table data" contract summarizeRoutes relies on.
 func summarizeDefaultRouteNextHops(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -193,7 +196,6 @@ func summarizeDefaultRouteNextHops(raw json.RawMessage) string {
 }
 
 type interfaceStatusRow struct {
-	vrf      string
 	iface    string
 	inbound  string
 	outbound string
@@ -201,29 +203,18 @@ type interfaceStatusRow struct {
 
 // interfaceTableLines formats polled interfaces as an ASCII table:
 //
-//	| VRF | Interface | Inbound | Outbound |
+//	| Interface | Inbound | Outbound |
 //
-// Core interfaces are manually supplied uplinks rather than VRF-specific
-// targets, so their VRF column is "core". Hub-sampled interfaces (the
-// busiest of a shared hub VRF, picked during discovery — see
-// rankInterfacesByUtilization) show "hub", since they don't belong to any
-// single monitored VRF. Auto-discovered customer interfaces show the single
-// monitored VRF when there is exactly one; with multiple monitored VRFs,
-// the current tick result has no interface-to-VRF mapping, so the column
-// uses "customer" rather than inventing precision. Only interfaces with
-// non-zero inbound or outbound rates are expanded into rows; idle 0/0
-// interfaces are counted in a summary line instead.
-func interfaceTableLines(result tickResult, coreInterfaces, hubInterfaces []string) []string {
+// Unlike xr-routing-monitor, there is no per-interface routing-table label
+// here: this tool's MVP has no auto-detection linking an interface back to
+// the table it serves (see cmd/xr-routing-monitor's VRF auto-detect for
+// that feature; it is not yet ported — every interface is simply whatever
+// the operator typed at onboarding). Only interfaces with non-zero inbound
+// or outbound rates are expanded into rows; idle 0/0 interfaces are counted
+// in a summary line instead.
+func interfaceTableLines(result tickResult) []string {
 	if len(result.Interfaces) == 0 {
 		return nil
-	}
-	core := make(map[string]bool, len(coreInterfaces))
-	for _, name := range coreInterfaces {
-		core[name] = true
-	}
-	hub := make(map[string]bool, len(hubInterfaces))
-	for _, name := range hubInterfaces {
-		hub[name] = true
 	}
 
 	names := make([]string, 0, len(result.Interfaces))
@@ -232,11 +223,10 @@ func interfaceTableLines(result tickResult, coreInterfaces, hubInterfaces []stri
 	}
 	sort.Strings(names)
 
-	routeNames := sortedRouteNames(result.Routes)
 	rows := make([]interfaceStatusRow, 0, len(names))
 	hiddenZeroRate := 0
 	for _, name := range names {
-		row := interfaceStatusRow{vrf: interfaceVRFLabel(name, core, hub, routeNames), iface: name, inbound: "?", outbound: "?"}
+		row := interfaceStatusRow{iface: name, inbound: "?", outbound: "?"}
 		stat, ok := firstInterfaceStat(result.Interfaces[name])
 		if !ok {
 			rows = append(rows, row)
@@ -258,15 +248,13 @@ func interfaceTableLines(result tickResult, coreInterfaces, hubInterfaces []stri
 }
 
 // firstInterfaceStat decodes one interface's {"stats": [...]} result (as
-// produced by parseOrRaw with the xr_bundle_interface_stats parser, see
+// produced by parseOrRaw with the junos_interface_stats parser, see
 // poll.go/collectTick) and returns its first record, or ok=false if the
-// JSON doesn't decode or has no records. Shared by the status line
-// renderer here and hub-VRF interface ranking (queryInterfaceUtilization in
-// discover.go) — and, via monitorreport.FirstInterfaceStat, with
-// cmd/junos-routing-monitor and internal/monitorreport's own report
-// generator too, so all three interpret the same parser output shape the
-// same way instead of each keeping its own copy of the decode struct to
-// drift out of sync if that shape ever changes.
+// JSON doesn't decode or has no records. Delegates to
+// monitorreport.FirstInterfaceStat so this tool, cmd/xr-routing-monitor,
+// and internal/monitorreport's own report generator all interpret the same
+// parser output shape from one definition instead of three independent
+// copies that could silently drift apart.
 func firstInterfaceStat(raw json.RawMessage) (map[string]string, bool) {
 	return monitorreport.FirstInterfaceStat(raw)
 }
@@ -276,48 +264,24 @@ func isZeroRate(raw string) bool {
 	return err == nil && value == 0
 }
 
-func sortedRouteNames(routes map[string]json.RawMessage) []string {
-	names := make([]string, 0, len(routes))
-	for name := range routes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-func interfaceVRFLabel(name string, core, hub map[string]bool, routeNames []string) string {
-	if core[name] {
-		return "core"
-	}
-	if hub[name] {
-		return "hub"
-	}
-	if len(routeNames) == 1 {
-		return routeNames[0]
-	}
-	return "customer"
-}
-
 func formatInterfaceTable(rows []interfaceStatusRow) []string {
 	if len(rows) == 0 {
 		return nil
 	}
-	vrfWidth := len("VRF")
 	ifaceWidth := len("Interface")
 	inWidth := len("Inbound")
 	outWidth := len("Outbound")
 	for _, row := range rows {
-		vrfWidth = max(vrfWidth, len(row.vrf))
 		ifaceWidth = max(ifaceWidth, len(row.iface))
 		inWidth = max(inWidth, len(row.inbound))
 		outWidth = max(outWidth, len(row.outbound))
 	}
 
-	rowFormat := fmt.Sprintf("| %%-%ds | %%-%ds | %%%ds | %%%ds |", vrfWidth, ifaceWidth, inWidth, outWidth)
+	rowFormat := fmt.Sprintf("| %%-%ds | %%%ds | %%%ds |", ifaceWidth, inWidth, outWidth)
 	lines := make([]string, 0, len(rows)+1)
-	lines = append(lines, fmt.Sprintf(rowFormat, "VRF", "Interface", "Inbound", "Outbound"))
+	lines = append(lines, fmt.Sprintf(rowFormat, "Interface", "Inbound", "Outbound"))
 	for _, row := range rows {
-		lines = append(lines, fmt.Sprintf(rowFormat, row.vrf, row.iface, row.inbound, row.outbound))
+		lines = append(lines, fmt.Sprintf(rowFormat, row.iface, row.inbound, row.outbound))
 	}
 	return lines
 }
@@ -337,16 +301,4 @@ func formatBitsPerSecond(raw string) string {
 	default:
 		return fmt.Sprintf("%.0fbps", value)
 	}
-}
-
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }

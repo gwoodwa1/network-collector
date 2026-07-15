@@ -1,0 +1,4 @@
+Value Required NEXTHOP (\S+)
+
+Start
+  ^\s*${NEXTHOP},\s+from\s+\S+\s*$$ -> Record

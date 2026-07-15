@@ -1,0 +1,7 @@
+Value Required NEIGHBOR ([0-9a-fA-F:.]+)
+Value REMOTE_AS (\d+)
+Value LASTUPDOWN ((?:\d+w\d+d|\d+d)\s+\d+:\d+(?::\d+)?|\d+:\d+(?::\d+)?|\d+)
+Value STATE (\S+)
+
+Start
+  ^${NEIGHBOR}\s+${REMOTE_AS}\s+\d+\s+\d+\s+\d+\s+\d+\s+${LASTUPDOWN}\s+${STATE}.*$$ -> Record

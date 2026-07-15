@@ -1,0 +1,4 @@
+Value Required NEXTHOP (\S+)
+
+Start
+  ^\s*Protocol next hop:\s+${NEXTHOP} -> Record

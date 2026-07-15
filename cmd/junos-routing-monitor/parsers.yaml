@@ -1,0 +1,25 @@
+parsers:
+  junos_bgp_summary:
+    type: textfsm
+    template: templates/juniper_junos/show_bgp_summary.textfsm
+    root: neighbors
+  junos_route_table_summary:
+    type: textfsm
+    template: templates/juniper_junos/show_route_summary_table.textfsm
+    root: routes
+  junos_interface_stats:
+    type: textfsm
+    template: templates/juniper_junos/show_interfaces_statistics.textfsm
+    root: stats
+  junos_route_table:
+    type: textfsm
+    template: templates/juniper_junos/show_route_table.textfsm
+    root: routes
+  junos_bgp_neighbor_routes:
+    type: textfsm
+    template: templates/juniper_junos/show_route_protocol_bgp_neighbor.textfsm
+    root: routes
+  junos_default_route_nexthop:
+    type: textfsm
+    template: templates/juniper_junos/show_route_protocol_nexthop.textfsm
+    root: next_hops

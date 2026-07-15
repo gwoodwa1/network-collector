@@ -1,0 +1,6 @@
+Value Required NETWORK (\S+/\d+)
+Value NEXTHOP (\S+)
+Value PATH (.*)
+
+Start
+  ^\*?\s*${NETWORK}\s+${NEXTHOP}\s+${PATH}\s*$$ -> Record

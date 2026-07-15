@@ -27,3 +27,7 @@ parsers:
     type: textfsm
     template: templates/cisco_xr/show_vrf_detail_interfaces.textfsm
     root: interfaces
+  xr_route_vrf_default_nexthop:
+    type: textfsm
+    template: templates/cisco_xr/show_route_vrf_default_detail.textfsm
+    root: next_hops

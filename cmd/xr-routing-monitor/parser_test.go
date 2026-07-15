@@ -223,12 +223,48 @@ Processed 3 prefixes, 5 paths
 RP/0/RSP0/CPU0:pe-router-1#
 `
 
+// sampleRouteVRFDefaultDetailOutput is trimmed from real "show route vrf
+// <vrf> 0.0.0.0/0 detail" output (self ASN and RD replaced with
+// documentation-safe values). Unlike Junos's "extensive" output, this
+// shows only the installed/best path under "Routing Descriptor Blocks" —
+// no route-reflector-count duplication to dedupe here, though
+// summarizeDefaultRouteNextHops still dedupes defensively for a genuine
+// ECMP default route with more than one block.
+const sampleRouteVRFDefaultDetailOutput = `RP/0/RSP0/CPU0:pe-router-1#show route vrf CUSTOMER-A-INTERNET 0.0.0.0/0 detail
+Tue Jul 14 22:38:05.106 BST
+
+Routing entry for 0.0.0.0/0
+  Known via "bgp 65020", distance 200, metric 0, candidate default path
+  Tag 64581, type internal
+  Installed Jul 11 21:01:13.524 for 3d01h
+  Routing Descriptor Blocks
+    172.16.252.37, from 172.16.252.46
+      Nexthop in Vrf: "default", Table: "default", IPv4 Unicast, Table Id: 0xe0000000
+      Route metric is 0, Wt is 1
+      Label: 0xbf (191)
+      Tunnel ID: None
+      Binding Label: None
+      Extended communities count: 0
+      Source RD attributes: 0x0000:65000:100000
+      NHID: 0x0 (Ref: 0)
+  Route version is 0x21 (33)
+  No local label
+  IP Precedence: Not Set
+  QoS Group ID: Not Set
+  Flow-tag: Not Set
+  Fwd-class: Not Set
+  Route Priority: RIB_PRIORITY_RECURSIVE (12) SVD Type RIB_SVD_TYPE_REMOTE
+  Download Priority 3, Download Version 167019
+  No advertising protos.
+RP/0/RSP0/CPU0:pe-router-1#
+`
+
 func TestEmbeddedParsersLoad(t *testing.T) {
 	parsers, err := loadDefaultParsers()
 	if err != nil {
 		t.Fatalf("failed to load embedded parsers: %v", err)
 	}
-	for _, name := range []string{"xr_bgp_vpnv4_summary", "xr_route_vrf_summary", "xr_bundle_interface_stats", "xr_bgp_route_table", "xr_bgp_advertised_routes"} {
+	for _, name := range []string{"xr_bgp_vpnv4_summary", "xr_route_vrf_summary", "xr_bundle_interface_stats", "xr_bgp_route_table", "xr_bgp_advertised_routes", "xr_route_vrf_default_nexthop"} {
 		if _, ok := parsers[name]; !ok {
 			t.Fatalf("expected embedded parser %q to be defined", name)
 		}
@@ -488,6 +524,33 @@ func TestParseRouteVRFSummary(t *testing.T) {
 	}
 	if bySource["Total"]["ROUTES"] != "385" || bySource["Total"]["MEMORY"] != "87984" {
 		t.Fatalf("unexpected total record: %+v", bySource["Total"])
+	}
+}
+
+func TestParseRouteVRFDefaultDetail(t *testing.T) {
+	parsers, err := loadDefaultParsers()
+	if err != nil {
+		t.Fatalf("failed to load embedded parsers: %v", err)
+	}
+	parsed, err := parseOutputWithModule(sampleRouteVRFDefaultDetailOutput, "xr_route_vrf_default_nexthop", parsers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded struct {
+		NextHops []map[string]string `json:"next_hops"`
+	}
+	if err := json.Unmarshal([]byte(parsed), &decoded); err != nil {
+		t.Fatalf("failed to decode parsed output: %v", err)
+	}
+	if len(decoded.NextHops) != 1 {
+		t.Fatalf("expected 1 record (single installed path, no route-reflector duplication like Junos), got %d: %s", len(decoded.NextHops), parsed)
+	}
+	if decoded.NextHops[0]["NEXTHOP"] != "172.16.252.37" {
+		t.Fatalf("expected next hop %q, got %q", "172.16.252.37", decoded.NextHops[0]["NEXTHOP"])
+	}
+
+	if got := summarizeDefaultRouteNextHops(json.RawMessage(parsed)); got != "172.16.252.37" {
+		t.Fatalf("expected summarizeDefaultRouteNextHops %q, got %q", "172.16.252.37", got)
 	}
 }
 

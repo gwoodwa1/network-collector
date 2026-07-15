@@ -9,6 +9,8 @@ SECURITY_AUDIT.md
 /xr-routing-monitor
 /cmd/xr-routing-monitor/xr-routing-monitor
 /bin/xr-routing-monitor
+/junos-routing-monitor
+/cmd/junos-routing-monitor/junos-routing-monitor
 /dist/
 /artifacts/
 /session_logs/

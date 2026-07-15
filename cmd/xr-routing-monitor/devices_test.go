@@ -284,6 +284,7 @@ func TestLoadDeviceSpecsCommandOverridesRequireOnePlaceholder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.yaml")
 	content := `commands:
   route_command: show route vrf summary
+  default_route_command: show route vrf 0.0.0.0/0 detail
   interface_command: show interface %s %s
 
 devices:
@@ -298,6 +299,9 @@ devices:
 	}
 	if !strings.Contains(err.Error(), "commands.route_command") {
 		t.Fatalf("expected route_command validation error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "commands.default_route_command") {
+		t.Fatalf("expected default_route_command validation error, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "commands.interface_command") {
 		t.Fatalf("expected interface_command validation error, got: %v", err)
