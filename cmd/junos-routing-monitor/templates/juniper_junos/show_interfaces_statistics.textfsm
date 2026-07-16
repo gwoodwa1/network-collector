@@ -12,3 +12,7 @@ Start
   ^\s*Description:\s+${DESCRIPTION}\s*$$
   ^\s*Input\s*:\s*${INPUT_PACKETS}\s+${INPUT_RATE_PPS}\s+${INPUT_BYTES}\s+${INPUT_RATE_BPS}\s*$$
   ^\s*Output\s*:\s*${OUTPUT_PACKETS}\s+${OUTPUT_RATE_PPS}\s+${OUTPUT_BYTES}\s+${OUTPUT_RATE_BPS}\s*$$ -> Record
+  ^\s*Input\s+bytes\s*:\s*${INPUT_BYTES}\s+${INPUT_RATE_BPS}\s+bps\s*$$
+  ^\s*Output\s+bytes\s*:\s*${OUTPUT_BYTES}\s+${OUTPUT_RATE_BPS}\s+bps\s*$$
+  ^\s*Input\s+packets\s*:\s*${INPUT_PACKETS}\s+${INPUT_RATE_PPS}\s+pps\s*$$
+  ^\s*Output\s+packets\s*:\s*${OUTPUT_PACKETS}\s+${OUTPUT_RATE_PPS}\s+pps\s*$$ -> Record

@@ -41,7 +41,7 @@ func TestDiscoverCustomerVRFsFiltersByGatewayPrefix(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: sampleRouteVRFAllGatewaysOutput,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "10.99.99.", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "192.0.2.", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,16 +71,16 @@ func TestDiscoverCustomerVRFsExcludesNonNumericHubVRF(t *testing.T) {
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: 1115679
-Gateway of last resort is 172.16.242.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.58 to network 0.0.0.0
 VRF: RI-INTERNET-ENTERPRISE
-Gateway of last resort is 172.16.242.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.58 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{responses: map[string]string{
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: output,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "172.16.242.", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "192.0.2.", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,16 +104,16 @@ func TestDiscoverCustomerVRFsAcceptsVColonServiceNamingStyle(t *testing.T) {
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: V10:CDN
-Gateway of last resort is 172.16.242.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.58 to network 0.0.0.0
 VRF: RI-INTERNET-ENTERPRISE
-Gateway of last resort is 172.16.242.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.58 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{responses: map[string]string{
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: output,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "172.16.242.", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "192.0.2.", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDiscoverCustomerVRFsNarrowerPrefixMatchesOneGateway(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: sampleRouteVRFAllGatewaysOutput,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "10.99.99.51", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "192.0.2.57", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestDiscoverCustomerVRFsNoMatchingGateway(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: sampleRouteVRFAllGatewaysOutput,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "10.0.0.", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "203.0.113.", parsers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,14 +203,14 @@ func TestDiscoverCustomerVRFsReportsMalformedMatchingVRFName(t *testing.T) {
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: CUSTOMER-A|whoami
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{responses: map[string]string{
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: output,
 	}}
 
-	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "10.99.99.", parsers)
+	vrfs, hubVRFs, err := discoverCustomerVRFs(exec, "192.0.2.", parsers)
 	if err == nil {
 		t.Fatal("expected an error for the malformed matching VRF name")
 	}
@@ -232,9 +232,9 @@ func TestAutoDetectCustomerVRFsKeepsValidMatchesWhenAnotherMatchedVRFIsMalformed
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: CUSTOMER-A|whoami
-Gateway of last resort is 10.99.99.50 to network 0.0.0.0
+Gateway of last resort is 192.0.2.59 to network 0.0.0.0
 VRF: 5000002
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{responses: map[string]string{
@@ -242,7 +242,7 @@ RP/0/RSP0/CPU0:pe-router-1#
 		`show vrf 5000002 ipv4 detail`:                           "",
 	}}
 
-	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "192.0.2.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected a non-nil warning error for the malformed matching VRF")
 	}
@@ -275,7 +275,7 @@ func TestDiscoverCustomerVRFsPropagatesExecuteFailure(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: fmt.Errorf("channel closed"),
 	}}
 
-	if _, _, err := discoverCustomerVRFs(exec, "10.99.99.", parsers); err == nil {
+	if _, _, err := discoverCustomerVRFs(exec, "192.0.2.", parsers); err == nil {
 		t.Fatal("expected an error when the discovery command fails")
 	}
 }
@@ -324,10 +324,10 @@ func TestDiscoverConnectedInterfacesIgnoresRoutingTableLeaking(t *testing.T) {
 		t.Fatalf("failed to load embedded parsers: %v", err)
 	}
 	decoyRoutingTable := `RP/0/RSP0/CPU0:pe-router-1#show route vrf 4000001 | inc "is directly connected"
-C    10.9.208.2/31 is directly connected, 1y51w, TenGigE0/7/0/18.37930079
-L    10.9.208.2/32 is directly connected, 1y51w, TenGigE0/7/0/18.37930079
-C    10.9.208.4/31 is directly connected, 1y21w, TenGigE0/7/0/21.37510079
-L    10.9.208.4/32 is directly connected, 1y21w, TenGigE0/7/0/21.37510079
+C    192.0.2.60/31 is directly connected, 1y51w, TenGigE0/7/0/18.37930079
+L    192.0.2.60/32 is directly connected, 1y51w, TenGigE0/7/0/18.37930079
+C    192.0.2.61/31 is directly connected, 1y21w, TenGigE0/7/0/21.37510079
+L    192.0.2.61/32 is directly connected, 1y21w, TenGigE0/7/0/21.37510079
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{responses: map[string]string{
@@ -435,7 +435,7 @@ func TestAutoDetectCustomerVRFsCombinesVRFsAndInterfaces(t *testing.T) {
 		`show vrf CUSTOMER-A-INTERNET ipv4 detail`:               "",
 	}}
 
-	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "192.0.2.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -478,9 +478,9 @@ func TestAutoDetectCustomerVRFsKeepsPartialResultsOnInterfaceFailure(t *testing.
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: 4000001
-Gateway of last resort is 10.99.99.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.56 to network 0.0.0.0
 VRF: 5000002
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	exec := &discoverFakeExecutor{
@@ -493,7 +493,7 @@ RP/0/RSP0/CPU0:pe-router-1#
 		},
 	}
 
-	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	vrfs, interfaces, _, _, err := autoDetectCustomerVRFs(exec, "192.0.2.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected a non-nil error summarizing the failed VRF's interface lookup")
 	}
@@ -523,7 +523,7 @@ func TestAutoDetectCustomerVRFsPropagatesVRFDiscoveryFailure(t *testing.T) {
 		`show route vrf all | inc "Gateway of last resort|VRF:"`: fmt.Errorf("channel closed"),
 	}}
 
-	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "192.0.2.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 	if err == nil {
 		t.Fatal("expected an error when VRF discovery itself fails")
 	}

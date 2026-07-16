@@ -26,22 +26,22 @@ bgp.rtarget.0
 inet.0
                      103          6          0          0          0          0
 Peer                     AS      InPkt     OutPkt    OutQ   Flaps Last Up/Dwn State|#Active/Received/Accepted/Damped...
-10.0.0.1               1111          0          0       0       0 12w6d 2:57:25 Idle
-10.0.10.50            65400     280604     202341       0       0 12w6d 2:45:31 Establ
+192.0.2.13               1111          0          0       0       0 12w6d 2:57:25 Idle
+192.0.2.14            65400     280604     202341       0       0 12w6d 2:45:31 Establ
   RI-CUSTOMER-A-100001.inet.0: 1/1/1/0
-10.0.17.85            64582    1151509    1151468       0       1 8w6d 6:05:16 Establ
+192.0.2.15            64582    1151509    1151468       0       1 8w6d 6:05:16 Establ
   RI-CUSTOMER-B-100002.inet.0: 34/34/34/0
-10.10.10.11           65001          0          0       0       1 11w4d 16:07:05 Connect
-10.28.0.2             65514       3730       3725       0       6  1d 6:06:03 Establ
+192.0.2.16           65001          0          0       0       1 11w4d 16:07:05 Connect
+192.0.2.17             65514       3730       3725       0       6  1d 6:06:03 Establ
   RI-CUSTOMER-C-100003.inet.0: 5/9/8/0
-10.116.0.6            65020      14829      15245       0       7  5d 3:21:53 Establ
+192.0.2.18            65020      14829      15245       0       7  5d 3:21:53 Establ
   RI-CUSTOMER-D-100004.inet.0: 11/11/11/0
-10.130.144.8     4200000001      86606      141889       0       1 3w5d 3:40:29 Establ
+192.0.2.19     4200000001      86606      141889       0       1 3w5d 3:40:29 Establ
   RI-CUSTOMER-D-100004.inet.0: 1/3/1/0
-10.173.255.247        65021      18912      19467       0     676 6d 13:32:27 Establ
+192.0.2.20        65021      18912      19467       0     676 6d 13:32:27 Establ
   RI-CUSTOMER-E-100005.inet.0: 8/8/8/0
-10.9.0.2              65526          0          0       0       0 12w6d 2:57:25 Connect
-172.16.0.1            65022      59594      57599       0       4 2w5d 9:35:56 Establ
+192.0.2.21              65526          0          0       0       0 12w6d 2:57:25 Connect
+192.0.2.22            65022      59594      57599       0       4 2w5d 9:35:56 Establ
   bgp.l3vpn.0: 99/179/126/0
   RI-CUSTOMER-F-100006.inet.0: 10/38/20/0
 `
@@ -55,7 +55,7 @@ Peer                     AS      InPkt     OutPkt    OutQ   Flaps Last Up/Dwn St
 // here to prove the preamble/breakdown lines are harmlessly skipped rather
 // than mismatched into the wrong fields.
 const sampleRouteSummaryTableOutput = `Autonomous system number: 65000
-Router ID: 172.16.252.37
+Router ID: 192.0.2.23
 
 Highwater Mark (All time / Time averaged watermark)
     RIB unique destination routes: 41853 at 2026-04-16 11:08:40 / 39158
@@ -98,44 +98,68 @@ const sampleRouteTableOutput = `RI-CUSTOMER-H-300002.inet.0: 21 destinations, 24
 @ = Routing Use Only, # = Forwarding Use Only
 + = Active Route, - = Last Active, * = Both
 
-0.0.0.0/0          *[BGP/170] 3d 00:19:50, MED 0, localpref 150, from 172.16.252.43
+0.0.0.0/0          *[BGP/170] 3d 00:19:50, MED 0, localpref 150, from 192.0.2.24
                       AS path: 65030 I, validation-state: unverified
-                    >  to 172.16.254.43 via ae0.0, Push 160
-                    [BGP/170] 3d 00:19:50, MED 0, localpref 150, from 172.16.252.44
+                    >  to 192.0.2.25 via ae0.0, Push 160
+                    [BGP/170] 3d 00:19:50, MED 0, localpref 150, from 192.0.2.26
                       AS path: 65030 I, validation-state: unverified
-                    >  to 172.16.254.43 via ae0.0, Push 160
-                    [BGP/170] 3d 00:19:50, MED 0, localpref 150, from 172.16.252.45
+                    >  to 192.0.2.25 via ae0.0, Push 160
+                    [BGP/170] 3d 00:19:50, MED 0, localpref 150, from 192.0.2.27
                       AS path: 65030 I, validation-state: unverified
-                    >  to 172.16.254.43 via ae0.0, Push 160
+                    >  to 192.0.2.25 via ae0.0, Push 160
                     [Static/4294967295] 12w6d 03:00:41
                        Discard
-10.0.17.72/29      *[Static/5] 12w6d 02:52:20
-                    >  to 10.0.110.233 via irb.360
-10.0.110.160/32    *[BGP/170] 10w6d 11:29:57, localpref 100
+192.0.2.28/29      *[Static/5] 12w6d 02:52:20
+                    >  to 192.0.2.29 via irb.360
+192.0.2.30/32    *[BGP/170] 10w6d 11:29:57, localpref 100
                       AS path: 65376 I, validation-state: unverified
-                    >  to 10.232.236.17 via ae72.360
-10.0.110.192/29    *[Direct/0] 12w6d 02:48:06
+                    >  to 192.0.2.31 via ae72.360
+192.0.2.32/29    *[Direct/0] 12w6d 02:48:06
                     >  via irb.363
-10.0.110.193/32    *[Local/0] 12w6d 02:44:50
+192.0.2.33/32    *[Local/0] 12w6d 02:44:50
                        Local via irb.363
-10.0.110.228/30    *[Direct/0] 3w4d 09:44:38
+192.0.2.34/30    *[Direct/0] 3w4d 09:44:38
                     >  via ge-128/0/45.369
-10.0.110.229/32    *[Local/0] 3w4d 09:44:38
+192.0.2.35/32    *[Local/0] 3w4d 09:44:38
                        Local via ge-128/0/45.369
 198.51.100.34/32   *[BGP/170] 2w5d 06:19:39, localpref 100
                       AS path: 65376 I, validation-state: unverified
-                    >  to 10.232.236.17 via ae72.360
+                    >  to 192.0.2.31 via ae72.360
+`
+
+// sampleIRBInterfaceOutput mirrors real "show interfaces irb.NNN extensive"
+// output after the command's match filter (description and Input*/Output*
+// lines survive; section headers don't), sanitized like the rest of this
+// file. irb units don't produce the compact "Input :" statistics table at
+// all — instead they emit Traffic/Local/Transit statistics sections, where
+// only the Transit lines carry a trailing "N bps"/"N pps" rate. The parser
+// must key on that trailing rate so the rate-less Traffic/Local lines
+// (byte/packet totals only) are skipped rather than recorded as bogus
+// rate samples.
+const sampleIRBInterfaceOutput = `    Description: ## L3 gateway for Customer G - RI-CUSTOMER-G-300001-VPLS-340 ##
+     Input  bytes  :          92034094469
+     Output bytes  :          97578573695
+     Input  packets:            225484216
+     Output packets:            349912983
+     Input  bytes  :             93121647
+     Output bytes  :            111558160
+     Input  packets:              1335047
+     Output packets:              1350453
+     Input  bytes  :          91940972822                71616 bps
+     Output bytes  :          97467015535                74560 bps
+     Input  packets:            224149169                   34 pps
+     Output packets:            348562530                   28 pps
 `
 
 const sampleReceiveProtocolOutput = `inet.0: 100 destinations, 105 routes (100 active, 0 holddown, 0 hidden)
   Prefix                  Nexthop              MED     Lclpref    AS path
-* 10.0.0.0/24             10.1.1.1                            100        65000 65001 I
-  10.0.2.0/24             10.1.1.1                              100        65000 I
+* 192.0.2.12/24             192.0.2.36                            100        65000 65001 I
+  192.0.2.37/24             192.0.2.36                              100        65000 I
 `
 
 const sampleAdvertisingProtocolOutput = `inet.0: 100 destinations, 105 routes (100 active, 0 holddown, 0 hidden)
   Prefix                  Nexthop              MED     Lclpref    AS path
-* 10.0.0.0/24             Self                                    65000 I
+* 192.0.2.12/24             Self                                    65000 I
 `
 
 // sampleDefaultRouteNextHopOutput mirrors real "show route table <table>
@@ -146,17 +170,17 @@ const sampleAdvertisingProtocolOutput = `inet.0: 100 destinations, 105 routes (1
 // advertised the path, all carrying the same next-hop value here. The
 // parser captures every occurrence; summarizeDefaultRouteNextHops
 // (status.go) is what dedupes this down to the distinct value(s).
-const sampleDefaultRouteNextHopOutput = `                Protocol next hop: 172.16.252.38
+const sampleDefaultRouteNextHopOutput = `                Protocol next hop: 192.0.2.9
 
-                        Protocol next hop: 172.16.252.38 Metric: 1 ResolvState: Resolved
+                        Protocol next hop: 192.0.2.9 Metric: 1 ResolvState: Resolved
 
-                Protocol next hop: 172.16.252.38
+                Protocol next hop: 192.0.2.9
 
-                        Protocol next hop: 172.16.252.38 Metric: 1 ResolvState: Resolved
+                        Protocol next hop: 192.0.2.9 Metric: 1 ResolvState: Resolved
 
-                Protocol next hop: 172.16.252.38
+                Protocol next hop: 192.0.2.9
 
-                        Protocol next hop: 172.16.252.38 Metric: 1 ResolvState: Resolved
+                        Protocol next hop: 192.0.2.9 Metric: 1 ResolvState: Resolved
 `
 
 func TestEmbeddedParsersLoad(t *testing.T) {
@@ -195,9 +219,9 @@ func TestParseBGPSummary(t *testing.T) {
 		byNeighbor[n["NEIGHBOR"]] = n
 	}
 
-	weeksAndDays, ok := byNeighbor["10.0.10.50"]
+	weeksAndDays, ok := byNeighbor["192.0.2.14"]
 	if !ok {
-		t.Fatalf("expected a record for 10.0.10.50, got: %+v", byNeighbor)
+		t.Fatalf("expected a record for 192.0.2.14, got: %+v", byNeighbor)
 	}
 	if weeksAndDays["LASTUPDOWN"] != "12w6d 2:45:31" {
 		t.Fatalf("expected weeks+days Last Up/Dwn %q, got %q", "12w6d 2:45:31", weeksAndDays["LASTUPDOWN"])
@@ -206,36 +230,36 @@ func TestParseBGPSummary(t *testing.T) {
 		t.Fatalf("expected state Establ, got %q", weeksAndDays["STATE"])
 	}
 
-	plainDay, ok := byNeighbor["10.28.0.2"]
+	plainDay, ok := byNeighbor["192.0.2.17"]
 	if !ok {
-		t.Fatalf("expected a record for 10.28.0.2, got: %+v", byNeighbor)
+		t.Fatalf("expected a record for 192.0.2.17, got: %+v", byNeighbor)
 	}
 	if plainDay["LASTUPDOWN"] != "1d 6:06:03" {
 		t.Fatalf("expected plain-day Last Up/Dwn %q, got %q", "1d 6:06:03", plainDay["LASTUPDOWN"])
 	}
 
-	fourByteASN, ok := byNeighbor["10.130.144.8"]
+	fourByteASN, ok := byNeighbor["192.0.2.19"]
 	if !ok {
-		t.Fatalf("expected a record for 10.130.144.8, got: %+v", byNeighbor)
+		t.Fatalf("expected a record for 192.0.2.19, got: %+v", byNeighbor)
 	}
 	if fourByteASN["REMOTE_AS"] != "4200000001" {
 		t.Fatalf("expected 4-byte ASN %q, got %q", "4200000001", fourByteASN["REMOTE_AS"])
 	}
 
-	idle, ok := byNeighbor["10.0.0.1"]
+	idle, ok := byNeighbor["192.0.2.13"]
 	if !ok || idle["STATE"] != "Idle" {
-		t.Fatalf("expected 10.0.0.1 state Idle, got: %+v", idle)
+		t.Fatalf("expected 192.0.2.13 state Idle, got: %+v", idle)
 	}
-	connect, ok := byNeighbor["10.10.10.11"]
+	connect, ok := byNeighbor["192.0.2.16"]
 	if !ok || connect["STATE"] != "Connect" {
-		t.Fatalf("expected 10.10.10.11 state Connect, got: %+v", connect)
+		t.Fatalf("expected 192.0.2.16 state Connect, got: %+v", connect)
 	}
 
 	// summarizeBGP (status.go) is the actual up/down counter this tool
 	// relies on at runtime; exercise it directly against this same fixture
 	// so the two never silently disagree about what "up" means. 7 Establ
-	// (10.0.10.50, 10.0.17.85, 10.28.0.2, 10.116.0.6, 10.130.144.8,
-	// 10.173.255.247, 172.16.163.1) of 10 total.
+	// (192.0.2.14, 192.0.2.15, 192.0.2.17, 192.0.2.18, 192.0.2.19,
+	// 192.0.2.20, 192.0.2.38) of 10 total.
 	if got := summarizeBGP(json.RawMessage(parsed)); got != "BGP 7/10 up" {
 		t.Fatalf("expected summarizeBGP %q, got %q", "BGP 7/10 up", got)
 	}
@@ -305,6 +329,45 @@ func TestParseInterfaceStats(t *testing.T) {
 	}
 }
 
+func TestParseIRBInterfaceStats(t *testing.T) {
+	parsers, err := loadDefaultParsers()
+	if err != nil {
+		t.Fatalf("failed to load embedded parsers: %v", err)
+	}
+	parsed, err := parseOutputWithModule(sampleIRBInterfaceOutput, "junos_interface_stats", parsers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var decoded struct {
+		Stats []map[string]string `json:"stats"`
+	}
+	if err := json.Unmarshal([]byte(parsed), &decoded); err != nil {
+		t.Fatalf("failed to decode parsed output: %v", err)
+	}
+	// Exactly one record: only the Transit statistics lines carry a
+	// trailing rate — the Traffic and Local statistics lines (totals only,
+	// no bps/pps) must not have produced records of their own.
+	if len(decoded.Stats) != 1 {
+		t.Fatalf("expected exactly 1 record (Transit statistics only), got %d: %s", len(decoded.Stats), parsed)
+	}
+	record := decoded.Stats[0]
+	if record["DESCRIPTION"] != "## L3 gateway for Customer G - RI-CUSTOMER-G-300001-VPLS-340 ##" {
+		t.Fatalf("unexpected description: %q", record["DESCRIPTION"])
+	}
+	if record["INPUT_RATE_BPS"] != "71616" || record["OUTPUT_RATE_BPS"] != "74560" {
+		t.Fatalf("expected the Transit section's rates (not Traffic/Local totals), got: %+v", record)
+	}
+	if record["INPUT_RATE_PPS"] != "34" || record["OUTPUT_RATE_PPS"] != "28" {
+		t.Fatalf("unexpected packet rates: %+v", record)
+	}
+	if record["INPUT_BYTES"] != "91940972822" || record["OUTPUT_BYTES"] != "97467015535" {
+		t.Fatalf("expected the Transit byte totals, got: %+v", record)
+	}
+	if record["INPUT_PACKETS"] != "224149169" || record["OUTPUT_PACKETS"] != "348562530" {
+		t.Fatalf("expected the Transit packet totals, got: %+v", record)
+	}
+}
+
 func TestParseRouteTable(t *testing.T) {
 	parsers, err := loadDefaultParsers()
 	if err != nil {
@@ -340,8 +403,8 @@ func TestParseRouteTable(t *testing.T) {
 	for _, r := range defaultPrefixPaths {
 		// The trailing ", Push 160" MPLS label annotation on each of these
 		// lines must not prevent the next hop from matching.
-		if r["NEXTHOP"] != "172.16.254.43" {
-			t.Fatalf("expected next hop 172.16.254.43 despite trailing MPLS label annotation, got: %+v", r)
+		if r["NEXTHOP"] != "192.0.2.25" {
+			t.Fatalf("expected next hop 192.0.2.25 despite trailing MPLS label annotation, got: %+v", r)
 		}
 		// PROTOCOL must be Filldown: only the first ECMP path's line repeats
 		// the network prefix and protocol ("0.0.0.0/0 *[BGP/170]..."); paths
@@ -359,23 +422,23 @@ func TestParseRouteTable(t *testing.T) {
 			byNetwork[r["NETWORK"]] = r
 		}
 	}
-	static, ok := byNetwork["10.0.17.72/29"]
-	if !ok || static["NEXTHOP"] != "10.0.110.233" || static["PROTOCOL"] != "Static" {
+	static, ok := byNetwork["192.0.2.28/29"]
+	if !ok || static["NEXTHOP"] != "192.0.2.29" || static["PROTOCOL"] != "Static" {
 		t.Fatalf("unexpected static record: %+v", static)
 	}
-	direct, ok := byNetwork["10.0.110.192/29"]
+	direct, ok := byNetwork["192.0.2.32/29"]
 	if !ok || direct["NEXTHOP"] != "irb.363" {
 		t.Fatalf("expected Direct route next hop irb.363 (interface, no IP), got: %+v", direct)
 	}
-	local, ok := byNetwork["10.0.110.193/32"]
+	local, ok := byNetwork["192.0.2.33/32"]
 	if !ok || local["NEXTHOP"] != "irb.363" || local["PROTOCOL"] != "Local" {
 		t.Fatalf("expected Local route (\"Local via <iface>\" wording, not bare \"via\") next hop irb.363, got: %+v", local)
 	}
-	directSlashIface, ok := byNetwork["10.0.110.228/30"]
+	directSlashIface, ok := byNetwork["192.0.2.34/30"]
 	if !ok || directSlashIface["NEXTHOP"] != "ge-128/0/45.369" {
 		t.Fatalf("expected Direct route next hop ge-128/0/45.369 (interface name containing '/'), got: %+v", directSlashIface)
 	}
-	localSlashIface, ok := byNetwork["10.0.110.229/32"]
+	localSlashIface, ok := byNetwork["192.0.2.35/32"]
 	if !ok || localSlashIface["NEXTHOP"] != "ge-128/0/45.369" {
 		t.Fatalf("expected Local route next hop ge-128/0/45.369, got: %+v", localSlashIface)
 	}
@@ -416,11 +479,11 @@ func TestParseBGPNeighborRoutesReceiveProtocol(t *testing.T) {
 	for _, r := range decoded.Routes {
 		byNetwork[r["NETWORK"]] = r
 	}
-	if byNetwork["10.0.0.0/24"]["NEXTHOP"] != "10.1.1.1" {
-		t.Fatalf("unexpected record for 10.0.0.0/24: %+v", byNetwork["10.0.0.0/24"])
+	if byNetwork["192.0.2.12/24"]["NEXTHOP"] != "192.0.2.36" {
+		t.Fatalf("unexpected record for 192.0.2.12/24: %+v", byNetwork["192.0.2.12/24"])
 	}
-	if byNetwork["10.0.2.0/24"]["NEXTHOP"] != "10.1.1.1" {
-		t.Fatalf("unexpected record for 10.0.2.0/24: %+v", byNetwork["10.0.2.0/24"])
+	if byNetwork["192.0.2.37/24"]["NEXTHOP"] != "192.0.2.36" {
+		t.Fatalf("unexpected record for 192.0.2.37/24: %+v", byNetwork["192.0.2.37/24"])
 	}
 }
 
@@ -469,12 +532,12 @@ func TestParseDefaultRouteNextHop(t *testing.T) {
 		t.Fatalf("expected 6 raw records, got %d: %s", len(decoded.NextHops), parsed)
 	}
 	for _, r := range decoded.NextHops {
-		if r["NEXTHOP"] != "172.16.252.38" {
-			t.Fatalf("expected every record's next hop to be 172.16.252.38 (including the detailed line with trailing Metric/ResolvState text), got: %+v", r)
+		if r["NEXTHOP"] != "192.0.2.9" {
+			t.Fatalf("expected every record's next hop to be 192.0.2.9 (including the detailed line with trailing Metric/ResolvState text), got: %+v", r)
 		}
 	}
 
-	if got := summarizeDefaultRouteNextHops(json.RawMessage(parsed)); got != "172.16.252.38" {
-		t.Fatalf("expected summarizeDefaultRouteNextHops to dedupe to a single value %q, got %q", "172.16.252.38", got)
+	if got := summarizeDefaultRouteNextHops(json.RawMessage(parsed)); got != "192.0.2.9" {
+		t.Fatalf("expected summarizeDefaultRouteNextHops to dedupe to a single value %q, got %q", "192.0.2.9", got)
 	}
 }

@@ -88,10 +88,10 @@ credentials:
 Credential files must not be accessible by group or other users (`chmod 600`) and support a default plus named profiles:
 
 ```yaml
-default: {username: automation, password: default-secret}
+default: {username: automation, password: replace-me}
 profiles:
-  datacenter: {username: eos-automation, password: eos-secret}
-  edge: {username: junos-automation, password: junos-secret}
+  datacenter: {username: eos-automation, password: replace-me}
+  edge: {username: junos-automation, password: replace-me}
 ```
 
 Assign a profile to an inventory host with `credential_profile: datacenter`. The `command` provider executes an argument array and expects one JSON object on stdout containing `username` and `password`; it receives `NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE` environment variables:
@@ -164,7 +164,7 @@ Example usage for SSH:
 
 ```go
 client := ssh.NewClient()
-if err := client.Connect("192.168.1.10", "admin", "password", "cisco_nxos"); err != nil {
+if err := client.Connect("192.0.2.1", "admin", "password", "cisco_nxos"); err != nil {
     log.Fatal(err)
 }
 output, err := client.Execute("show version")
@@ -229,7 +229,7 @@ fail_on_fail: false
 
 restconf:
   - hostname: device-eos-02
-    ip: 192.168.15.7
+    ip: 192.0.2.2
     port: 3333
     skip_tls: true
     method: GET
@@ -237,35 +237,35 @@ restconf:
 
 gnmi:
   - hostname: device-eos-01
-    ip: 192.168.16.10:6030
+    ip: 192.0.2.3:6030
     skip_tls: true
     path: /interfaces/interface/subinterfaces/subinterface/state/description
 
 ssh:
   - hostname: device-nxos-01
-    ip: 192.168.16.1
+    ip: 192.0.2.4
     type: cisco_nxos
     cmd: show ip route
   - hostname: device-qfx-01
-    ip: 192.168.16.1
+    ip: 192.0.2.4
     type: juniper_junos
     cmd: show route
 
 http:
   - hostname: device-eos-08
-    ip: 192.168.16.8
+    ip: 192.0.2.5
     type: arista_eos
     cmd: show version
     skip_tls: true
   - hostname: device-eos-03
-    ip: 192.168.16.9
+    ip: 192.0.2.6
     type: arista_eos
     cmd: show ip route
     skip_tls: true
 
 netconf:
   - hostname: device-eos-05
-    ip: 192.168.16.7
+    ip: 192.0.2.7
     type: arista_eos
     rpc: |
       <get>
@@ -277,7 +277,7 @@ netconf:
         </filter>
       </get>
   - hostname: device-eos
-    ip: 192.168.15.8
+    ip: 192.0.2.8
     type: arista_eos
     rpc: |
       <get>

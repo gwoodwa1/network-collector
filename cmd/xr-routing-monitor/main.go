@@ -390,7 +390,7 @@ func promptAutoDetectVRF(reader *bufio.Reader, host, defaultGatewayPrefix string
 	if strings.TrimSpace(defaultGatewayPrefix) != "" {
 		return true, strings.TrimSpace(defaultGatewayPrefix)
 	}
-	fmt.Fprintf(os.Stderr, "Customer-facing gateway prefix on %s (e.g. 10.99.99.): ", host)
+	fmt.Fprintf(os.Stderr, "Customer-facing gateway prefix on %s (e.g. 192.0.2.): ", host)
 	prefixLine, _ := reader.ReadString('\n')
 	gatewayPrefix = strings.TrimSpace(prefixLine)
 	if gatewayPrefix == "" {

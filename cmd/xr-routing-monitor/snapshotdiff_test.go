@@ -25,32 +25,32 @@ func routeRecordsRaw(t *testing.T, records ...map[string]string) json.RawMessage
 // actually changed.
 func TestDiffRouteRecordsIdentifiesAddedRemovedAndChanged(t *testing.T) {
 	before := []map[string]string{
-		{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"},
-		{"NETWORK": "10.0.1.0/24", "NEXTHOP": "192.0.2.1"},
-		{"NETWORK": "10.0.2.0/24", "NEXTHOP": "192.0.2.1"},
+		{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"},
+		{"NETWORK": "192.0.2.39/24", "NEXTHOP": "192.0.2.1"},
+		{"NETWORK": "192.0.2.37/24", "NEXTHOP": "192.0.2.1"},
 	}
 	after := []map[string]string{
 		// same three prefixes, reordered, one with a new next hop, plus one
 		// new prefix and one withdrawn.
-		{"NETWORK": "10.0.2.0/24", "NEXTHOP": "192.0.2.1"},
-		{"NETWORK": "10.0.1.0/24", "NEXTHOP": "192.0.2.2"},
-		{"NETWORK": "10.0.3.0/24", "NEXTHOP": "192.0.2.1"},
+		{"NETWORK": "192.0.2.37/24", "NEXTHOP": "192.0.2.1"},
+		{"NETWORK": "192.0.2.39/24", "NEXTHOP": "192.0.2.2"},
+		{"NETWORK": "192.0.2.40/24", "NEXTHOP": "192.0.2.1"},
 	}
 
 	added, removed, changed := diffRouteRecords(before, after)
-	if strings.Join(added, ",") != "10.0.3.0/24" {
-		t.Fatalf("expected only 10.0.3.0/24 added, got %v", added)
+	if strings.Join(added, ",") != "192.0.2.40/24" {
+		t.Fatalf("expected only 192.0.2.40/24 added, got %v", added)
 	}
-	if strings.Join(removed, ",") != "10.0.0.0/24" {
-		t.Fatalf("expected only 10.0.0.0/24 removed, got %v", removed)
+	if strings.Join(removed, ",") != "192.0.2.12/24" {
+		t.Fatalf("expected only 192.0.2.12/24 removed, got %v", removed)
 	}
-	if len(changed) != 1 || !strings.Contains(changed[0], "10.0.1.0/24") || !strings.Contains(changed[0], "192.0.2.1 -> 192.0.2.2") {
-		t.Fatalf("expected 10.0.1.0/24's next hop change reported, got %v", changed)
+	if len(changed) != 1 || !strings.Contains(changed[0], "192.0.2.39/24") || !strings.Contains(changed[0], "192.0.2.1 -> 192.0.2.2") {
+		t.Fatalf("expected 192.0.2.39/24's next hop change reported, got %v", changed)
 	}
 }
 
 func TestDiffRouteRecordsNoChanges(t *testing.T) {
-	records := []map[string]string{{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}}
+	records := []map[string]string{{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}}
 	added, removed, changed := diffRouteRecords(records, records)
 	if len(added) != 0 || len(removed) != 0 || len(changed) != 0 {
 		t.Fatalf("expected no diff for identical route lists, got added=%v removed=%v changed=%v", added, removed, changed)
@@ -131,8 +131,8 @@ func TestDiffSnapshotsSkipsNeighborSectionOnCaptureFailureInsteadOfFalseDiff(t *
 		Hostname: "pe-router-1",
 		Neighbors: map[string]neighborSnapshot{
 			"198.51.100.1": {Routes: routeRecordsRaw(t,
-				map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"},
-				map[string]string{"NETWORK": "10.0.1.0/24", "NEXTHOP": "192.0.2.1"},
+				map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"},
+				map[string]string{"NETWORK": "192.0.2.39/24", "NEXTHOP": "192.0.2.1"},
 			)},
 		},
 	}
@@ -162,24 +162,24 @@ func TestDiffSnapshotsCoversVRFsAndNeighbors(t *testing.T) {
 	before := snapshotResult{
 		Hostname: "pe-router-1",
 		VRFTables: map[string]json.RawMessage{
-			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}),
 		},
 		Neighbors: map[string]neighborSnapshot{
 			"198.51.100.1": {
-				Routes:           routeRecordsRaw(t, map[string]string{"NETWORK": "10.1.0.0/24", "NEXTHOP": "192.0.2.1"}),
-				AdvertisedRoutes: routeRecordsRaw(t, map[string]string{"NETWORK": "10.2.0.0/24", "NEXTHOP": "192.0.2.1"}),
+				Routes:           routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.41/24", "NEXTHOP": "192.0.2.1"}),
+				AdvertisedRoutes: routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.42/24", "NEXTHOP": "192.0.2.1"}),
 			},
 		},
 	}
 	after := snapshotResult{
 		Hostname: "pe-router-1",
 		VRFTables: map[string]json.RawMessage{
-			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.9"}),
+			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.9"}),
 		},
 		Neighbors: map[string]neighborSnapshot{
 			"198.51.100.1": {
-				Routes:           routeRecordsRaw(t, map[string]string{"NETWORK": "10.1.0.0/24", "NEXTHOP": "192.0.2.1"}),
-				AdvertisedRoutes: routeRecordsRaw(t, map[string]string{"NETWORK": "10.2.0.0/24", "NEXTHOP": "192.0.2.1"}, map[string]string{"NETWORK": "10.3.0.0/24", "NEXTHOP": "192.0.2.1"}),
+				Routes:           routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.41/24", "NEXTHOP": "192.0.2.1"}),
+				AdvertisedRoutes: routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.42/24", "NEXTHOP": "192.0.2.1"}, map[string]string{"NETWORK": "192.0.2.43/24", "NEXTHOP": "192.0.2.1"}),
 			},
 		},
 	}
@@ -199,8 +199,8 @@ func TestDiffSnapshotsCoversVRFsAndNeighbors(t *testing.T) {
 		t.Fatalf("expected neighbor routes to show no changes, got %+v", routesSection)
 	}
 	advertisedSection, ok := byLabel["neighbor 198.51.100.1 advertised-routes"]
-	if !ok || strings.Join(advertisedSection.Added, ",") != "10.3.0.0/24" {
-		t.Fatalf("expected neighbor advertised-routes to show 10.3.0.0/24 added, got %+v", advertisedSection)
+	if !ok || strings.Join(advertisedSection.Added, ",") != "192.0.2.43/24" {
+		t.Fatalf("expected neighbor advertised-routes to show 192.0.2.43/24 added, got %+v", advertisedSection)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestDiffSnapshotsSkipsSectionsWithRawFallback(t *testing.T) {
 	}
 	after := snapshotResult{
 		Hostname:  "pe-router-1",
-		VRFTables: map[string]json.RawMessage{"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"})},
+		VRFTables: map[string]json.RawMessage{"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"})},
 	}
 
 	sections := diffSnapshots(before, after)
@@ -235,14 +235,14 @@ func TestRunSnapshotDiffEndToEnd(t *testing.T) {
 		Hostname:  "pe-router-1",
 		Timestamp: "2026-07-10T08:00:00Z",
 		VRFTables: map[string]json.RawMessage{
-			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}),
 		},
 	}
 	after := snapshotResult{
 		Hostname:  "pe-router-1",
 		Timestamp: "2026-07-10T09:00:00Z",
 		VRFTables: map[string]json.RawMessage{
-			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}, map[string]string{"NETWORK": "10.0.9.0/24", "NEXTHOP": "192.0.2.1"}),
+			"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}, map[string]string{"NETWORK": "192.0.2.11/24", "NEXTHOP": "192.0.2.1"}),
 		},
 	}
 	beforePath := filepath.Join(dir, "before.json")
@@ -255,7 +255,7 @@ func TestRunSnapshotDiffEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := buf.String()
-	if !strings.Contains(got, "10.0.9.0/24") || !strings.Contains(got, "+ added") {
+	if !strings.Contains(got, "192.0.2.11/24") || !strings.Contains(got, "+ added") {
 		t.Fatalf("expected the added prefix to be reported, got %q", got)
 	}
 	if !strings.Contains(got, "1 of 1 section(s) changed") {
@@ -284,8 +284,8 @@ func TestRunSnapshotDiffCaptureFailureDoesNotProduceFalseAddedDiff(t *testing.T)
 		Hostname: "pe-router-1",
 		Neighbors: map[string]neighborSnapshot{
 			"198.51.100.1": {Routes: routeRecordsRaw(t,
-				map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"},
-				map[string]string{"NETWORK": "10.0.1.0/24", "NEXTHOP": "192.0.2.1"},
+				map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"},
+				map[string]string{"NETWORK": "192.0.2.39/24", "NEXTHOP": "192.0.2.1"},
 			)},
 		},
 	}
@@ -327,7 +327,7 @@ func TestPrintAutoDiffAfterChangeSkipsWhenCaptureFailed(t *testing.T) {
 	// failed before-capture. If snapshotCapturesOK weren't honored, this
 	// would try runSnapshotDiff against a nonexistent file.
 	after := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
-		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}),
 	}}
 	afterPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "after", afterCapturedAt)+".json")
 	writeSnapshotFixture(t, afterPath, after)
@@ -365,10 +365,10 @@ func TestPrintAutoDiffAfterChangeWritesAtomically(t *testing.T) {
 	afterCapturedAt := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
 
 	before := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
-		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.1"}),
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.1"}),
 	}}
 	after := snapshotResult{Hostname: "pe-router-1", VRFTables: map[string]json.RawMessage{
-		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "10.0.0.0/24", "NEXTHOP": "192.0.2.9"}),
+		"1115679": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.12/24", "NEXTHOP": "192.0.2.9"}),
 	}}
 	beforePath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "before", beforeCapturedAt)+".json")
 	afterPath := filepath.Join(dir, snapshotFilenameBase("", "pe-router-1", "after", afterCapturedAt)+".json")

@@ -1,4 +1,4 @@
-Clock is synchronized, stratum 3, reference is 192.168.128.5
+Clock is synchronized, stratum 3, reference is 192.0.2.46
 nominal freq is 1000.0000 Hz, actual freq is 1000.2725 Hz, precision is 2**24
 reference time is CC95463C.9B964367 (11:21:48.607 EST Tue Oct  7 2008)
 clock offset is -1.738 msec, root delay is 186.050 msec

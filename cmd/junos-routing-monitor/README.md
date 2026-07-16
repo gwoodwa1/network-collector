@@ -156,7 +156,7 @@ commands:
   route_parser: junos_route_table_summary
   default_route_command: 'show route table %s 0/0 exact extensive | match "Protocol next hop:"'
   default_route_parser: junos_default_route_nexthop
-  interface_command: 'show interfaces %s | match "Description:|Input :|Output:"'
+  interface_command: 'show interfaces %s extensive | match "Description:|Input|Output"'
   interface_parser: junos_interface_stats
 ```
 
@@ -209,7 +209,7 @@ below all omit the `<output-dir>/<change>/` prefix for brevity.
 | BGP session health            | `show bgp summary`                                    | always                      |
 | Route table health            | `show route summary table <table>`                    | once per monitored table   |
 | Default route protocol next hop | `show route table <table> 0/0 exact extensive \| match "Protocol next hop:"` | once per monitored table |
-| Interface traffic             | `show interfaces <iface> \| match "Description:\|Input :\|Output:"` | once per configured interface |
+| Interface traffic             | `show interfaces <iface> extensive \| match "Description:\|Input\|Output"` | once per configured interface |
 
 BGP is collected on every tick and doubles as a liveness check: if the BGP
 command itself fails to execute, that device's session is assumed to have
@@ -220,9 +220,26 @@ lookup fails, so a tick is never silently lost.
 After Ctrl+C, the tool reads this run's samples from the `.jsonl` files and
 writes `interface-traffic.html` in the same artifact folder when it finds
 parseable interface-rate data. The report is self-contained and graphs
-input/output bps over time for each device/interface. Older samples already
-present in an accumulated `.jsonl` from a previous run against the same
-`--devices` file are ignored.
+input/output bps over time for each device/interface, with a time scale of
+minute-aligned gridlines along the x-axis (one line per minute on short
+windows, automatically coarsening to 2/5/10/... -minute steps on longer
+ones so the chart stays readable). Any tick where a monitored table's
+default-route protocol next hop changed — e.g. the moment an
+internet-facing routing instance is repointed at a different peering
+router mid-change — is marked on that device's charts as a labeled
+vertical dashed line, so the traffic shift around the migration can be
+read in context. Older samples already present in an accumulated `.jsonl`
+from a previous run against the same `--devices` file are ignored.
+
+The interface command covers both statistics formats Junos produces: the
+compact `Input :`/`Output:` table that ae/physical units print, and `irb`
+units' section-based `extensive` output, where the rates come from the
+**Transit statistics** lines (the only section carrying a trailing
+`N bps`/`N pps` rate — the Traffic and Local statistics sections are totals
+only and are deliberately ignored). Both formats have been validated
+against real captured output; if your Junos release prints something
+different, override `interface_command`/`interface_parser` via the
+`commands:` block rather than patching and rebuilding.
 
 The default route's **protocol** next hop (the originating PE/route
 reflector, as opposed to the resolved forwarding next hop/interface+MPLS
@@ -232,9 +249,9 @@ still comes from where it should. Junos repeats `Protocol next hop: <ip>`
 once per route reflector that advertised the path (a fleet with 3 RRs
 commonly shows the same value 3 times, each with a second, more detailed
 line too) — this tool dedupes to the distinct next-hop value(s) before
-displaying or logging them, so a "before" of `172.16.252.38` (however many
+displaying or logging them, so a "before" of `192.0.2.9` (however many
 times it was repeated in the raw output) reads clearly against an "after"
-of `172.16.252.39` if the default route ever moves to a different upstream.
+of `192.0.2.10` if the default route ever moves to a different upstream.
 
 #### Status line output
 
@@ -242,11 +259,20 @@ Each tick also prints its status to stdout (and `session.log` — see below)
 as one header line plus an indented interface table, e.g.:
 
 ```
-22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A.inet.0 routes 383, nexthop 172.16.252.38
+22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A.inet.0 routes 383, nexthop 192.0.2.9
   | Interface | Inbound | Outbound |
   | ae0       | 6.2Gbps |  4.1Gbps |
   | ae1.100   | 1.0Gbps |  0.8Gbps |
 ```
+
+The `nexthop` clause always appears for a monitored table, so a collection
+problem is visible on the status line instead of silently missing:
+`nexthop <ip>` is the parsed value (comma-joined if a genuine ECMP default
+route has several); `nexthop none` means the command ran and parsed cleanly
+but found no protocol next hop — that node's table genuinely has no
+(BGP-learned) default route at that moment; `nexthop ?` means the command
+failed to execute or its output didn't parse — check that tick's `errors`
+field in the device's `.jsonl` for the reason.
 
 Only interfaces with non-zero inbound or outbound rates are expanded into
 rows; idle 0/0 interfaces are counted in a summary line instead
@@ -293,8 +319,8 @@ after=$(ls -t CRQXXX-pe-router-1-*-after.json | head -1)
 snapshot diff for pe-router-1: 2026-07-10T08:00:00Z -> 2026-07-10T09:00:00Z
 
 table CUSTOMER-A.inet.0:
-  + added (1): [10.0.9.0/24]
-  ~ changed (1): [10.0.0.0/24 (192.0.2.1 -> 192.0.2.9)]
+  + added (1): [192.0.2.11/24]
+  ~ changed (1): [192.0.2.12/24 (192.0.2.1 -> 192.0.2.9)]
 
 neighbor 198.51.100.1 routes:
   no changes

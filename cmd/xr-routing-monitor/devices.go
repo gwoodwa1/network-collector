@@ -66,7 +66,7 @@ type devicesDocument struct {
 	// device list instead of retyped on the command line every time.
 	Interval string `yaml:"interval"`
 	// CustomerGatewayPrefix is the default-route gateway prefix (e.g.
-	// "10.99.99.") that identifies a customer-facing VRF on this fleet,
+	// "192.0.2.") that identifies a customer-facing VRF on this fleet,
 	// used by any device with auto_detect_vrf: true. Fleet-wide rather than
 	// per-device since it describes the network, not an individual router.
 	CustomerGatewayPrefix string `yaml:"customer_gateway_prefix"`
@@ -125,7 +125,7 @@ func validateCommandTemplate(path, field, value string) error {
 // loadDeviceSpecs reads an optional --devices YAML file, e.g.:
 //
 //	interval: 30s
-//	customer_gateway_prefix: 10.99.99.
+//	customer_gateway_prefix: 192.0.2.
 //
 //	devices:
 //	  - hostname: pe-router-1

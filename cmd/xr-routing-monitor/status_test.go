@@ -168,25 +168,65 @@ func TestSummarizeRoutesMultipleSortedByName(t *testing.T) {
 func TestSummarizeRoutesAppendsDedupedNextHop(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"SOURCE": "Total", "ROUTES": "383"}}})
 	nextHops, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
-		{"NEXTHOP": "172.16.252.37"},
+		{"NEXTHOP": "192.0.2.23"},
 	}})
 	got := summarizeRoutes(
 		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": raw},
 		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": nextHops},
 	)
-	want := "CUSTOMER-A-INTERNET routes 383, nexthop 172.16.252.37"
+	want := "CUSTOMER-A-INTERNET routes 383, nexthop 192.0.2.23"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
+// TestSummarizeRoutesDistinguishesNoneAndUnknownNextHop pins the status
+// line's three visible next-hop states — a value, "none" (command ran and
+// parsed but found nothing), and "?" (execute failed, or output
+// unparseable) — so a collection problem on one device is visible on the
+// status line rather than silently indistinguishable from "not collected".
+func TestSummarizeRoutesDistinguishesNoneAndUnknownNextHop(t *testing.T) {
+	routes, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"SOURCE": "Total", "ROUTES": "383"}}})
+	emptyParse, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{}})
+	rawFallback, _ := json.Marshal(map[string]string{"raw": "unexpected output"})
+
+	got := summarizeRoutes(
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": routes},
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": emptyParse},
+	)
+	if want := "CUSTOMER-A-INTERNET routes 383, nexthop none"; got != want {
+		t.Fatalf("empty parse: expected %q, got %q", want, got)
+	}
+
+	got = summarizeRoutes(
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": routes},
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": rawFallback},
+	)
+	if want := "CUSTOMER-A-INTERNET routes 383, nexthop ?"; got != want {
+		t.Fatalf("raw fallback: expected %q, got %q", want, got)
+	}
+
+	got = summarizeRoutes(
+		map[string]json.RawMessage{"CUSTOMER-A-INTERNET": routes},
+		map[string]json.RawMessage{},
+	)
+	if want := "CUSTOMER-A-INTERNET routes 383, nexthop ?"; got != want {
+		t.Fatalf("missing key: expected %q, got %q", want, got)
+	}
+
+	got = summarizeRoutes(map[string]json.RawMessage{"CUSTOMER-A-INTERNET": routes}, nil)
+	if want := "CUSTOMER-A-INTERNET routes 383"; got != want {
+		t.Fatalf("nil map: expected %q, got %q", want, got)
+	}
+}
+
 func TestSummarizeDefaultRouteNextHopsMultipleDistinctValues(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
-		{"NEXTHOP": "172.16.252.38"},
-		{"NEXTHOP": "172.16.252.37"},
-		{"NEXTHOP": "172.16.252.37"},
+		{"NEXTHOP": "192.0.2.9"},
+		{"NEXTHOP": "192.0.2.23"},
+		{"NEXTHOP": "192.0.2.23"},
 	}})
-	if got := summarizeDefaultRouteNextHops(raw); got != "172.16.252.37,172.16.252.38" {
+	if got := summarizeDefaultRouteNextHops(raw); got != "192.0.2.23,192.0.2.9" {
 		t.Fatalf("expected sorted distinct next hops, got %q", got)
 	}
 }

@@ -102,9 +102,9 @@ func TestAutoDetectCustomerVRFsSamplesTopHubInterfacesByUtilization(t *testing.T
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
 VRF: 4000001
-Gateway of last resort is 10.99.99.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.56 to network 0.0.0.0
 VRF: RI-INTERNET-ENTERPRISE
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	hubDetail := `RP/0/RSP0/CPU0:pe-router-1#show vrf RI-INTERNET-ENTERPRISE ipv4 detail
@@ -124,7 +124,7 @@ RP/0/RSP0/CPU0:pe-router-1#
 		`show int TenGigE0/0/0/3 | inc "rate|Description:"`:      interfaceRateOutput("500", "0"),
 	}}
 
-	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "10.99.99.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, 2)
+	vrfs, interfaces, hubInterfaces, hubVRFNotes, err := autoDetectCustomerVRFs(exec, "192.0.2.", parsers, defaultExcludeInterfacePrefixes, defaultSpec, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

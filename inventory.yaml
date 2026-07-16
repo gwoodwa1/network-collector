@@ -1,26 +1,26 @@
 hosts:
   - name: device-nxos-01
-    ip: 192.168.16.1
+    ip: 192.0.2.4
     type: cisco_nxos
     labels: {site: london, role: core, environment: lab, maintenance: "false"}
   - name: device-qfx-01
-    ip: 192.168.16.1
+    ip: 192.0.2.4
     type: juniper_junos
     labels: {site: london, role: edge, environment: lab, maintenance: "false"}
   - name: device-ios-01
-    ip: 192.168.16.11
+    ip: 192.0.2.69
     type: cisco_ios
     labels: {site: manchester, role: access, environment: lab, maintenance: "false", wave: canary}
   - name: device-ios-02
-    ip: 192.168.16.12
+    ip: 192.0.2.70
     type: cisco_ios
     labels: {site: manchester, role: access, environment: lab, maintenance: "false", wave: standard}
   - name: device-ios-03
-    ip: 192.168.16.13
+    ip: 192.0.2.71
     type: cisco_ios
     labels: {site: manchester, role: access, environment: lab, maintenance: "true", wave: hold}
   - name: xr-router-1
-    ip: 10.0.0.1
+    ip: 192.0.2.13
     type: cisco_xr
     labels: {site: london, role: core, environment: lab, maintenance: "false"}
 

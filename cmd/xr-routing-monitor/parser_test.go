@@ -44,10 +44,10 @@ VRF: 9000002
 VRF: 9000003
 VRF: 9000004
 VRF: 4000001
-Gateway of last resort is 10.99.99.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.56 to network 0.0.0.0
 VRF: 9000005
 VRF: CUSTOMER-A-INTERNET
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 VRF: 9000006
 VRF: 9000007
 VRF: **eint
@@ -168,7 +168,7 @@ Route Distinguisher Version: 1352205489
 * i                   198.51.100.202            0    100      0 65004 i
 * i                   198.51.100.204            0    100      0 65004 i
 *>i10.1.5.0/24        198.51.100.32            0    100      0 ?
-*> 192.0.2.0/28       10.62.101.1                   210      0 65005 ?
+*> 192.0.2.0/28       192.0.2.62                   210      0 65005 ?
 *>i192.0.2.16/28      198.51.100.33                 600      0 65006 i
 
 Processed 5 prefixes, 8 paths
@@ -184,8 +184,8 @@ Wed Jul  8 22:11:01.392 BST
 Network            Next Hop        From            AS Path
 Route Distinguisher: 65002:100
 Route Distinguisher Version: 1352205489
-192.0.2.0/28       198.51.100.64   10.62.101.1     65005?
-192.0.2.32/32      198.51.100.64   10.62.101.40    65006 65006 65007?
+192.0.2.0/28       198.51.100.64   192.0.2.62     65005?
+192.0.2.32/32      198.51.100.64   192.0.2.63    65006 65006 65007?
 192.0.2.40/29      198.51.100.64   Local           ?
 
 Processed 48 prefixes, 48 paths
@@ -213,11 +213,11 @@ Origin codes: i - IGP, e - EGP, ? - incomplete
    Network            Next Hop            Metric LocPrf Weight Path
 Route Distinguisher: 65002:100 (default for vrf CUSTOMER-A-INTERNET)
 Route Distinguisher Version: 1352205489
-*>i192.0.2.64/29      10.17.2.22                    200      0 i
-* i                   10.17.2.23                    200      0 i
-*>i192.0.2.72/29      10.17.2.24                    200      0 i
-* i                   10.17.2.25                    200      0 i
-*>i192.0.2.80/24      10.62.101.1              0    100      0 65008 i
+*>i192.0.2.64/29      192.0.2.64                    200      0 i
+* i                   192.0.2.65                    200      0 i
+*>i192.0.2.72/29      192.0.2.66                    200      0 i
+* i                   192.0.2.67                    200      0 i
+*>i192.0.2.80/24      192.0.2.62              0    100      0 65008 i
 
 Processed 3 prefixes, 5 paths
 RP/0/RSP0/CPU0:pe-router-1#
@@ -238,7 +238,7 @@ Routing entry for 0.0.0.0/0
   Tag 64581, type internal
   Installed Jul 11 21:01:13.524 for 3d01h
   Routing Descriptor Blocks
-    172.16.252.37, from 172.16.252.46
+    192.0.2.23, from 192.0.2.68
       Nexthop in Vrf: "default", Table: "default", IPv4 Unicast, Table Id: 0xe0000000
       Route metric is 0, Wt is 1
       Label: 0xbf (191)
@@ -325,7 +325,7 @@ func TestParseBGPRouteTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a record for 192.0.2.0/28, got: %+v", bySource)
 	}
-	if ebgp["INTERNAL"] != " " || ebgp["NEXTHOP"] != "10.62.101.1" {
+	if ebgp["INTERNAL"] != " " || ebgp["NEXTHOP"] != "192.0.2.62" {
 		t.Fatalf("unexpected eBGP record (should have no internal flag): %+v", ebgp)
 	}
 	blankMetric, ok := bySource["192.0.2.16/28"]
@@ -383,7 +383,7 @@ func TestParseBGPNeighborRoutes(t *testing.T) {
 	if !ok || len(single) != 1 {
 		t.Fatalf("expected exactly 1 record for 192.0.2.80/24, got: %+v", single)
 	}
-	if single[0]["NEXTHOP"] != "10.62.101.1" || !strings.Contains(single[0]["ATTRIBUTES"], "65008") {
+	if single[0]["NEXTHOP"] != "192.0.2.62" || !strings.Contains(single[0]["ATTRIBUTES"], "65008") {
 		t.Fatalf("unexpected single-path record: %+v", single[0])
 	}
 }
@@ -545,12 +545,12 @@ func TestParseRouteVRFDefaultDetail(t *testing.T) {
 	if len(decoded.NextHops) != 1 {
 		t.Fatalf("expected 1 record (single installed path, no route-reflector duplication like Junos), got %d: %s", len(decoded.NextHops), parsed)
 	}
-	if decoded.NextHops[0]["NEXTHOP"] != "172.16.252.37" {
-		t.Fatalf("expected next hop %q, got %q", "172.16.252.37", decoded.NextHops[0]["NEXTHOP"])
+	if decoded.NextHops[0]["NEXTHOP"] != "192.0.2.23" {
+		t.Fatalf("expected next hop %q, got %q", "192.0.2.23", decoded.NextHops[0]["NEXTHOP"])
 	}
 
-	if got := summarizeDefaultRouteNextHops(json.RawMessage(parsed)); got != "172.16.252.37" {
-		t.Fatalf("expected summarizeDefaultRouteNextHops %q, got %q", "172.16.252.37", got)
+	if got := summarizeDefaultRouteNextHops(json.RawMessage(parsed)); got != "192.0.2.23" {
+		t.Fatalf("expected summarizeDefaultRouteNextHops %q, got %q", "192.0.2.23", got)
 	}
 }
 
@@ -617,11 +617,11 @@ func TestParseRouteVRFAllGateways(t *testing.T) {
 	for _, record := range decoded.VRFs {
 		byVRF[record["VRF"]] = record["GATEWAY"]
 	}
-	if byVRF["4000001"] != "10.99.99.53" {
-		t.Fatalf("expected VRF 4000001 gateway 10.99.99.53, got: %+v", byVRF)
+	if byVRF["4000001"] != "192.0.2.56" {
+		t.Fatalf("expected VRF 4000001 gateway 192.0.2.56, got: %+v", byVRF)
 	}
-	if byVRF["CUSTOMER-A-INTERNET"] != "10.99.99.51" {
-		t.Fatalf("expected VRF CUSTOMER-A-INTERNET gateway 10.99.99.51, got: %+v", byVRF)
+	if byVRF["CUSTOMER-A-INTERNET"] != "192.0.2.57" {
+		t.Fatalf("expected VRF CUSTOMER-A-INTERNET gateway 192.0.2.57, got: %+v", byVRF)
 	}
 	for _, systemVRF := range []string{"**nVSatellite", "9000001", "9000002", "9000003", "9000004", "9000005", "9000006", "9000007", "**eint", "**iid"} {
 		if _, ok := byVRF[systemVRF]; ok {
@@ -643,9 +643,9 @@ func TestParseRouteVRFAllGatewaysSkipsGatewayLineWithNoPrecedingVRF(t *testing.T
 		t.Fatalf("failed to load embedded parsers: %v", err)
 	}
 	output := `RP/0/RSP0/CPU0:pe-router-1#show route vrf all | inc "Gateway of last resort|VRF:"
-Gateway of last resort is 10.99.99.53 to network 0.0.0.0
+Gateway of last resort is 192.0.2.56 to network 0.0.0.0
 VRF: CUSTOMER-A-INTERNET
-Gateway of last resort is 10.99.99.51 to network 0.0.0.0
+Gateway of last resort is 192.0.2.57 to network 0.0.0.0
 RP/0/RSP0/CPU0:pe-router-1#
 `
 	parsed, err := parseOutputWithModule(output, "xr_route_vrf_all_gateways", parsers)

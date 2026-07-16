@@ -15,9 +15,24 @@ import (
 )
 
 type tickLine struct {
-	Timestamp  string                     `json:"timestamp"`
-	Hostname   string                     `json:"hostname"`
-	Interfaces map[string]json.RawMessage `json:"interfaces"`
+	Timestamp            string                     `json:"timestamp"`
+	Hostname             string                     `json:"hostname"`
+	Interfaces           map[string]json.RawMessage `json:"interfaces"`
+	DefaultRouteNextHops map[string]json.RawMessage `json:"default_route_next_hops"`
+}
+
+// reportEvent marks the tick at which a monitored table's/VRF's
+// default-route next hop changed — during a change window that repoints an
+// internet-facing VRF at a different peering router, this is the moment
+// the migration actually took effect, and it's drawn as a labeled vertical
+// marker on that device's traffic charts so the rate change around it can
+// be read in context.
+type reportEvent struct {
+	Timestamp string `json:"timestamp"`
+	Hostname  string `json:"hostname"`
+	Table     string `json:"table"`
+	From      string `json:"from"`
+	To        string `json:"to"`
 }
 
 // FirstInterfaceStat decodes one interface's {"stats": [...]} result — the
@@ -61,7 +76,7 @@ type reportSeries struct {
 // diluting the run that just happened. It returns an empty path when no
 // parseable interface samples at or after since were found.
 func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) {
-	series, err := collectInterfaceSeries(outputDir, since)
+	series, events, err := collectInterfaceSeries(outputDir, since)
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +84,7 @@ func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) 
 		return "", nil
 	}
 
-	data, err := json.Marshal(series)
+	data, err := json.Marshal(map[string]any{"series": series, "events": events})
 	if err != nil {
 		return "", fmt.Errorf("encode report data: %w", err)
 	}
@@ -89,17 +104,24 @@ func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) 
 	return path, nil
 }
 
-func collectInterfaceSeries(outputDir string, since time.Time) ([]reportSeries, error) {
+func collectInterfaceSeries(outputDir string, since time.Time) ([]reportSeries, []reportEvent, error) {
 	paths, err := filepath.Glob(filepath.Join(outputDir, "*.jsonl"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Strings(paths)
 
 	byKey := map[string]*reportSeries{}
+	// lastNextHops tracks the previous tick's deduped next-hop signature per
+	// hostname+table so a change between consecutive ticks becomes a
+	// reportEvent. Ticks within one file are chronological (the .jsonl is
+	// append-only), and each hostname's ticks live in that hostname's own
+	// file, so a per-key last-seen value is enough.
+	lastNextHops := map[string]string{}
+	events := []reportEvent{}
 	for _, path := range paths {
-		if err := collectInterfaceSeriesFromFile(path, since, byKey); err != nil {
-			return nil, err
+		if err := collectInterfaceSeriesFromFile(path, since, byKey, lastNextHops, &events); err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -113,10 +135,10 @@ func collectInterfaceSeries(outputDir string, since time.Time) ([]reportSeries, 
 		}
 		return series[i].Interface < series[j].Interface
 	})
-	return series, nil
+	return series, events, nil
 }
 
-func collectInterfaceSeriesFromFile(path string, since time.Time, byKey map[string]*reportSeries) error {
+func collectInterfaceSeriesFromFile(path string, since time.Time, byKey map[string]*reportSeries, lastNextHops map[string]string, events *[]reportEvent) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
@@ -150,6 +172,7 @@ func collectInterfaceSeriesFromFile(path string, since time.Time, byKey map[stri
 		if err != nil || capturedAt.Before(since) {
 			continue
 		}
+		collectNextHopEvents(tick, lastNextHops, events)
 		for name, raw := range tick.Interfaces {
 			in, out, ok := decodeInterfaceRates(raw)
 			if !ok {
@@ -172,6 +195,75 @@ func collectInterfaceSeriesFromFile(path string, since time.Time, byKey map[stri
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 	return nil
+}
+
+// collectNextHopEvents compares one tick's per-table default-route next-hop
+// signatures against the previous tick's and appends a reportEvent for each
+// change. Undecodable/raw-fallback data is treated as unknown: it neither
+// produces an event nor clobbers the baseline, so a single tick with a
+// parse hiccup can't fabricate a "changed and changed back" pair.
+func collectNextHopEvents(tick tickLine, lastNextHops map[string]string, events *[]reportEvent) {
+	if len(tick.DefaultRouteNextHops) == 0 {
+		return
+	}
+	names := make([]string, 0, len(tick.DefaultRouteNextHops))
+	for name := range tick.DefaultRouteNextHops {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		sig, ok := nextHopSignature(tick.DefaultRouteNextHops[name])
+		if !ok {
+			continue
+		}
+		key := tick.Hostname + "\x00" + name
+		prev, seen := lastNextHops[key]
+		lastNextHops[key] = sig
+		if !seen || prev == sig {
+			continue
+		}
+		*events = append(*events, reportEvent{
+			Timestamp: tick.Timestamp,
+			Hostname:  tick.Hostname,
+			Table:     name,
+			From:      displayNextHopSignature(prev),
+			To:        displayNextHopSignature(sig),
+		})
+	}
+}
+
+// nextHopSignature reduces one table's {"next_hops": [...]} raw JSON to the
+// comma-joined distinct next-hop values (same dedup both tools' status
+// lines apply — Junos repeats the value once per route reflector). ok=false
+// means the data is a raw fallback or undecodable, i.e. unknown rather than
+// "no next hop"; a decoded-but-empty list returns ("", true), which
+// displayNextHopSignature renders as "none".
+func nextHopSignature(raw json.RawMessage) (string, bool) {
+	var decoded struct {
+		NextHops []map[string]string `json:"next_hops"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.NextHops == nil {
+		return "", false
+	}
+	seen := map[string]bool{}
+	var unique []string
+	for _, record := range decoded.NextHops {
+		nh := strings.TrimSpace(record["NEXTHOP"])
+		if nh == "" || seen[nh] {
+			continue
+		}
+		seen[nh] = true
+		unique = append(unique, nh)
+	}
+	sort.Strings(unique)
+	return strings.Join(unique, ","), true
+}
+
+func displayNextHopSignature(sig string) string {
+	if sig == "" {
+		return "none"
+	}
+	return sig
 }
 
 func decodeInterfaceRates(raw json.RawMessage) (float64, float64, bool) {
@@ -222,6 +314,8 @@ svg { width: 100%; height: 260px; overflow: visible; }
 .gridline { stroke: #e6ebf0; stroke-width: 1; }
 .input { fill: none; stroke: #0969da; stroke-width: 2; }
 .output { fill: none; stroke: #d1242f; stroke-width: 2; }
+.event { stroke: #9a6700; stroke-width: 2; stroke-dasharray: 4 3; }
+.event-label { fill: #9a6700; font-weight: 600; }
 .label { fill: #57606a; font-size: 11px; }
 .legend { display: flex; gap: 14px; color: #57606a; font-size: 12px; margin-top: 8px; }
 .swatch { display: inline-block; width: 18px; height: 3px; margin-right: 6px; vertical-align: middle; }
@@ -234,7 +328,9 @@ svg { width: 100%; height: 260px; overflow: visible; }
 <header><h1>Interface Traffic Report</h1></header>
 <main><div id="charts" class="grid"></div></main>
 <script>
-const series = {{.Data}};
+const payload = {{.Data}};
+const series = payload.series || [];
+const events = payload.events || [];
 
 function formatRate(value) {
   if (value >= 1e9) return (value / 1e9).toFixed(1) + " Gbps";
@@ -254,6 +350,23 @@ function polyline(points, key, minTime, maxTime, maxRate, width, height, pad) {
   }).join(" ");
 }
 
+// minuteTicks returns minute-aligned timestamps between minTime and
+// maxTime for the x-axis time scale. The step starts at one minute and
+// coarsens (2, 5, 10, ... minutes) just enough to keep at most ~24
+// gridlines, so a short window gets true per-minute lines while a
+// multi-hour window stays readable.
+function minuteTicks(minTime, maxTime) {
+  const minute = 60000;
+  const spanMinutes = Math.max(1, (maxTime - minTime) / minute);
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 240];
+  const step = steps.find(s => spanMinutes / s <= 24) || 480;
+  const ticks = [];
+  for (let t = Math.ceil(minTime / (step * minute)) * step * minute; t <= maxTime; t += step * minute) {
+    ticks.push(t);
+  }
+  return ticks;
+}
+
 function renderChart(item) {
   const width = 640;
   const height = 260;
@@ -270,6 +383,33 @@ function renderChart(item) {
   const x1 = width - pad.right;
   const y0 = height - pad.bottom;
 
+  const ticks = minuteTicks(minTime, maxTime);
+  const span = Math.max(1, maxTime - minTime);
+  const labelEvery = Math.max(1, Math.ceil(ticks.length / 8));
+  const tickMarkup = ticks.map(function (t, i) {
+    const x = pad.left + ((t - minTime) / span) * (width - pad.left - pad.right);
+    let m = '<line class="gridline" x1="' + x.toFixed(1) + '" y1="' + pad.top + '" x2="' + x.toFixed(1) + '" y2="' + y0 + '"></line>';
+    if (i % labelEvery === 0 && x > x0 + 40 && x < x1 - 40) {
+      const label = new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      m += '<text class="label" text-anchor="middle" x="' + x.toFixed(1) + '" y="' + (height - 10) + '">' + label + '</text>';
+    }
+    return m;
+  }).join("");
+
+  const hostEvents = events.filter(function (e) {
+    if (e.hostname !== item.hostname) return false;
+    const t = new Date(e.timestamp).getTime();
+    return t >= minTime && t <= maxTime;
+  });
+  const eventMarkup = hostEvents.map(function (e, i) {
+    const t = new Date(e.timestamp).getTime();
+    const x = pad.left + ((t - minTime) / span) * (width - pad.left - pad.right);
+    const onRight = x > (x0 + x1) / 2;
+    const y = pad.top + 12 + (i % 3) * 12;
+    return '<line class="event" x1="' + x.toFixed(1) + '" y1="' + pad.top + '" x2="' + x.toFixed(1) + '" y2="' + y0 + '"></line>' +
+      '<text class="label event-label" text-anchor="' + (onRight ? "end" : "start") + '" x="' + (onRight ? x - 4 : x + 4).toFixed(1) + '" y="' + y + '"></text>';
+  }).join("");
+
   const card = document.createElement("section");
   card.className = "chart";
   card.innerHTML = ` + "`" + `
@@ -277,6 +417,7 @@ function renderChart(item) {
     <svg viewBox="0 0 ${width} ${height}" role="img">
       <line class="gridline" x1="${x0}" y1="${pad.top}" x2="${x1}" y2="${pad.top}"></line>
       <line class="gridline" x1="${x0}" y1="${yMid}" x2="${x1}" y2="${yMid}"></line>
+      ${tickMarkup}
       <line class="axis" x1="${x0}" y1="${pad.top}" x2="${x0}" y2="${y0}"></line>
       <line class="axis" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y0}"></line>
       <text class="label" x="4" y="${pad.top + 4}">${formatRate(maxRate)}</text>
@@ -285,14 +426,23 @@ function renderChart(item) {
       <text class="label" text-anchor="end" x="${x1}" y="${height - 10}">${new Date(maxTime).toLocaleTimeString()}</text>
       <polyline class="input" points="${input}"></polyline>
       <polyline class="output" points="${output}"></polyline>
+      ${eventMarkup}
     </svg>
     <div class="legend">
       <span><span class="swatch input"></span>Input</span>
       <span><span class="swatch output"></span>Output</span>
+      <span><span class="swatch" style="background:#9a6700"></span>Next-hop change</span>
     </div>
   ` + "`" + `;
   card.querySelector("h2").textContent = title;
   card.querySelector("svg").setAttribute("aria-label", title);
+  // Event label text comes from parsed device output, so it's assigned via
+  // textContent (never string-built into innerHTML) to keep any markup in a
+  // device-supplied value inert.
+  const eventLabels = card.querySelectorAll(".event-label");
+  hostEvents.forEach(function (e, i) {
+    eventLabels[i].textContent = e.table.split(".")[0] + " 0/0 → " + e.to;
+  });
   return card;
 }
 

@@ -21,7 +21,7 @@ output:
 
 restconf:
   - hostname: device-eos-02
-    ip: 192.168.15.7
+    ip: 192.0.2.2
     port: 3333
     skip_tls: true
     method: GET
@@ -29,7 +29,7 @@ restconf:
 
 gnmi:
   - hostname: device-eos-01
-    ip: 192.168.16.10:6030
+    ip: 192.0.2.3:6030
     skip_tls: true
     path: /interfaces/interface/subinterfaces/subinterface/state/description
     validation:
@@ -133,19 +133,19 @@ ssh:
 
 http:
   - hostname: device-eos-08
-    ip: 192.168.16.8
+    ip: 192.0.2.5
     type: arista_eos
     cmd: show version
     skip_tls: true
   - hostname: device-eos-03
-    ip: 192.168.16.9
+    ip: 192.0.2.6
     type: arista_eos
     cmd: show ip route
     skip_tls: true
 
 netconf:
   - hostname: device-eos-05
-    ip: 192.168.16.7
+    ip: 192.0.2.7
     type: arista_eos
     rpc: |
       <get>
@@ -157,7 +157,7 @@ netconf:
         </filter>
       </get>
   - hostname: device-eos
-    ip: 192.168.15.8
+    ip: 192.0.2.8
     type: arista_eos
     rpc: |
       <get>

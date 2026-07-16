@@ -7,9 +7,9 @@ import (
 
 func TestSummarizeBGPCountsEstablOnly(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{"neighbors": []map[string]string{
-		{"NEIGHBOR": "10.0.0.1", "STATE": "Establ"},
-		{"NEIGHBOR": "10.0.0.2", "STATE": "Establ"},
-		{"NEIGHBOR": "10.0.0.3", "STATE": "Active"},
+		{"NEIGHBOR": "192.0.2.13", "STATE": "Establ"},
+		{"NEIGHBOR": "192.0.2.44", "STATE": "Establ"},
+		{"NEIGHBOR": "192.0.2.45", "STATE": "Active"},
 	}})
 	if err != nil {
 		t.Fatalf("failed to marshal fixture: %v", err)
@@ -74,27 +74,73 @@ func TestSummarizeRoutesSortsByTableName(t *testing.T) {
 func TestSummarizeRoutesAppendsDedupedNextHop(t *testing.T) {
 	table, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"TOTAL_ROUTES": "23"}}})
 	nextHops, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
-		{"NEXTHOP": "172.16.252.38"},
-		{"NEXTHOP": "172.16.252.38"},
-		{"NEXTHOP": "172.16.252.38"},
+		{"NEXTHOP": "192.0.2.9"},
+		{"NEXTHOP": "192.0.2.9"},
+		{"NEXTHOP": "192.0.2.9"},
 	}})
 	got := summarizeRoutes(
 		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": table},
 		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": nextHops},
 	)
-	want := "RI-CUSTOMER-G-300001.inet.0 routes 23, nexthop 172.16.252.38"
+	want := "RI-CUSTOMER-G-300001.inet.0 routes 23, nexthop 192.0.2.9"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
+// TestSummarizeRoutesDistinguishesNoneAndUnknownNextHop pins the status
+// line's three visible next-hop states — a value, "none" (command ran and
+// parsed but found nothing, e.g. the node genuinely has no default route),
+// and "?" (execute failed, or output unparseable) — so a collection
+// problem on one device can never again be silently indistinguishable from
+// "not collected" (the original field report: two identically-configured
+// devices, next hop shown only for the first, with no clue why).
+func TestSummarizeRoutesDistinguishesNoneAndUnknownNextHop(t *testing.T) {
+	table, _ := json.Marshal(map[string]any{"routes": []map[string]string{{"TOTAL_ROUTES": "23"}}})
+	emptyParse, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{}})
+	rawFallback, _ := json.Marshal(map[string]string{"raw": "unexpected output"})
+
+	// Parsed cleanly, zero records -> "none".
+	got := summarizeRoutes(
+		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": table},
+		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": emptyParse},
+	)
+	if want := "RI-CUSTOMER-G-300001.inet.0 routes 23, nexthop none"; got != want {
+		t.Fatalf("empty parse: expected %q, got %q", want, got)
+	}
+
+	// Raw fallback (parser failed) -> "?".
+	got = summarizeRoutes(
+		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": table},
+		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": rawFallback},
+	)
+	if want := "RI-CUSTOMER-G-300001.inet.0 routes 23, nexthop ?"; got != want {
+		t.Fatalf("raw fallback: expected %q, got %q", want, got)
+	}
+
+	// Key missing from a non-nil map (execute failed) -> "?".
+	got = summarizeRoutes(
+		map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": table},
+		map[string]json.RawMessage{},
+	)
+	if want := "RI-CUSTOMER-G-300001.inet.0 routes 23, nexthop ?"; got != want {
+		t.Fatalf("missing key: expected %q, got %q", want, got)
+	}
+
+	// nil map (collection not attempted) -> no clause at all.
+	got = summarizeRoutes(map[string]json.RawMessage{"RI-CUSTOMER-G-300001.inet.0": table}, nil)
+	if want := "RI-CUSTOMER-G-300001.inet.0 routes 23"; got != want {
+		t.Fatalf("nil map: expected %q, got %q", want, got)
+	}
+}
+
 func TestSummarizeDefaultRouteNextHopsMultipleDistinctValues(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"next_hops": []map[string]string{
-		{"NEXTHOP": "172.16.252.39"},
-		{"NEXTHOP": "172.16.252.38"},
-		{"NEXTHOP": "172.16.252.38"},
+		{"NEXTHOP": "192.0.2.10"},
+		{"NEXTHOP": "192.0.2.9"},
+		{"NEXTHOP": "192.0.2.9"},
 	}})
-	if got := summarizeDefaultRouteNextHops(raw); got != "172.16.252.38,172.16.252.39" {
+	if got := summarizeDefaultRouteNextHops(raw); got != "192.0.2.10,192.0.2.9" {
 		t.Fatalf("expected sorted distinct next hops, got %q", got)
 	}
 }

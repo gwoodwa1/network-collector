@@ -131,7 +131,7 @@ devices:
 
 func TestLoadDeviceSpecsCustomerGatewayPrefix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.yaml")
-	content := `customer_gateway_prefix: 10.99.99.
+	content := `customer_gateway_prefix: 192.0.2.
 
 devices:
   - hostname: pe-router-1
@@ -144,8 +144,8 @@ devices:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gatewayPrefix != "10.99.99." {
-		t.Fatalf("expected gateway prefix 10.99.99., got %q", gatewayPrefix)
+	if gatewayPrefix != "192.0.2." {
+		t.Fatalf("expected gateway prefix 192.0.2., got %q", gatewayPrefix)
 	}
 	if !specs[0].AutoDetectVRF {
 		t.Fatal("expected auto_detect_vrf to be true")

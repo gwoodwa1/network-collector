@@ -112,7 +112,7 @@ func TestOnboardDevicesAutoDetectKeepsManualAndDiscoveredInterfacesSeparate(t *t
 	}
 
 	// hostname, auto-detect=yes, gateway prefix, core interfaces, neighbors, then blank hostname to end.
-	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n10.99.99.\nBE40\n\n\n"))
+	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n192.0.2.\nBE40\n\n\n"))
 	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 
 	if len(sessions) != 1 {
@@ -148,7 +148,7 @@ func TestOnboardDevicesAutoDetectUsesDefaultGatewayPrefixWithoutPrompting(t *tes
 
 	// hostname, auto-detect=yes, [no gateway prompt: default supplied], interfaces, neighbors, blank to end.
 	reader := bufio.NewReader(strings.NewReader("pe-router-1\ny\n\n\n\n"))
-	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	sessions := onboardDevices(reader, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "192.0.2.", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
@@ -218,7 +218,7 @@ func TestOnboardDevicesFromSpecsAutoDetectKeepsManualAndDiscoveredInterfacesSepa
 	}
 
 	specs := []deviceSpec{{Hostname: "pe-router-1", AutoDetectVRF: true, Interfaces: []string{"BE40"}}}
-	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "10.99.99.", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	sessions := onboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", &credentialCache{}, registry, connect, parsers, "192.0.2.", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
 
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))

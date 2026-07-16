@@ -112,7 +112,7 @@ device, list them once in a file and pass `--devices path/to/file.yaml`:
 
 ```yaml
 interval: 30s
-customer_gateway_prefix: 10.99.99.
+customer_gateway_prefix: 192.0.2.
 
 devices:
   - hostname: pe-router-1
@@ -183,7 +183,7 @@ VRF name by hand for every device in every change is error-prone and doesn't
 scale. Auto-detect instead identifies "the" customer VRF(s) the same way an
 operator eyeballing `show route vrf all` would: **a VRF whose default route
 (`0.0.0.0/0`) is sourced from a gateway starting with a known prefix** (e.g.
-`10.99.99.` on this fleet) is treated as customer-facing; everything else
+`192.0.2.` on this fleet) is treated as customer-facing; everything else
 on the box is ignored.
 
 The matched default-route gateway is only ever used to identify *which VRF*
@@ -333,9 +333,21 @@ lookup fails, so a tick is never silently lost.
 After Ctrl+C, the tool reads this run's samples from the `.jsonl` files and
 writes `interface-traffic.html` in the same artifact folder when it finds
 parseable interface-rate data. The report is self-contained and graphs
-input/output bps over time for each device/interface. Older samples already
-present in an accumulated `.jsonl` from a previous run against the same
-`--devices` file are ignored.
+input/output bps over time for each device/interface, with a time scale of
+minute-aligned gridlines along the x-axis (one line per minute on short
+windows, automatically coarsening on longer ones). Any tick where a
+monitored VRF's default-route next hop changed — e.g. the moment an
+internet-facing VRF is repointed at a different peering router mid-change —
+is marked on that device's charts as a labeled vertical dashed line, so the
+traffic shift around the migration can be read in context. Older samples
+already present in an accumulated `.jsonl` from a previous run against the
+same `--devices` file are ignored.
+
+The `nexthop` clause on the status line always appears for a monitored VRF:
+`nexthop <ip>` is the parsed value, `nexthop none` means the command ran
+and parsed cleanly but the VRF has no default route right now, and
+`nexthop ?` means the command failed or its output didn't parse — check
+that tick's `errors` field in the device's `.jsonl` for the reason.
 
 The default route's BGP next hop (the originating PE, from the "Routing
 Descriptor Blocks" section of `show route vrf ... detail`) is tracked
@@ -355,7 +367,7 @@ Each tick also prints its status to stdout (and `session.log` — see below)
 as one header line plus an indented interface table, e.g.:
 
 ```
-22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383, nexthop 172.16.252.37
+22:07:26 | pe-router-1    | BGP 6/6 up  | CUSTOMER-A-INTERNET routes 383, nexthop 192.0.2.23
   | VRF                 | Interface             | Inbound |  Outbound |
   | core                | BE45                  | 6.2Gbps |   4.1Gbps |
   | CUSTOMER-A-INTERNET | GigabitEthernet0/0/0/8 |    0bps | 272.0Kbps |
@@ -446,8 +458,8 @@ after_json=$(ls -t CRQXXX-pe-router-1-*-after.json | head -1)
 snapshot diff for pe-router-1: 2026-07-10T08:00:00Z -> 2026-07-10T09:00:00Z
 
 vrf 1115679:
-  + added (1): [10.0.9.0/24]
-  ~ changed (1): [10.0.0.0/24 (192.0.2.1 -> 192.0.2.9)]
+  + added (1): [192.0.2.11/24]
+  ~ changed (1): [192.0.2.12/24 (192.0.2.1 -> 192.0.2.9)]
 
 neighbor 198.51.100.1 routes:
   no changes
@@ -526,7 +538,7 @@ $ ./xr-routing-monitor --interval 30s --output-dir ./change-2026-07-08
 
 Router hostname/IP (blank to finish onboarding): pe-router-1
 Auto-detect customer VRF(s) via default-route gateway on pe-router-1? [y/N]: y
-Customer-facing gateway prefix on pe-router-1 (e.g. 10.99.99.): 10.99.99.
+Customer-facing gateway prefix on pe-router-1 (e.g. 192.0.2.): 192.0.2.
 Core-facing Bundle-Ether interface(s) on pe-router-1, comma-separated (blank to skip): BE45
 BGP neighbor IP(s) on pe-router-1 to snapshot routes for before/after the change, comma-separated (blank to skip): 198.51.100.101
 Username: automation

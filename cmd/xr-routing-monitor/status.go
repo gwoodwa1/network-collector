@@ -117,14 +117,14 @@ func summarizeBGP(raw json.RawMessage) string {
 	return fmt.Sprintf("BGP %d/%d up", up, len(decoded.Neighbors))
 }
 
-// summarizeRoutes formats one "<vrf> routes <N>[, nexthop <ip>[,<ip>...]]"
-// segment per monitored VRF, sorted by VRF name and joined like
-// summarizeInterfaces, since a device can now monitor more than one VRF
-// (manually specified, auto-detected, or both). The nexthop clause is
-// omitted for a VRF with no default-route-next-hop data (nextHops is nil,
-// or has no entry for that VRF) rather than printed as "unavailable" —
-// unlike the route count, this is optional per-VRF data, not always
-// collected.
+// summarizeRoutes formats one "<vrf> routes <N>, nexthop <...>" segment per
+// monitored VRF, sorted by VRF name and joined like summarizeInterfaces,
+// since a device can now monitor more than one VRF (manually specified,
+// auto-detected, or both). The nexthop clause is omitted only when
+// next-hop collection wasn't attempted at all (nextHops is nil); otherwise
+// it always appears — see defaultRouteNextHopClause for the "none" vs "?"
+// distinction that keeps a collection problem visible instead of silently
+// dropping the clause.
 func summarizeRoutes(routes, nextHops map[string]json.RawMessage) string {
 	if len(routes) == 0 {
 		return ""
@@ -137,13 +137,46 @@ func summarizeRoutes(routes, nextHops map[string]json.RawMessage) string {
 
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		part := name + " " + summarizeRouteTotal(routes[name])
-		if nextHop := summarizeDefaultRouteNextHops(nextHops[name]); nextHop != "" {
-			part += ", nexthop " + nextHop
-		}
-		parts = append(parts, part)
+		parts = append(parts, name+" "+summarizeRouteTotal(routes[name])+defaultRouteNextHopClause(nextHops, name))
 	}
 	return strings.Join(parts, " | ")
+}
+
+// defaultRouteNextHopClause formats the ", nexthop ..." suffix for one
+// monitored VRF's status-line segment. A nil nextHops map means next-hop
+// collection wasn't attempted at all — no clause. Otherwise the clause is
+// always present, so a broken or empty collection is visible on the status
+// line rather than silently omitted:
+//
+//   - "nexthop <ip>[,<ip>...]": parsed, distinct next hop value(s) found.
+//   - "nexthop none": the command ran and parsed cleanly, but produced no
+//     next hop — e.g. this node's VRF genuinely has no default route.
+//   - "nexthop ?": the command failed to execute (its error is in the
+//     tick's errors field in the .jsonl), or its output didn't parse (raw
+//     fallback).
+func defaultRouteNextHopClause(nextHops map[string]json.RawMessage, name string) string {
+	if nextHops == nil {
+		return ""
+	}
+	raw, ok := nextHops[name]
+	if !ok {
+		// collectTick only leaves a monitored VRF's key unset when the
+		// default-route command itself failed to execute.
+		return ", nexthop ?"
+	}
+	if nextHop := summarizeDefaultRouteNextHops(raw); nextHop != "" {
+		return ", nexthop " + nextHop
+	}
+	// No values: tell a clean-but-empty parse ({"next_hops": []}) apart
+	// from parseOrRaw's raw fallback ({"raw": "..."}), which means the
+	// parser failed rather than the device having nothing to report.
+	var rawFallback struct {
+		Raw *string `json:"raw"`
+	}
+	if err := json.Unmarshal(raw, &rawFallback); err == nil && rawFallback.Raw != nil {
+		return ", nexthop ?"
+	}
+	return ", nexthop none"
 }
 
 func summarizeRouteTotal(raw json.RawMessage) string {

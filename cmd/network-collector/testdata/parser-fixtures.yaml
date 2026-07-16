@@ -87,7 +87,7 @@ cases:
       - extractor: gjson
         json_path: associations.1.REMOTE
         condition: eq
-        expected: 172.19.69.1
+        expected: 192.0.2.49
         expected_type: string
 
   - name: xr-ntp-associations-vrf-continuations

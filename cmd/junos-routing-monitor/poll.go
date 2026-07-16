@@ -51,7 +51,15 @@ var defaultSpec = collectionSpec{
 	RouteParser:         "junos_route_table_summary",
 	DefaultRouteCommand: `show route table %s 0/0 exact extensive | match "Protocol next hop:"`,
 	DefaultRouteParser:  "junos_default_route_nexthop",
-	InterfaceCommand:    `show interfaces %s | match "Description:|Input :|Output:"`,
+	// "extensive" plus the broad Input|Output filter covers both interface
+	// statistics formats Junos produces: the compact
+	// "Statistics Packets pps Bytes bps" table with "Input :"/"Output:"
+	// rows (ae/physical units), and irb units' section-based output where
+	// only the "Transit statistics" lines carry a trailing "N bps"/"N pps"
+	// rate — the parser keys on that trailing rate, so the rate-less
+	// Traffic/Local statistics lines the filter also lets through are
+	// ignored rather than misparsed.
+	InterfaceCommand:    `show interfaces %s extensive | match "Description:|Input|Output"`,
 	InterfaceParser:     "junos_interface_stats",
 }
 

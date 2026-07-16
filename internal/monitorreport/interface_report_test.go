@@ -33,7 +33,10 @@ func TestGenerateInterfaceReportFromJSONL(t *testing.T) {
 		t.Fatalf("read report: %v", err)
 	}
 	got := string(b)
-	for _, want := range []string{`"hostname":"pe1"`, `"interface":"ae0"`, `"input_bps":1000`, `"output_bps":2500`} {
+	// minuteTicks is the x-axis time-scale generator — asserting its
+	// presence pins the report to shipping with the minute gridlines
+	// (the JS itself is untested; see interfaceReportTemplate's comment).
+	for _, want := range []string{`"hostname":"pe1"`, `"interface":"ae0"`, `"input_bps":1000`, `"output_bps":2500`, "minuteTicks"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected report to contain %q, got:\n%s", want, got)
 		}
@@ -122,6 +125,47 @@ func TestCollectInterfaceSeriesSkipsMalformedLineInsteadOfAborting(t *testing.T)
 	got := string(b)
 	if !strings.Contains(got, `"input_bps":1000`) || !strings.Contains(got, `"input_bps":1500`) {
 		t.Fatalf("expected both valid ticks surrounding the malformed line to be included, got:\n%s", got)
+	}
+}
+
+// TestGenerateInterfaceReportMarksNextHopChangeEvents proves a change in a
+// table's default-route next hop between ticks becomes exactly one chart
+// event: stable ticks produce nothing, an unparseable (raw-fallback) tick
+// is treated as unknown rather than fabricating a change-and-revert pair,
+// and the event carries the old and new values.
+func TestGenerateInterfaceReportMarksNextHopChangeEvents(t *testing.T) {
+	dir := t.TempDir()
+	iface := `"interfaces":{"ae0":{"stats":[{"INPUT_RATE_BPS":"1000","OUTPUT_RATE_BPS":"2000"}]}}`
+	content := strings.Join([]string{
+		// Baseline: next hop .38 (repeated per route reflector, as Junos does).
+		`{"timestamp":"2026-07-15T10:00:00Z","hostname":"pe1",` + iface + `,"default_route_next_hops":{"RI-CUSTOMER-G-300001.inet.0":{"next_hops":[{"NEXTHOP":"192.0.2.9"},{"NEXTHOP":"192.0.2.9"}]}}}`,
+		// Unchanged: no event.
+		`{"timestamp":"2026-07-15T10:01:00Z","hostname":"pe1",` + iface + `,"default_route_next_hops":{"RI-CUSTOMER-G-300001.inet.0":{"next_hops":[{"NEXTHOP":"192.0.2.9"}]}}}`,
+		// Parse hiccup: unknown, must not produce an event or reset the baseline.
+		`{"timestamp":"2026-07-15T10:02:00Z","hostname":"pe1",` + iface + `,"default_route_next_hops":{"RI-CUSTOMER-G-300001.inet.0":{"raw":"unexpected output"}}}`,
+		// The migration: .38 -> .39, exactly one event expected.
+		`{"timestamp":"2026-07-15T10:03:00Z","hostname":"pe1",` + iface + `,"default_route_next_hops":{"RI-CUSTOMER-G-300001.inet.0":{"next_hops":[{"NEXTHOP":"192.0.2.10"}]}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "pe1.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	path, err := GenerateInterfaceReport(dir, mustParseTime(t, "2026-07-15T09:00:00Z"))
+	if err != nil {
+		t.Fatalf("GenerateInterfaceReport returned error: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	got := string(b)
+	for _, fragment := range []string{`"from":"192.0.2.9"`, `"to":"192.0.2.10"`, `"timestamp":"2026-07-15T10:03:00Z"`} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("expected report events to contain %q, got:\n%s", fragment, got)
+		}
+	}
+	if n := strings.Count(got, `"from":`); n != 1 {
+		t.Fatalf("expected exactly 1 next-hop change event, found %d", n)
 	}
 }
 

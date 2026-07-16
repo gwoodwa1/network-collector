@@ -308,7 +308,7 @@ func TestPollDeviceStopsOnDroppedSessionWithoutBlockingOthers(t *testing.T) {
 }
 
 func TestSanitizeFilename(t *testing.T) {
-	if got := sanitizeFilename("10.0.0.1"); got != "10.0.0.1" {
+	if got := sanitizeFilename("192.0.2.13"); got != "192.0.2.13" {
 		t.Fatalf("unexpected sanitized name: %q", got)
 	}
 	if got := sanitizeFilename("xr-router 1/edge"); got != "xr-router_1_edge" {

@@ -1,4 +1,4 @@
 ntp
- server 10.4.1.1
- server vrf management 10.4.1.1
+ server 192.0.2.51
+ server vrf management 192.0.2.51
 !
