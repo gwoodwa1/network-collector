@@ -1,7 +1,7 @@
 hosts:
   - name: xr-router-01
     ip: 192.0.2.10
-    type: cisco_xr
+    type: cisco_iosxr
     timeout: 30
     operation_timeout: 120
     labels:

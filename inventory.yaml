@@ -21,7 +21,7 @@ hosts:
     labels: {site: manchester, role: access, environment: lab, maintenance: "true", wave: hold}
   - name: xr-router-1
     ip: 192.0.2.13
-    type: cisco_xr
+    type: cisco_iosxr
     labels: {site: london, role: core, environment: lab, maintenance: "false"}
 
 groups:
