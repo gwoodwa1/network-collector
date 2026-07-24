@@ -13,19 +13,18 @@ import (
 )
 
 func newApprovalInput(reader io.Reader) *approvalInput {
-	input := &approvalInput{answers: make(chan approvalAnswer, 1)}
-	go func() {
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			input.answers <- approvalAnswer{text: scanner.Text()}
-		}
-		err := scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		input.answers <- approvalAnswer{err: err}
-	}()
-	return input
+	return &approvalInput{scanner: bufio.NewScanner(reader)}
+}
+
+func readApprovalAnswer(input *approvalInput) approvalAnswer {
+	if input.scanner.Scan() {
+		return approvalAnswer{text: input.scanner.Text()}
+	}
+	err := input.scanner.Err()
+	if err == nil {
+		err = io.EOF
+	}
+	return approvalAnswer{err: err}
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
@@ -180,14 +179,18 @@ func requestApproval(ctx *stepExecutionContext, config ApprovalConfig, stepName 
 	fmt.Fprintf(writer, "device=%s step=%s %s [y/N] ", ctx.hostname, stepName, message)
 	var response approvalAnswer
 	if config.TimeoutSeconds > 0 {
+		answers := make(chan approvalAnswer, 1)
+		go func() {
+			answers <- readApprovalAnswer(ctx.approvalInput)
+		}()
 		select {
-		case response = <-ctx.approvalInput.answers:
+		case response = <-answers:
 		case <-time.After(time.Duration(config.TimeoutSeconds) * time.Second):
 			ctx.approvalInput.expired = true
 			return false, fmt.Errorf("approval timed out after %d seconds", config.TimeoutSeconds)
 		}
 	} else {
-		response = <-ctx.approvalInput.answers
+		response = readApprovalAnswer(ctx.approvalInput)
 	}
 	if response.err != nil && response.err != io.EOF {
 		return false, fmt.Errorf("read approval: %w", response.err)

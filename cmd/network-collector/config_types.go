@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"io"
 	"sync"
 	"time"
@@ -382,6 +383,6 @@ type approvalAnswer struct {
 }
 type approvalInput struct {
 	mu      sync.Mutex
-	answers chan approvalAnswer
+	scanner *bufio.Scanner
 	expired bool
 }

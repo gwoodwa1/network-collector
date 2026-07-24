@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+type trackedApprovalReader struct {
+	data  *strings.Reader
+	reads chan struct{}
+}
+
+func (r *trackedApprovalReader) Read(p []byte) (int, error) {
+	select {
+	case r.reads <- struct{}{}:
+	default:
+	}
+	return r.data.Read(p)
+}
+
 func interactionContext(t *testing.T, variables map[string]string) (*stepExecutionContext, *bool) {
 	t.Helper()
 	failed := false
@@ -22,6 +35,33 @@ func interactionContext(t *testing.T, variables map[string]string) (*stepExecuti
 		variables: variables, aggregated: &validations, artifacts: &artifacts,
 		runFailed: &failed, workflows: map[string]WorkflowConfig{},
 	}, &failed
+}
+
+func TestApprovalInputWaitsUntilPrompt(t *testing.T) {
+	reader := &trackedApprovalReader{
+		data:  strings.NewReader("yes\n"),
+		reads: make(chan struct{}, 1),
+	}
+	approvals := newApprovalInput(reader)
+
+	select {
+	case <-reader.reads:
+		t.Fatal("approval input was read before an approval was requested")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	ctx, _ := interactionContext(t, map[string]string{})
+	ctx.approvalInput = approvals
+	ctx.approvalWriter = io.Discard
+	approved, err := requestApproval(ctx, ApprovalConfig{Message: "continue?"}, "gate")
+	if err != nil || !approved {
+		t.Fatalf("approval was not accepted: approved=%v err=%v", approved, err)
+	}
+	select {
+	case <-reader.reads:
+	default:
+		t.Fatal("approval input was not read after the prompt")
+	}
 }
 
 func TestInteractionApprovalAcrossRecurringSchedule(t *testing.T) {
