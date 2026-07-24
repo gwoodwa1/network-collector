@@ -41,10 +41,13 @@ func TestResolveCredentialsPromptsWhenRequested(t *testing.T) {
 		t.Fatalf("expected password secret, got %q", password)
 	}
 	gotOutput := output.String()
-	for _, want := range []string{"Username:", "Password:", passwordMask} {
+	for _, want := range []string{"Username:", "Password (input hidden):"} {
 		if !strings.Contains(gotOutput, want) {
 			t.Fatalf("expected prompt output to contain %q, got %q", want, gotOutput)
 		}
+	}
+	if strings.Contains(gotOutput, "********") {
+		t.Fatalf("prompt output displayed a misleading fixed password mask: %q", gotOutput)
 	}
 	if strings.Contains(gotOutput, "secret") {
 		t.Fatalf("prompt output leaked the password: %q", gotOutput)

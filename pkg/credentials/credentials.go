@@ -10,8 +10,6 @@ import (
 	"golang.org/x/term"
 )
 
-const passwordMask = "********"
-
 // ResolveCredentials returns username/password using environment variables by default,
 // or prompts interactively when requested.
 func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) (string, string, error) {
@@ -62,13 +60,13 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 			return "", "", fmt.Errorf("read username: %w", err)
 		}
 
-		fmt.Fprint(output, "Password: ")
+		fmt.Fprint(output, "Password (input hidden): ")
 		passwordBytes, err := term.ReadPassword(int(terminalFile.Fd()))
 		if err != nil {
 			fmt.Fprintln(output)
 			return "", "", fmt.Errorf("read password: %w", err)
 		}
-		fmt.Fprintln(output, passwordMask)
+		fmt.Fprintln(output)
 		password = string(passwordBytes)
 	} else {
 		reader := bufio.NewReader(input)
@@ -82,7 +80,7 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 			return "", "", fmt.Errorf("read username: %w", io.EOF)
 		}
 
-		fmt.Fprint(output, "Password: ")
+		fmt.Fprint(output, "Password (input hidden): ")
 		password, err = reader.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return "", "", fmt.Errorf("read password: %w", err)
@@ -90,7 +88,6 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 		if err == io.EOF && password == "" {
 			return "", "", fmt.Errorf("read password: %w", io.EOF)
 		}
-		fmt.Fprintln(output, passwordMask)
 	}
 
 	return strings.TrimSpace(username), strings.TrimRight(password, "\r\n"), nil
