@@ -68,6 +68,16 @@ type StepConfig struct {
 	Facts          *FactsConfig            `mapstructure:"facts" yaml:"facts"`
 	Drift          *DriftConfig            `mapstructure:"drift" yaml:"drift"`
 	GNMISubscribe  *GNMISubscribeConfig    `mapstructure:"gnmi_subscribe" yaml:"gnmi_subscribe"`
+	NETCONF        *NETCONFStepConfig      `mapstructure:"netconf" yaml:"netconf"`
+}
+
+type NETCONFStepConfig struct {
+	Operation             string `mapstructure:"operation" yaml:"operation"`
+	Target                string `mapstructure:"target" yaml:"target"`
+	Payload               string `mapstructure:"payload" yaml:"payload"`
+	PayloadFile           string `mapstructure:"payload_file" yaml:"payload_file"`
+	Confirmed             bool   `mapstructure:"confirmed" yaml:"confirmed"`
+	ConfirmTimeoutSeconds int    `mapstructure:"confirm_timeout_seconds" yaml:"confirm_timeout_seconds"`
 }
 
 type EnrichmentConfig struct {
@@ -192,6 +202,7 @@ type Config struct {
 	Execution     ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
 	Output        OutputConfig              `mapstructure:"output" yaml:"output"`
 	SSH           []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
+	NETCONF       []DeviceConfig            `mapstructure:"netconf" yaml:"netconf"`
 	LocalSteps    []StepConfig              `mapstructure:"local_steps" yaml:"local_steps"`
 	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
 	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
@@ -375,6 +386,7 @@ type stepExecutionContext struct {
 	factsDefaults  FactsDefaultsConfig
 	events         *eventDispatcher
 	reauthenticate func() (string, string, error)
+	netconf        netconfStepExecutor
 }
 
 type approvalAnswer struct {

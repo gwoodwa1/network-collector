@@ -1,0 +1,104 @@
+name_playbook: Arista EOS NETCONF OpenConfig interface
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: Ethernet4
+  interface_description: NETCONF OpenConfig customer handoff
+
+netconf:
+  - host: eos-netconf-01
+    steps:
+      - name: inspect-eos-openconfig-interface
+        netconf:
+          operation: rpc
+          payload: |-
+            <get>
+              <filter type="subtree">
+                <interfaces xmlns="http://openconfig.net/yang/interfaces">
+                  <interface>
+                    <name>{{interface}}</name>
+                  </interface>
+                </interfaces>
+              </filter>
+            </get>
+        output:
+          save_raw: true
+
+      - name: authorize-eos-netconf-turnup
+        approval:
+          message: Enable {{interface}} through EOS OpenConfig NETCONF?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-eos-openconfig
+        block:
+          steps:
+            # EOS must have the NETCONF API and OpenConfig models enabled.
+            - name: update-eos-running-interface
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/interface-enable.xml
+
+            - name: verify-eos-openconfig-interface
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get>
+                    <filter type="subtree">
+                      <interfaces xmlns="http://openconfig.net/yang/interfaces">
+                        <interface>
+                          <name>{{interface}}</name>
+                          <state>
+                            <description/>
+                            <enabled/>
+                            <admin-status/>
+                            <oper-status/>
+                          </state>
+                        </interface>
+                      </interfaces>
+                    </filter>
+                  </get>
+              retry:
+                until_pass: true
+                interval_seconds: 5
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<description>\s*({{interface_description}})\s*</description>'
+                  condition: eq
+                  expected: '{{interface_description}}'
+                - extractor: regex
+                  pattern: '<enabled>\s*(true)\s*</enabled>'
+                  condition: eq
+                  expected: true
+
+          rollback:
+            - name: disable-eos-openconfig-interface
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/interface-disable.xml
+
+          always:
+            - name: collect-eos-openconfig-after
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get>
+                    <filter type="subtree">
+                      <interfaces xmlns="http://openconfig.net/yang/interfaces">
+                        <interface>
+                          <name>{{interface}}</name>
+                        </interface>
+                      </interfaces>
+                    </filter>
+                  </get>
+              output:
+                save_raw: true

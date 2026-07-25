@@ -1,5 +1,5 @@
 name_playbook: Recurring health sample
-inventory_file: inventory.yaml
+inventory_file: ../inventory.yaml
 fail_on_fail: true
 
 schedule:

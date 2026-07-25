@@ -1,5 +1,5 @@
 name_playbook: Reusable workflows and recovery
-inventory_file: inventory.yaml
+inventory_file: ../inventory.yaml
 fail_on_fail: true
 
 workflows:
@@ -70,4 +70,3 @@ ssh:
           always:
             - name: final-interface-state
               cmd: show running-config interface Loopback123
-

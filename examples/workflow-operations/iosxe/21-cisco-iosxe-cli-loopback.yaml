@@ -1,0 +1,74 @@
+name_playbook: Cisco IOS-XE CLI loopback and static route
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  loopback_id: 310
+  loopback_address: 192.0.2.210
+  route_prefix: 198.51.100.0
+  route_mask: 255.255.255.0
+
+ssh:
+  - host: iosxe-cli-01
+    steps:
+      - name: inspect-iosxe-route
+        cmd: show ip route {{route_prefix}} {{route_mask}}
+        on_fail:
+          action: continue
+
+      - name: authorize-iosxe-loopback
+        approval:
+          message: Create Loopback{{loopback_id}} and static route {{route_prefix}}/{{route_mask}}?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-iosxe
+        block:
+          steps:
+            - name: configure-iosxe-loopback-and-route
+              cmd: |-
+                configure terminal
+                interface Loopback{{loopback_id}}
+                description Network Collector lab loopback
+                ip address {{loopback_address}} 255.255.255.255
+                no shutdown
+                exit
+                ip route {{route_prefix}} {{route_mask}} Loopback{{loopback_id}}
+                end
+                write memory
+
+            - name: verify-iosxe-loopback
+              cmd: show interfaces Loopback{{loopback_id}}
+              validation:
+                extractor: regex
+                pattern: '(?m)^Loopback{{loopback_id}} is (up), line protocol is (up)'
+                condition: eq
+                expected: up
+
+            - name: verify-iosxe-static-route
+              cmd: show ip route {{route_prefix}} {{route_mask}}
+              validation:
+                extractor: regex
+                pattern: '(?m)^S\s+{{route_prefix}}/24.*(Loopback{{loopback_id}})'
+                condition: eq
+                expected: Loopback{{loopback_id}}
+
+          rollback:
+            - name: remove-iosxe-loopback-and-route
+              cmd: |-
+                configure terminal
+                no ip route {{route_prefix}} {{route_mask}} Loopback{{loopback_id}}
+                no interface Loopback{{loopback_id}}
+                end
+                write memory
+
+          always:
+            - name: collect-iosxe-route-after
+              cmd: show ip route {{route_prefix}} {{route_mask}}
+              output:
+                save_raw: true

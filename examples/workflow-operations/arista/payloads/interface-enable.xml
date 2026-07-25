@@ -1,0 +1,12 @@
+<config>
+  <interfaces xmlns="http://openconfig.net/yang/interfaces">
+    <interface>
+      <name>{{interface}}</name>
+      <config>
+        <name>{{interface}}</name>
+        <description>{{interface_description}}</description>
+        <enabled>true</enabled>
+      </config>
+    </interface>
+  </interfaces>
+</config>

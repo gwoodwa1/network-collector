@@ -1,6 +1,6 @@
 name_playbook: EOS and Junos multi-vendor facts
-inventory_file: inventory/multivendor.yaml
-parsers_file: ../../parsers.yaml
+inventory_file: ../inventory/multivendor.yaml
+parsers_file: ../../../parsers.yaml
 fail_on_fail: true
 
 facts:

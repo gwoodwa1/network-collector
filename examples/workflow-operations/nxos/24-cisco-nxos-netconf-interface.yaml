@@ -1,0 +1,86 @@
+name_playbook: Cisco NX-OS NETCONF OpenConfig interface
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: eth1/4
+  interface_description: NX-OS OpenConfig customer handoff
+
+netconf:
+  - host: nxos-netconf-01
+    steps:
+      - name: authorize-nxos-openconfig
+        approval:
+          message: Enable {{interface}} using NX-OS OpenConfig over NETCONF?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-nxos-openconfig
+        block:
+          steps:
+            # NX-OS requires both the NETCONF and OpenConfig features.
+            - name: update-nxos-running-interface
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/interface-enable.xml
+
+            - name: verify-nxos-openconfig-interface
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get>
+                    <filter type="subtree">
+                      <interfaces xmlns="http://openconfig.net/yang/interfaces">
+                        <interface>
+                          <name>{{interface}}</name>
+                          <state>
+                            <description/>
+                            <enabled/>
+                            <admin-status/>
+                            <oper-status/>
+                          </state>
+                        </interface>
+                      </interfaces>
+                    </filter>
+                  </get>
+              retry:
+                until_pass: true
+                interval_seconds: 5
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<description>\s*({{interface_description}})\s*</description>'
+                  condition: eq
+                  expected: '{{interface_description}}'
+                - extractor: regex
+                  pattern: '<enabled>\s*(true)\s*</enabled>'
+                  condition: eq
+                  expected: true
+
+          rollback:
+            - name: disable-nxos-openconfig-interface
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/interface-disable.xml
+
+          always:
+            - name: collect-nxos-openconfig-after
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get>
+                    <filter type="subtree">
+                      <interfaces xmlns="http://openconfig.net/yang/interfaces">
+                        <interface><name>{{interface}}</name></interface>
+                      </interfaces>
+                    </filter>
+                  </get>
+              output:
+                save_raw: true

@@ -1,0 +1,26 @@
+hosts:
+  - name: junos-pe-01
+    ip: 192.0.2.30
+    type: juniper_junos
+    operation_timeout: 120
+    labels:
+      vendor: juniper
+      site: london
+      role: pe
+      environment: lab
+
+  - name: junos-pe-02
+    ip: 192.0.2.31
+    type: juniper_junos
+    operation_timeout: 120
+    labels:
+      vendor: juniper
+      site: manchester
+      role: pe
+      environment: lab
+
+groups:
+  junos-netconf-pes:
+    hosts:
+      - junos-pe-01
+      - junos-pe-02

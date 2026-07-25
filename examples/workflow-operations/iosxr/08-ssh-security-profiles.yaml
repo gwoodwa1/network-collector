@@ -1,6 +1,6 @@
 name_playbook: Mixed modern and legacy SSH estate
-inventory_file: inventory/security-profiles.yaml
-parsers_file: ../../parsers.yaml
+inventory_file: ../inventory/security-profiles.yaml
+parsers_file: ../../../parsers.yaml
 fail_on_fail: true
 
 # Auto tries the SSH library's standard algorithms first and retries with the

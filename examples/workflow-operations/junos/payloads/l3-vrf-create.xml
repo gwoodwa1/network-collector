@@ -1,0 +1,44 @@
+<config>
+  <configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm">
+    <interfaces>
+      <interface>
+        <name>{{access_port}}</name>
+        <unit>
+          <name>{{access_unit}}</name>
+          <vlan-id>{{access_unit}}</vlan-id>
+          <family>
+            <inet>
+              <address>
+                <name>{{access_address}}</name>
+              </address>
+            </inet>
+          </family>
+        </unit>
+      </interface>
+    </interfaces>
+    <routing-instances>
+      <instance>
+        <name>{{vrf_name}}</name>
+        <instance-type>vrf</instance-type>
+        <interface>
+          <name>{{access_port}}.{{access_unit}}</name>
+        </interface>
+        <route-distinguisher>
+          <rd-type>{{route_distinguisher}}</rd-type>
+        </route-distinguisher>
+        <vrf-target>
+          <community>{{route_target}}</community>
+        </vrf-target>
+        <vrf-table-label/>
+        <routing-options>
+          <static>
+            <route>
+              <name>{{static_prefix}}</name>
+              <next-hop>{{static_next_hop}}</next-hop>
+            </route>
+          </static>
+        </routing-options>
+      </instance>
+    </routing-instances>
+  </configuration>
+</config>

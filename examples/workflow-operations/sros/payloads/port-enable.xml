@@ -1,0 +1,9 @@
+<config>
+  <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+    <port>
+      <port-id>{{port_id}}</port-id>
+      <description>{{port_description}}</description>
+      <admin-state>enable</admin-state>
+    </port>
+  </configure>
+</config>

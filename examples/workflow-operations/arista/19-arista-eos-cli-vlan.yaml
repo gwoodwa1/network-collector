@@ -1,0 +1,89 @@
+name_playbook: Arista EOS CLI VLAN and access port
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: Ethernet3
+  interface_description: Customer access VLAN 310
+  vlan_id: 310
+  vlan_name: CUSTOMER_310
+
+ssh:
+  - host: eos-cli-01
+    steps:
+      - name: inspect-eos-interface
+        cmd: show interfaces {{interface}} status
+        validation:
+          extractor: regex
+          pattern: '(?m)^Et(?:hernet)?3\s+'
+          condition: matches
+          expected: '.+'
+
+      - name: authorize-eos-access-port
+        approval:
+          message: Configure {{interface}} as access VLAN {{vlan_id}} on eos-cli-01?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-eos-access-port
+        block:
+          steps:
+            # Lab template: use a dedicated interface and VLAN so rollback does
+            # not remove configuration owned by another service.
+            - name: configure-eos-vlan-and-port
+              cmd: |-
+                configure terminal
+                vlan {{vlan_id}}
+                name {{vlan_name}}
+                interface {{interface}}
+                description {{interface_description}}
+                switchport
+                switchport mode access
+                switchport access vlan {{vlan_id}}
+                no shutdown
+                end
+                write memory
+
+            - name: verify-eos-vlan
+              cmd: show vlan id {{vlan_id}}
+              validation:
+                extractor: regex
+                pattern: '(?m)^{{vlan_id}}\s+({{vlan_name}})\s+'
+                condition: eq
+                expected: '{{vlan_name}}'
+
+            - name: verify-eos-interface
+              cmd: show interfaces {{interface}} status
+              validations:
+                - extractor: regex
+                  pattern: '(?i){{interface_description}}'
+                  condition: matches
+                  expected: '.+'
+                - extractor: regex
+                  pattern: '(?m)\s({{vlan_id}})\s+'
+                  condition: eq
+                  expected: '{{vlan_id}}'
+
+          rollback:
+            - name: remove-eos-access-service
+              cmd: |-
+                configure terminal
+                interface {{interface}}
+                shutdown
+                no description
+                no switchport access vlan
+                exit
+                no vlan {{vlan_id}}
+                end
+                write memory
+
+          always:
+            - name: collect-eos-final-state
+              cmd: show running-config interfaces {{interface}}
+              output:
+                save_raw: true

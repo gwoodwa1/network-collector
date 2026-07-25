@@ -1,0 +1,18 @@
+<config>
+  <native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native">
+    <interface>
+      <Loopback>
+        <name>{{loopback_id}}</name>
+        <description>{{loopback_description}}</description>
+        <ip>
+          <address>
+            <primary>
+              <address>{{loopback_address}}</address>
+              <mask>{{loopback_mask}}</mask>
+            </primary>
+          </address>
+        </ip>
+      </Loopback>
+    </interface>
+  </native>
+</config>

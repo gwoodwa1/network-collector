@@ -88,6 +88,13 @@ func main() {
 		slog.Error("error resolving SSH inventory", "error", err)
 		os.Exit(1)
 	}
+	netconfDevices, err := resolveInventoryDevices(config.NETCONF, inventory)
+	if err != nil {
+		slog.Error("error resolving NETCONF inventory", "error", err)
+		os.Exit(1)
+	}
+	devices := append([]DeviceConfig(nil), sshDevices...)
+	devices = append(devices, netconfDevices...)
 	includeSelector, err := parseDeviceSelector(limitExpression)
 	if err != nil {
 		slog.Error("invalid --limit selector", "error", err)
@@ -106,14 +113,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	sshDevices = filterDevices(sshDevices, includeSelector, excludeSelector, replayDevices)
-	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(sshDevices) == 0 {
-		slog.Warn("inventory selection matched no SSH devices")
+	devices = filterDevices(devices, includeSelector, excludeSelector, replayDevices)
+	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(devices) == 0 {
+		slog.Warn("inventory selection matched no devices")
 	}
 	rsaToken := cliRSAToken || config.Credentials.RSAToken
-	deviceCredentials := make([]credentials.Credentials, len(sshDevices))
+	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth
-	if len(sshDevices) > 0 {
+	if len(devices) > 0 {
 		providerType := config.Credentials.Provider
 		if cliCredsInput || rsaToken {
 			providerType = "interactive"
@@ -140,7 +147,7 @@ func main() {
 				rsaAuth = newRSATokenAuth(shared.Username, os.Stdin, os.Stderr)
 			}
 		} else {
-			for index, device := range sshDevices {
+			for index, device := range devices {
 				deviceCredentials[index], err = provider.Resolve(context.Background(), credentials.Target{Hostname: device.Hostname, IP: device.IP, Profile: device.CredentialProfile})
 				if err != nil {
 					slog.Error("error resolving credentials", "hostname", device.Hostname, "error", err)
@@ -149,13 +156,18 @@ func main() {
 			}
 		}
 	}
-	for _, device := range sshDevices {
+	sshTargets := make([]DeviceConfig, 0, len(devices))
+	for _, device := range devices {
+		if !stepsNeedSSH(device.Steps, config.Workflows, map[string]bool{}) && !(len(device.Steps) == 0 && strings.TrimSpace(device.Command) != "") {
+			continue
+		}
+		sshTargets = append(sshTargets, device)
 		if err := validateSSHSecurity(effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity)); err != nil {
 			slog.Error("invalid SSH security configuration", "hostname", device.Hostname, "error", err)
 			os.Exit(1)
 		}
 	}
-	logSSHSecuritySummary(config.SSHSecurity, sshDevices)
+	logSSHSecuritySummary(config.SSHSecurity, sshTargets)
 
 	parserConfig, err := loadOptionalParsers(config.ParsersFile, configFile)
 	if err != nil {
@@ -170,7 +182,7 @@ func main() {
 	runStarted := time.Now()
 	runID := "run-" + runStarted.Format("20060102T150405.000000000")
 	runDir := ""
-	if outputEnabled(config, sshDevices) {
+	if outputEnabled(config, devices) {
 		runDir, err = prepareRunOutput(config.Output, runID)
 		if err != nil {
 			slog.Error("error preparing structured output", "error", err)
@@ -201,7 +213,7 @@ func main() {
 		events.sinks = append(events.sinks, sink)
 		slog.Info("configured lifecycle event sink", "type", strings.ToLower(strings.TrimSpace(sinkConfig.Type)))
 	}
-	events.emit(lifecycleEvent{Type: "run.started", Data: map[string]interface{}{"playbook": config.NamePlaybook, "device_count": len(sshDevices)}})
+	events.emit(lifecycleEvent{Type: "run.started", Data: map[string]interface{}{"playbook": config.NamePlaybook, "device_count": len(devices)}})
 
 	if err := validateExecutionConfig(config.Execution); err != nil {
 		slog.Error("invalid execution configuration", "error", err)
@@ -219,7 +231,7 @@ func main() {
 
 	variableStates := make(map[string]*deviceVariableState)
 	initialVariables, _ := configVariables(config.Vars)
-	for index, device := range sshDevices {
+	for index, device := range devices {
 		key := variableScopeKey(device.Hostname, device.IP)
 		state, exists := variableStates[key]
 		if !exists {
@@ -242,12 +254,12 @@ func main() {
 		state.mu.Unlock()
 		return result
 	}
-	deviceResults, schedulingStopped := runRecurringSchedule(sshDevices, config.Execution, config.Schedule, runner, time.Sleep)
+	deviceResults, schedulingStopped := runRecurringSchedule(devices, config.Execution, config.Schedule, runner, time.Sleep)
 	occurrences := config.Schedule.Count
 	if occurrences == 0 {
 		occurrences = 1
 	}
-	deviceResultCount := len(sshDevices) * occurrences
+	deviceResultCount := len(devices) * occurrences
 	if len(config.LocalSteps) > 0 {
 		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, deviceResultCount, events))
 	}

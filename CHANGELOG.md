@@ -4,8 +4,17 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
-- Add `cmd/junos-routing-monitor`, a self-contained binary for watching Junos routers during a change window (BGP/routing-table/interface polling, per-table default-route BGP protocol-next-hop tracking, plus a before/after route snapshot diff), mirroring `cmd/xr-routing-monitor`'s workflow with Junos-native commands and parsers, validated against real `show bgp summary`/`show route summary table`/`show route table`/`show interfaces` output.
-- Add end-of-run `interface-traffic.html` reports for Junos and IOS-XR routing monitors, generated from current-run JSONL interface samples.
+## [1.2.0] - 2026-07-25
+
+- Added first-class NETCONF workflow targets and steps with RPC, candidate or running `edit-config`, commit, confirmed commit, discard, validation, retry, registration, drift, parallel execution, and transactional rollback support.
+- Added playbook-relative `netconf.payload_file` artifacts with variable rendering, allowing large modelled XML payloads to remain outside the workflow YAML.
+- Added native NETCONF and CLI provisioning examples for Junos, Arista EOS, Cisco IOS-XE, Cisco NX-OS, and Nokia SR OS, including L3 VRFs, L2VPNs, VLANs, trunks, loopbacks, static routes, port turn-up, verification, and rollback.
+- Reorganized all workflow examples into vendor directories with shared inventories and vendor-local NETCONF payload folders.
+- Fixed interactive credential collection so passwords are explicitly prompted rather than populated by terminal autocomplete.
+- Fixed approval prompts so interactive `y/N` input is read when the approval step executes instead of exiting without waiting.
+- Corrected IOS-XR inventory platform examples to use the supported `cisco_iosxr` Scrapli platform identifier.
+- Added `cmd/junos-routing-monitor`, a self-contained binary for watching Junos routers during a change window, including BGP, routing-table, and interface polling plus before/after route snapshot diffs.
+- Added end-of-run `interface-traffic.html` reports for Junos and IOS-XR routing monitors, generated from current-run JSONL interface samples.
 
 ## [1.1.0] - 2026-07-12
 
@@ -64,3 +73,4 @@ First stable release.
 [1.0.1]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.1
 [1.0.2]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.2
 [1.1.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.1.0
+[1.2.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.2.0

@@ -1788,18 +1788,32 @@ func TestModularExampleLoads(t *testing.T) {
 
 func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	directory := filepath.Join("..", "..", "examples", "workflow-operations")
-	paths, err := filepath.Glob(filepath.Join(directory, "*.yaml"))
+	var paths []string
+	err := filepath.Walk(directory, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || filepath.Ext(path) != ".yaml" {
+			return nil
+		}
+		vendorDirectory := filepath.Base(filepath.Dir(path))
+		switch vendorDirectory {
+		case "arista", "iosxe", "iosxr", "junos", "multivendor", "nxos", "sros":
+		default:
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 14 {
-		t.Fatalf("expected inventory plus thirteen workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 26 {
+		t.Fatalf("expected twenty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
+	loadedPaths := map[string]string{}
 	for _, path := range paths {
-		if filepath.Base(path) == "inventory.yaml" {
-			continue
-		}
 		config, _, err := loadConfig(path)
 		if err != nil {
 			t.Fatalf("failed to load workflow example %s: %v", path, err)
@@ -1809,9 +1823,10 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 			t.Fatalf("invalid inventory for %s: inventory=%+v error=%v", path, inventory, err)
 		}
 		loaded[filepath.Base(path)] = config
+		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 13 {
-		t.Fatalf("expected thirteen loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 26 {
+		t.Fatalf("expected twenty-six loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1839,12 +1854,12 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("custom variable example is incomplete: variables=%+v config=%+v error=%v", variables, custom, err)
 	}
 	turnup := loaded["07-interface-turnup.yaml"]
-	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, filepath.Join(directory, "07-interface-turnup.yaml"))
+	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, loadedPaths["07-interface-turnup.yaml"])
 	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 {
 		t.Fatalf("interface turn-up example is incomplete: parsers=%+v config=%+v error=%v", turnupParsers, turnup, err)
 	}
 	security := loaded["08-ssh-security-profiles.yaml"]
-	securityInventory, err := loadOptionalInventory(security.InventoryFile, filepath.Join(directory, "08-ssh-security-profiles.yaml"))
+	securityInventory, err := loadOptionalInventory(security.InventoryFile, loadedPaths["08-ssh-security-profiles.yaml"])
 	if err != nil || security.SSHSecurity.Profile != "auto" || securityInventory == nil || len(securityInventory.Hosts) != 2 || securityInventory.Hosts[1].SSHSecurity == nil || securityInventory.Hosts[1].SSHSecurity.Profile != "legacy" {
 		t.Fatalf("SSH security profile example is incomplete: inventory=%+v config=%+v error=%v", securityInventory, security, err)
 	}
@@ -1853,7 +1868,7 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("facts example is incomplete: %+v", facts)
 	}
 	targeting := loaded["10-targeting-canary-and-replay.yaml"]
-	targetingInventory, err := loadOptionalInventory(targeting.InventoryFile, filepath.Join(directory, "10-targeting-canary-and-replay.yaml"))
+	targetingInventory, err := loadOptionalInventory(targeting.InventoryFile, loadedPaths["10-targeting-canary-and-replay.yaml"])
 	if err != nil || targeting.Execution.CanaryCount != 1 || targeting.Execution.FailureThreshold != 2 || targeting.Output.EventsFile != "events.jsonl" || targetingInventory == nil || len(targetingInventory.Hosts) != 4 || targetingInventory.Hosts[0].Labels["wave"] != "canary" {
 		t.Fatalf("targeting example is incomplete: inventory=%+v config=%+v error=%v", targetingInventory, targeting, err)
 	}
@@ -1863,13 +1878,101 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("reload/reconnect example is incomplete: %+v", reload)
 	}
 	multivendor := loaded["12-multivendor-facts.yaml"]
-	multivendorInventory, err := loadOptionalInventory(multivendor.InventoryFile, filepath.Join(directory, "12-multivendor-facts.yaml"))
+	multivendorInventory, err := loadOptionalInventory(multivendor.InventoryFile, loadedPaths["12-multivendor-facts.yaml"])
 	if err != nil || len(multivendor.Facts.DefaultSubsets) != 5 || multivendorInventory == nil || len(multivendorInventory.Hosts) != 2 || multivendorInventory.Hosts[0].CredentialProfile != "datacenter" {
 		t.Fatalf("multi-vendor facts example is incomplete: inventory=%+v config=%+v error=%v", multivendorInventory, multivendor, err)
 	}
 	driftExample := loaded["13-structured-drift.yaml"]
 	if len(driftExample.SSH) != 1 || len(driftExample.SSH[0].Steps) != 2 || driftExample.SSH[0].Steps[0].Drift == nil || driftExample.SSH[0].Steps[0].Drift.Baseline != "previous" || driftExample.SSH[0].Steps[1].Drift == nil || !driftExample.SSH[0].Steps[1].Drift.UpdateBaseline {
 		t.Fatalf("drift example is incomplete: %+v", driftExample)
+	}
+	vrfExample := loaded["14-multidevice-vrf-provision.yaml"]
+	vrfWorkflow := vrfExample.Workflows["provision-customer-vrf"]
+	if len(vrfExample.SSH) != 2 || len(vrfWorkflow.Parameters) != 9 || len(vrfWorkflow.Steps) != 3 || vrfWorkflow.Steps[1].Approval == nil || vrfWorkflow.Steps[2].Block == nil || len(vrfWorkflow.Steps[2].Block.Rollback) != 1 || vrfExample.SSH[0].Steps[0].With["rd"] == vrfExample.SSH[1].Steps[0].With["rd"] {
+		t.Fatalf("multi-device VRF example is incomplete: %+v", vrfExample)
+	}
+	l2vpnExample := loaded["15-layer2-mpls-service.yaml"]
+	l2vpnWorkflow := l2vpnExample.Workflows["provision-eline-endpoint"]
+	if len(l2vpnExample.SSH) != 2 || len(l2vpnWorkflow.Parameters) != 5 || len(l2vpnWorkflow.Steps) != 3 || l2vpnWorkflow.Steps[1].Approval == nil || l2vpnWorkflow.Steps[2].Block == nil || len(l2vpnWorkflow.Steps[2].Block.Rollback) != 1 || l2vpnExample.SSH[0].Steps[0].With["remote_pe"] == l2vpnExample.SSH[1].Steps[0].With["remote_pe"] {
+		t.Fatalf("Layer 2 MPLS example is incomplete: %+v", l2vpnExample)
+	}
+	junosVRF := loaded["16-junos-netconf-l3-vrf.yaml"]
+	junosVRFWorkflow := junosVRF.Workflows["provision-junos-vrf"]
+	if len(junosVRF.NETCONF) != 2 || len(junosVRFWorkflow.Parameters) != 7 || junosVRFWorkflow.Steps[1].Block == nil || len(junosVRFWorkflow.Steps[1].Block.Rollback) != 2 || junosVRFWorkflow.Steps[1].Block.Steps[0].NETCONF == nil || junosVRFWorkflow.Steps[1].Block.Steps[2].NETCONF.Operation != "rpc" {
+		t.Fatalf("Junos NETCONF VRF example is incomplete: %+v", junosVRF)
+	}
+	readPayload := func(playbook string, config *NETCONFStepConfig) string {
+		t.Helper()
+		path := config.PayloadFile
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(loadedPaths[playbook]), path)
+		}
+		payload, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read payload for %s: %v", playbook, readErr)
+		}
+		return string(payload)
+	}
+	junosVRFLoad := readPayload("16-junos-netconf-l3-vrf.yaml", junosVRFWorkflow.Steps[1].Block.Steps[0].NETCONF)
+	junosVRFRollback := readPayload("16-junos-netconf-l3-vrf.yaml", junosVRFWorkflow.Steps[1].Block.Rollback[0].NETCONF)
+	if !strings.Contains(junosVRFLoad, "<routing-instances>") || strings.Contains(junosVRFLoad, "<configuration-text>") || strings.Contains(junosVRFLoad, "set routing-instances") {
+		t.Fatal("Junos NETCONF VRF example should use native configuration XML without CLI set commands")
+	}
+	if !strings.Contains(junosVRFRollback, `nc:operation="remove"`) || strings.Contains(junosVRFRollback, "delete routing-instances") {
+		t.Fatal("Junos NETCONF VRF rollback should use native NETCONF remove operations")
+	}
+	junosL2VPN := loaded["17-junos-netconf-l2vpn.yaml"]
+	junosL2VPNWorkflow := junosL2VPN.Workflows["provision-junos-l2vpn-site"]
+	if len(junosL2VPN.NETCONF) != 2 || len(junosL2VPNWorkflow.Parameters) != 7 || junosL2VPNWorkflow.Steps[1].Block == nil || junosL2VPNWorkflow.Steps[1].Block.Steps[2].NETCONF == nil || junosL2VPNWorkflow.Steps[1].Block.Steps[2].Retry == nil {
+		t.Fatalf("Junos NETCONF L2VPN example is incomplete: %+v", junosL2VPN)
+	}
+	junosL2VPNLoad := readPayload("17-junos-netconf-l2vpn.yaml", junosL2VPNWorkflow.Steps[1].Block.Steps[0].NETCONF)
+	junosL2VPNRollback := readPayload("17-junos-netconf-l2vpn.yaml", junosL2VPNWorkflow.Steps[1].Block.Rollback[0].NETCONF)
+	if !strings.Contains(junosL2VPNLoad, "<routing-instances>") || strings.Contains(junosL2VPNLoad, "<configuration-text>") || strings.Contains(junosL2VPNLoad, "set routing-instances") {
+		t.Fatal("Junos NETCONF L2VPN example should use native configuration XML without CLI set commands")
+	}
+	if !strings.Contains(junosL2VPNRollback, `nc:operation="remove"`) || strings.Contains(junosL2VPNRollback, "delete routing-instances") {
+		t.Fatal("Junos NETCONF L2VPN rollback should use native NETCONF remove operations")
+	}
+	junosPort := loaded["18-junos-netconf-port-turnup.yaml"]
+	if len(junosPort.NETCONF) != 1 || len(junosPort.NETCONF[0].Steps) != 3 || junosPort.NETCONF[0].Steps[0].NETCONF == nil || junosPort.NETCONF[0].Steps[1].Approval == nil || junosPort.NETCONF[0].Steps[2].Block == nil || len(junosPort.NETCONF[0].Steps[2].Block.Rollback) != 2 {
+		t.Fatalf("Junos NETCONF port example is incomplete: %+v", junosPort)
+	}
+	operationsInventory, err := loadOptionalInventory(loaded["19-arista-eos-cli-vlan.yaml"].InventoryFile, loadedPaths["19-arista-eos-cli-vlan.yaml"])
+	if err != nil || operationsInventory == nil || len(operationsInventory.Hosts) != 8 || operationsInventory.Hosts[0].Type != "arista_eos" || operationsInventory.Hosts[2].Type != "cisco_iosxe" || operationsInventory.Hosts[4].Type != "cisco_nxos" || operationsInventory.Hosts[6].Type != "nokia_sros" {
+		t.Fatalf("multi-vendor operations inventory is incomplete: inventory=%+v error=%v", operationsInventory, err)
+	}
+	eosCLI := loaded["19-arista-eos-cli-vlan.yaml"]
+	if len(eosCLI.SSH) != 1 || eosCLI.SSH[0].Steps[1].Approval == nil || eosCLI.SSH[0].Steps[2].Block == nil || len(eosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("EOS CLI example is incomplete: %+v", eosCLI)
+	}
+	eosNETCONF := loaded["20-arista-eos-netconf-interface.yaml"]
+	if len(eosNETCONF.NETCONF) != 1 || eosNETCONF.NETCONF[0].Steps[2].Block == nil || eosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF.Target != "running" || !strings.Contains(readPayload("20-arista-eos-netconf-interface.yaml", eosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF), "http://openconfig.net/yang/interfaces") {
+		t.Fatalf("EOS NETCONF example is incomplete: %+v", eosNETCONF)
+	}
+	iosxeCLI := loaded["21-cisco-iosxe-cli-loopback.yaml"]
+	if len(iosxeCLI.SSH) != 1 || iosxeCLI.SSH[0].Steps[2].Block == nil || len(iosxeCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("IOS-XE CLI example is incomplete: %+v", iosxeCLI)
+	}
+	iosxeNETCONF := loaded["22-cisco-iosxe-netconf-loopback.yaml"]
+	if len(iosxeNETCONF.NETCONF) != 1 || iosxeNETCONF.NETCONF[0].Steps[1].Block == nil || !strings.Contains(readPayload("22-cisco-iosxe-netconf-loopback.yaml", iosxeNETCONF.NETCONF[0].Steps[1].Block.Steps[0].NETCONF), "Cisco-IOS-XE-native") || !strings.Contains(readPayload("22-cisco-iosxe-netconf-loopback.yaml", iosxeNETCONF.NETCONF[0].Steps[1].Block.Rollback[0].NETCONF), `nc:operation="remove"`) {
+		t.Fatalf("IOS-XE NETCONF example is incomplete: %+v", iosxeNETCONF)
+	}
+	nxosCLI := loaded["23-cisco-nxos-cli-trunk.yaml"]
+	if len(nxosCLI.SSH) != 1 || nxosCLI.SSH[0].Steps[2].Block == nil || len(nxosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("NX-OS CLI example is incomplete: %+v", nxosCLI)
+	}
+	nxosNETCONF := loaded["24-cisco-nxos-netconf-interface.yaml"]
+	if len(nxosNETCONF.NETCONF) != 1 || nxosNETCONF.NETCONF[0].Steps[1].Block == nil || nxosNETCONF.NETCONF[0].Steps[1].Block.Steps[0].NETCONF.Target != "running" || !strings.Contains(readPayload("24-cisco-nxos-netconf-interface.yaml", nxosNETCONF.NETCONF[0].Steps[1].Block.Steps[0].NETCONF), "http://openconfig.net/yang/interfaces") {
+		t.Fatalf("NX-OS NETCONF example is incomplete: %+v", nxosNETCONF)
+	}
+	srosCLI := loaded["25-nokia-sros-cli-port.yaml"]
+	if len(srosCLI.SSH) != 1 || srosCLI.SSH[0].Steps[2].Block == nil || len(srosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+		t.Fatalf("SR OS CLI example is incomplete: %+v", srosCLI)
+	}
+	srosNETCONF := loaded["26-nokia-sros-netconf-port.yaml"]
+	if len(srosNETCONF.NETCONF) != 1 || srosNETCONF.NETCONF[0].Steps[2].Block == nil || srosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF.Target != "candidate" || srosNETCONF.NETCONF[0].Steps[2].Block.Steps[1].NETCONF.Operation != "commit" || !strings.Contains(readPayload("26-nokia-sros-netconf-port.yaml", srosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF), "urn:nokia.com:sros:ns:yang:sr:conf") {
+		t.Fatalf("SR OS NETCONF example is incomplete: %+v", srosNETCONF)
 	}
 }
 

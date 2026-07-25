@@ -1,5 +1,5 @@
 name_playbook: Guarded reload and SSH reconnection
-inventory_file: inventory.yaml
+inventory_file: ../inventory.yaml
 fail_on_fail: true
 
 output:

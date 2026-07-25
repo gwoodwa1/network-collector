@@ -21,6 +21,15 @@ func TestValidationAndLifecycleErrors(t *testing.T) {
 	if _, err := client.Execute("<get/>"); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("unexpected execute error: %v", err)
 	}
+	if _, err := client.EditConfig("candidate", "<config/>"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected edit-config error: %v", err)
+	}
+	if _, err := client.Commit(false, 0); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected commit error: %v", err)
+	}
+	if _, err := client.DiscardChanges(); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected discard-changes error: %v", err)
+	}
 	if err := client.Close(); err != nil {
 		t.Fatalf("close disconnected client: %v", err)
 	}

@@ -1,0 +1,138 @@
+name_playbook: Junos NETCONF L3 VRF and static route
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+execution:
+  max_parallel: 2
+  failure_threshold: 1
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  vrf_name: CUST3100
+  route_target: target:65000:3100
+
+workflows:
+  provision-junos-vrf:
+    parameters:
+      - endpoint
+      - route_distinguisher
+      - access_port
+      - access_unit
+      - access_address
+      - static_prefix
+      - static_next_hop
+    steps:
+      - name: authorize-junos-vrf
+        approval:
+          message: >-
+            Provision {{vrf_name}} on {{endpoint}} with RD
+            {{route_distinguisher}} and static route {{static_prefix}}?
+          timeout_seconds: 300
+
+      - name: edit-commit-and-verify-vrf
+        block:
+          steps:
+            # Native Junos configuration XML: no CLI "set" commands are sent.
+            - name: load-vrf-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/l3-vrf-create.xml
+              validation:
+                extractor: regex
+                pattern: '(<ok\s*/>)'
+                condition: matches
+                expected: '<ok'
+
+            - name: commit-vrf-candidate
+              netconf:
+                operation: commit
+              validation:
+                extractor: regex
+                pattern: '(<ok\s*/>|<commit-success\s*/>)'
+                condition: matches
+                expected: '(ok|commit-success)'
+
+            - name: verify-static-route-in-vrf-table
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-route-information>
+                    <table>{{vrf_name}}.inet.0</table>
+                    <destination>{{static_prefix}}</destination>
+                    <exact/>
+                  </get-route-information>
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<rt-destination>\s*({{static_prefix}})\s*</rt-destination>'
+                  condition: eq
+                  expected: '{{static_prefix}}'
+                - extractor: regex
+                  pattern: '<protocol-name>\s*(Static)\s*</protocol-name>'
+                  condition: eq
+                  expected: Static
+                - extractor: regex
+                  pattern: '<to>\s*({{static_next_hop}})\s*</to>'
+                  condition: eq
+                  expected: '{{static_next_hop}}'
+
+          rollback:
+            - name: remove-vrf-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/l3-vrf-remove.xml
+
+            - name: commit-vrf-removal
+              netconf:
+                operation: commit
+
+          always:
+            - name: collect-final-route-state
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-route-information>
+                    <table>{{vrf_name}}.inet.0</table>
+                    <destination>{{static_prefix}}</destination>
+                  </get-route-information>
+              output:
+                save_raw: true
+
+netconf:
+  # The reusable workflow changes the RD, interface addressing, route, and
+  # next hop per PE while retaining one customer VRF and route target.
+  - host: junos-pe-01
+    steps:
+      - name: provision-london-vrf
+        use: provision-junos-vrf
+        with:
+          endpoint: junos-pe-01
+          route_distinguisher: '65000:310001'
+          access_port: ge-0/0/1
+          access_unit: 3100
+          access_address: 198.51.100.1/30
+          static_prefix: 203.0.113.0/24
+          static_next_hop: 198.51.100.2
+
+  - host: junos-pe-02
+    steps:
+      - name: provision-manchester-vrf
+        use: provision-junos-vrf
+        with:
+          endpoint: junos-pe-02
+          route_distinguisher: '65000:310002'
+          access_port: ge-0/0/1
+          access_unit: 3100
+          access_address: 198.51.100.5/30
+          static_prefix: 203.0.114.0/24
+          static_next_hop: 198.51.100.6

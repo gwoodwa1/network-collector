@@ -1,0 +1,103 @@
+name_playbook: Nokia SR OS native NETCONF port turn-up
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  port_id: 1/1/c1/2
+  port_description: Native SR OS YANG customer handoff
+
+netconf:
+  - host: sros-netconf-01
+    steps:
+      - name: inspect-sros-port-config
+        netconf:
+          operation: rpc
+          payload: |-
+            <get-config>
+              <source><running/></source>
+              <filter type="subtree">
+                <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+                  <port>
+                    <port-id>{{port_id}}</port-id>
+                  </port>
+                </configure>
+              </filter>
+            </get-config>
+        output:
+          save_raw: true
+
+      - name: authorize-sros-netconf-port
+        approval:
+          message: Enable SR OS port {{port_id}} through native NETCONF/YANG?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-sros-native
+        block:
+          steps:
+            # Nokia native configuration edits use candidate plus commit.
+            - name: load-sros-port-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/port-enable.xml
+
+            - name: commit-sros-port
+              netconf:
+                operation: commit
+
+            - name: verify-sros-port-config
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-config>
+                    <source><running/></source>
+                    <filter type="subtree">
+                      <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+                        <port>
+                          <port-id>{{port_id}}</port-id>
+                        </port>
+                      </configure>
+                    </filter>
+                  </get-config>
+              validations:
+                - extractor: regex
+                  pattern: '<description>\s*({{port_description}})\s*</description>'
+                  condition: eq
+                  expected: '{{port_description}}'
+                - extractor: regex
+                  pattern: '<admin-state>\s*(enable)\s*</admin-state>'
+                  condition: eq
+                  expected: enable
+
+          rollback:
+            - name: load-sros-port-disable
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/port-disable.xml
+
+            - name: commit-sros-port-disable
+              netconf:
+                operation: commit
+
+          always:
+            - name: collect-sros-port-after
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-config>
+                    <source><running/></source>
+                    <filter type="subtree">
+                      <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+                        <port><port-id>{{port_id}}</port-id></port>
+                      </configure>
+                    </filter>
+                  </get-config>
+              output:
+                save_raw: true

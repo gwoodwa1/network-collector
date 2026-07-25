@@ -1,6 +1,6 @@
 name_playbook: Label targeting, canary rollout, and failed-device replay
-inventory_file: inventory.yaml
-parsers_file: ../../parsers.yaml
+inventory_file: ../inventory.yaml
+parsers_file: ../../../parsers.yaml
 fail_on_fail: true
 
 # CLI selectors are applied after this group is expanded. This lets one

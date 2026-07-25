@@ -1,0 +1,119 @@
+name_playbook: Junos NETCONF BGP-signalled L2VPN
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+execution:
+  max_parallel: 2
+  failure_threshold: 1
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  l2vpn_name: CUST3200
+  route_target: target:65000:3200
+
+workflows:
+  provision-junos-l2vpn-site:
+    parameters:
+      - endpoint
+      - route_distinguisher
+      - access_port
+      - access_unit
+      - vlan_id
+      - site_name
+      - site_id
+    steps:
+      - name: authorize-junos-l2vpn
+        approval:
+          message: >-
+            Provision L2VPN {{l2vpn_name}} site {{site_name}} on {{endpoint}},
+            interface {{access_port}}.{{access_unit}}, VLAN {{vlan_id}}?
+          timeout_seconds: 300
+
+      - name: edit-commit-and-verify-l2vpn
+        block:
+          steps:
+            # This assumes MPLS transport and BGP l2vpn-signaling are already
+            # healthy between the PEs.
+            - name: load-l2vpn-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/l2vpn-create.xml
+
+            - name: commit-l2vpn-candidate
+              netconf:
+                operation: commit
+
+            # Confirm the operational request tag on the target Junos release
+            # with: show l2vpn connections | display xml rpc
+            - name: verify-l2vpn-connection
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-l2vpn-connection-information>
+                    <instance>{{l2vpn_name}}</instance>
+                  </get-l2vpn-connection-information>
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<instance-name>\s*({{l2vpn_name}})\s*</instance-name>'
+                  condition: eq
+                  expected: '{{l2vpn_name}}'
+                - extractor: regex
+                  pattern: '<connection-status[^>]*>\s*(Up)\s*</connection-status>'
+                  condition: eq
+                  expected: Up
+
+          rollback:
+            - name: remove-l2vpn-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/l2vpn-remove.xml
+
+            - name: commit-l2vpn-removal
+              netconf:
+                operation: commit
+
+          always:
+            - name: collect-l2vpn-state
+              netconf:
+                operation: rpc
+                payload: <get-l2vpn-connection-information/>
+              output:
+                save_raw: true
+
+netconf:
+  - host: junos-pe-01
+    steps:
+      - name: provision-london-l2vpn-site
+        use: provision-junos-l2vpn-site
+        with:
+          endpoint: junos-pe-01
+          route_distinguisher: '65000:320001'
+          access_port: ge-0/0/2
+          access_unit: 3200
+          vlan_id: 3200
+          site_name: LONDON
+          site_id: 1
+
+  - host: junos-pe-02
+    steps:
+      - name: provision-manchester-l2vpn-site
+        use: provision-junos-l2vpn-site
+        with:
+          endpoint: junos-pe-02
+          route_distinguisher: '65000:320002'
+          access_port: ge-0/0/2
+          access_unit: 3200
+          vlan_id: 3200
+          site_name: MANCHESTER
+          site_id: 2

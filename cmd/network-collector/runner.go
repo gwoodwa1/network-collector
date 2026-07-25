@@ -28,8 +28,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 
 	if hostname == "" || ip == "" || deviceType == "" {
 		result.failed = true
-		slog.Warn("skipping invalid SSH entry", "hostname", hostname, "ip", ip, "type", deviceType)
-		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping invalid SSH entry", nil); err != nil {
+		slog.Warn("skipping invalid device entry", "hostname", hostname, "ip", ip, "type", deviceType)
+		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping invalid device entry", nil); err != nil {
 			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
 		}
 		return result
@@ -44,8 +44,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	}
 	if len(steps) == 0 {
 		result.failed = true
-		slog.Warn("skipping SSH device with no steps or command", "hostname", hostname, "ip", ip)
-		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping SSH device with no steps or command", nil); err != nil {
+		slog.Warn("skipping device with no steps or command", "hostname", hostname, "ip", ip)
+		if err := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", "skipping device with no steps or command", nil); err != nil {
 			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", err)
 		}
 		return result
@@ -58,7 +58,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		slog.Error("error creating session log", "hostname", hostname, "ip", ip, "error", err)
 		return result
 	}
-	slog.Info("recording SSH session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
+	slog.Info("recording device session", "hostname", hostname, "ip", ip, "path", sessionLogPath)
 
 	opts := sshOptionsForDevice(device, config.SSHSecurity)
 	if rsaAuth != nil {
@@ -81,18 +81,28 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 			return result
 		}
 	}
-	client := ssh.NewClient(opts...)
-	if err := client.Connect(ip, username, password, deviceType); err != nil {
-		result.failed = true
-		slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
-		writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
-		if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to connect to %s (%s): %v", hostname, ip, err), nil); ferr != nil {
-			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+	var client *ssh.Client
+	if stepsNeedSSH(steps, config.Workflows, map[string]bool{}) {
+		client = ssh.NewClient(opts...)
+		if err := client.Connect(ip, username, password, deviceType); err != nil {
+			result.failed = true
+			slog.Error("error connecting to SSH device", "hostname", hostname, "ip", ip, "error", err)
+			writeSessionf(sessionLog, "ERROR: failed to connect to %s (%s): %v\n", hostname, ip, err)
+			if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to connect to %s (%s): %v", hostname, ip, err), nil); ferr != nil {
+				slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
+			}
+			_ = sessionLog.Close()
+			return result
 		}
-		_ = sessionLog.Close()
-		return result
 	}
 
+	netconfTimeout := 30 * time.Second
+	if device.OperationTimeout > 0 {
+		netconfTimeout = time.Duration(device.OperationTimeout) * time.Second
+	}
+	netconfExecutor := &lazyNETCONFExecutor{
+		host: ip, username: username, password: password, timeout: netconfTimeout,
+	}
 	ctx := stepExecutionContext{
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
@@ -103,12 +113,13 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		artifactPrefix: fmt.Sprintf("schedule-%03d", occurrence+1),
 		factsDefaults:  config.Facts,
 		events:         events,
+		netconf:        netconfExecutor,
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt
 	}
 	if executeSteps(&ctx, &client, steps) {
-		slog.Warn("stopped remaining SSH steps for device", "hostname", hostname, "ip", ip)
+		slog.Warn("stopped remaining steps for device", "hostname", hostname, "ip", ip)
 	}
 	for _, deviceValidation := range result.aggregated {
 		if !deviceValidation.Recovered && (deviceValidation.Result.Status == "fail" || deviceValidation.Result.Status == "error") {
@@ -123,6 +134,11 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		if ferr := appendFailureRecord(failureLogPath(), hostname, ip, "", "error", fmt.Sprintf("failed to close SSH connection: %v", err), nil); ferr != nil {
 			slog.Error("error writing failure log", "hostname", hostname, "ip", ip, "error", ferr)
 		}
+	}
+	if err := netconfExecutor.Close(); err != nil {
+		result.failed = true
+		slog.Error("error closing NETCONF connection", "hostname", hostname, "ip", ip, "error", err)
+		writeSessionf(sessionLog, "ERROR: failed to close NETCONF connection: %v\n", err)
 	}
 	writeSessionf(sessionLog, "\nSession complete: %s\n", time.Now().Format(time.RFC3339))
 	if err := sessionLog.Close(); err != nil {

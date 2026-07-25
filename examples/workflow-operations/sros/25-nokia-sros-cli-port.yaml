@@ -1,0 +1,59 @@
+name_playbook: Nokia SR OS MD-CLI port turn-up
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  port_id: 1/1/c1/1
+  port_description: Network Collector customer handoff
+
+ssh:
+  - host: sros-cli-01
+    steps:
+      - name: inspect-sros-port
+        cmd: /show port {{port_id}} detail
+
+      - name: authorize-sros-port
+        approval:
+          message: Enable SR OS port {{port_id}} using MD-CLI?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-sros-port
+        block:
+          steps:
+            # This example targets model-driven SR OS MD-CLI.
+            - name: configure-sros-port
+              cmd: |-
+                /configure port {{port_id}} description "{{port_description}}"
+                /configure port {{port_id}} admin-state enable
+                /commit
+
+            - name: verify-sros-port
+              cmd: /show port {{port_id}} detail
+              validations:
+                - extractor: regex
+                  pattern: '(?i)Admin State\s*:\s*(up|enable)'
+                  condition: matches
+                  expected: '(up|enable)'
+                - extractor: regex
+                  pattern: '({{port_description}})'
+                  condition: eq
+                  expected: '{{port_description}}'
+
+          rollback:
+            - name: disable-sros-port
+              cmd: |-
+                /configure port {{port_id}} admin-state disable
+                /configure port {{port_id}} delete description
+                /commit
+
+          always:
+            - name: collect-sros-port-after
+              cmd: /show port {{port_id}} detail
+              output:
+                save_raw: true

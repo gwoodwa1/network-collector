@@ -633,6 +633,10 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 			branchCtx.sessionLog = &log
 			branchCtx.artifactSeq = 0
 			branchCtx.artifactPrefix = fmt.Sprintf("parallel-%02d", index+1)
+			branchNETCONF := &lazyNETCONFExecutor{
+				host: ctx.ip, username: ctx.username, password: ctx.password, timeout: 30 * time.Second,
+			}
+			branchCtx.netconf = branchNETCONF
 			var client *ssh.Client
 			if stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{}) {
 				client = ssh.NewClient(ctx.opts...)
@@ -650,6 +654,10 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 					failed = true
 					writeSessionf(&log, "parallel SSH close failed: %v\n", err)
 				}
+			}
+			if err := branchNETCONF.Close(); err != nil {
+				failed = true
+				writeSessionf(&log, "parallel NETCONF close failed: %v\n", err)
 			}
 			if hasUnrecoveredValidationFailure(&validations, 0) {
 				failed = true
@@ -795,7 +803,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Approval != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.NETCONF != nil || step.Drift != nil || step.Repeat != nil || step.Foreach != nil || strings.TrimSpace(step.Use) != "" || step.Block != nil || step.Parallel != nil || step.SSHProbe != nil || step.WaitSeconds != 0 || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, "approval step cannot define executable or other control fields")
 				continue
@@ -824,7 +832,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if step.Parallel != nil {
 			controlCount++
 		}
-		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
+		if controlCount > 1 || (controlCount > 0 && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.NETCONF != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0)) {
 			*ctx.runFailed = true
 			recordStepFailure(ctx, stepName, "control step must define exactly one of repeat, foreach, use, block, or parallel and no executable fields")
 			continue
@@ -855,7 +863,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Repeat != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.Facts != nil || step.GNMISubscribe != nil || step.NETCONF != nil || step.Drift != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				stopDeviceSteps = true
 				err := fmt.Errorf("repeat step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
@@ -871,7 +879,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Facts != nil {
-			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.GNMISubscribe != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.Local != nil || step.GNMISubscribe != nil || step.NETCONF != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, "facts step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
 				continue
@@ -885,6 +893,11 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if step.GNMISubscribe != nil && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.WaitSeconds != 0 || step.SSHProbe != nil) {
 			*ctx.runFailed = true
 			recordStepFailure(ctx, stepName, "gnmi_subscribe step cannot also define cmd, local, wait_seconds, or ssh_probe")
+			continue
+		}
+		if step.NETCONF != nil && (strings.TrimSpace(step.Command) != "" || step.Local != nil || step.GNMISubscribe != nil || step.WaitSeconds != 0 || step.SSHProbe != nil) {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, "netconf step cannot also define cmd, local, gnmi_subscribe, wait_seconds, or ssh_probe")
 			continue
 		}
 
@@ -957,15 +970,28 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			writeSessionf(ctx.sessionLog, "[step:%s] SSH session re-established\n", stepName)
 		}
 
-		if step.Local != nil && strings.TrimSpace(step.Command) != "" {
+		executableCount := 0
+		if strings.TrimSpace(step.Command) != "" {
+			executableCount++
+		}
+		if step.Local != nil {
+			executableCount++
+		}
+		if step.GNMISubscribe != nil {
+			executableCount++
+		}
+		if step.NETCONF != nil {
+			executableCount++
+		}
+		if executableCount > 1 {
 			*ctx.runFailed = true
-			err := fmt.Errorf("step cannot define both cmd and local")
+			err := fmt.Errorf("step must define at most one of cmd, local, gnmi_subscribe, or netconf")
 			slog.Error("invalid step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 			recordStepFailure(ctx, stepName, err.Error())
 			continue
 		}
 		cmd := ""
-		if step.Local == nil && step.GNMISubscribe == nil {
+		if step.Local == nil && step.GNMISubscribe == nil && step.NETCONF == nil {
 			cmd, err = renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
 			if err != nil {
 				*ctx.runFailed = true
@@ -974,7 +1000,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				continue
 			}
 		}
-		if cmd == "" && step.Local == nil && step.GNMISubscribe == nil {
+		if cmd == "" && step.Local == nil && step.GNMISubscribe == nil && step.NETCONF == nil {
 			if wait > 0 || step.SSHProbe != nil || strings.TrimSpace(step.Message) != "" {
 				continue
 			}
@@ -990,7 +1016,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		for {
 			attempt++
 
-			if step.Local == nil && step.GNMISubscribe == nil && (client == nil || *client == nil) {
+			if step.Local == nil && step.GNMISubscribe == nil && step.NETCONF == nil && (client == nil || *client == nil) {
 				*ctx.runFailed = true
 				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
@@ -1005,12 +1031,14 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			} else if step.GNMISubscribe != nil {
 				commandDisplay = strings.Join(step.GNMISubscribe.Paths, ",")
 				output, err = executeGNMISubscribe(ctx, *step.GNMISubscribe)
+			} else if step.NETCONF != nil {
+				output, commandDisplay, err = executeNETCONFStep(ctx, *step.NETCONF)
 			} else {
 				commandDisplay = cmd
 				output, err = (*client).Execute(cmd)
 			}
 			if err != nil {
-				if step.Local == nil && step.GNMISubscribe == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
+				if step.Local == nil && step.GNMISubscribe == nil && step.NETCONF == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
 					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
 					if err := closeSSHClient(*client); err != nil {
@@ -1032,6 +1060,8 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				commandKind = "local"
 			} else if step.GNMISubscribe != nil {
 				commandKind = "gnmi_subscribe"
+			} else if step.NETCONF != nil {
+				commandKind = "netconf"
 			}
 			writeSessionf(ctx.sessionLog, "\n[step:%s] %s command=%q\n%s\n", stepName, commandKind, commandDisplay, output)
 			if !ctx.jsonOut {

@@ -1,0 +1,54 @@
+hosts:
+  - name: eos-cli-01
+    ip: 192.0.2.40
+    type: arista_eos
+    operation_timeout: 90
+    labels: {vendor: arista, os: eos, transport: cli, environment: lab}
+
+  - name: eos-netconf-01
+    ip: 192.0.2.41
+    type: arista_eos
+    operation_timeout: 90
+    labels: {vendor: arista, os: eos, transport: netconf, environment: lab}
+
+  - name: iosxe-cli-01
+    ip: 192.0.2.42
+    type: cisco_iosxe
+    operation_timeout: 90
+    labels: {vendor: cisco, os: iosxe, transport: cli, environment: lab}
+
+  - name: iosxe-netconf-01
+    ip: 192.0.2.43
+    type: cisco_iosxe
+    operation_timeout: 90
+    labels: {vendor: cisco, os: iosxe, transport: netconf, environment: lab}
+
+  - name: nxos-cli-01
+    ip: 192.0.2.44
+    type: cisco_nxos
+    operation_timeout: 90
+    labels: {vendor: cisco, os: nxos, transport: cli, environment: lab}
+
+  - name: nxos-netconf-01
+    ip: 192.0.2.45
+    type: cisco_nxos
+    operation_timeout: 90
+    labels: {vendor: cisco, os: nxos, transport: netconf, environment: lab}
+
+  - name: sros-cli-01
+    ip: 192.0.2.46
+    type: nokia_sros
+    operation_timeout: 120
+    labels: {vendor: nokia, os: sros, transport: cli, environment: lab}
+
+  - name: sros-netconf-01
+    ip: 192.0.2.47
+    type: nokia_sros
+    operation_timeout: 120
+    labels: {vendor: nokia, os: sros, transport: netconf, environment: lab}
+
+groups:
+  multivendor-cli:
+    hosts: [eos-cli-01, iosxe-cli-01, nxos-cli-01, sros-cli-01]
+  multivendor-netconf:
+    hosts: [eos-netconf-01, iosxe-netconf-01, nxos-netconf-01, sros-netconf-01]

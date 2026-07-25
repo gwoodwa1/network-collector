@@ -1,6 +1,6 @@
 name_playbook: openconfig-and-native-facts
-inventory_file: inventory.yaml
-parsers_file: ../../parsers.yaml
+inventory_file: ../inventory.yaml
+parsers_file: ../../../parsers.yaml
 
 # These defaults apply to every facts step. A step can override any value.
 facts:

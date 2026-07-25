@@ -10,6 +10,7 @@ import (
 	"github.com/scrapli/scrapligo/driver/netconf"
 	"github.com/scrapli/scrapligo/driver/opoptions"
 	scraplioptions "github.com/scrapli/scrapligo/driver/options"
+	"github.com/scrapli/scrapligo/response"
 	"github.com/scrapli/scrapligo/util"
 )
 
@@ -88,26 +89,81 @@ func (n *ScrapligoNETCONF) Connect(host, username, password string, opts ...Opti
 }
 
 func (n *ScrapligoNETCONF) Execute(cmd string) (string, error) {
+	return n.RPC(cmd)
+}
+
+func (n *ScrapligoNETCONF) ready(payloadRequired bool, payload string) error {
 	if n == nil {
-		return "", errors.New("NETCONF client is nil")
+		return errors.New("NETCONF client is nil")
 	}
 	if n.network == nil {
-		return "", errors.New("NETCONF client is not connected")
+		return errors.New("NETCONF client is not connected")
 	}
-	if strings.TrimSpace(cmd) == "" {
-		return "", errors.New("rpc payload is required")
+	if payloadRequired && strings.TrimSpace(payload) == "" {
+		return errors.New("NETCONF payload is required")
 	}
+	return nil
+}
 
-	r, err := n.network.RPC(opoptions.WithFilter(cmd))
+func netconfResult(operation string, r *response.NetconfResponse, err error) (string, error) {
 	if err != nil {
-		return "", fmt.Errorf("failed to execute NETCONF RPC: %w", err)
+		return "", fmt.Errorf("failed to execute NETCONF %s: %w", operation, err)
 	}
-
 	if r.Failed != nil {
-		return "", fmt.Errorf("NETCONF response indicates failure: %+v", r.Failed)
+		return "", fmt.Errorf("NETCONF %s response indicates failure: %+v", operation, r.Failed)
 	}
-
 	return r.Result, nil
+}
+
+func (n *ScrapligoNETCONF) RPC(payload string) (string, error) {
+	if err := n.ready(true, payload); err != nil {
+		return "", err
+	}
+	response, err := n.network.RPC(opoptions.WithFilter(payload))
+	return netconfResult("RPC", response, err)
+}
+
+func (n *ScrapligoNETCONF) EditConfig(target, payload string) (string, error) {
+	if err := n.ready(true, payload); err != nil {
+		return "", err
+	}
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		target = "candidate"
+	}
+	switch target {
+	case "candidate", "running":
+	default:
+		return "", fmt.Errorf("unsupported NETCONF edit-config target %q", target)
+	}
+	response, err := n.network.EditConfig(target, payload)
+	return netconfResult("edit-config", response, err)
+}
+
+func (n *ScrapligoNETCONF) Commit(confirmed bool, confirmTimeoutSeconds int) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	if confirmTimeoutSeconds < 0 {
+		return "", errors.New("NETCONF commit confirm timeout must be greater than or equal to 0")
+	}
+	options := []util.Option{}
+	if confirmed {
+		options = append(options, opoptions.WithCommitConfirmed())
+	}
+	if confirmTimeoutSeconds > 0 {
+		options = append(options, opoptions.WithCommitConfirmTimeout(uint(confirmTimeoutSeconds)))
+	}
+	response, err := n.network.Commit(options...)
+	return netconfResult("commit", response, err)
+}
+
+func (n *ScrapligoNETCONF) DiscardChanges() (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	response, err := n.network.Discard()
+	return netconfResult("discard-changes", response, err)
 }
 
 func (n *ScrapligoNETCONF) Close() error {

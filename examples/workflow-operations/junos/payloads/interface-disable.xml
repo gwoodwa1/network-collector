@@ -1,0 +1,10 @@
+<config>
+  <configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm">
+    <interfaces>
+      <interface>
+        <name>{{interface}}</name>
+        <disable/>
+      </interface>
+    </interfaces>
+  </configuration>
+</config>

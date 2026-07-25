@@ -1,5 +1,5 @@
 name_playbook: Approved parallel collection
-inventory_file: inventory.yaml
+inventory_file: ../inventory.yaml
 fail_on_fail: true
 
 output:
@@ -35,4 +35,3 @@ ssh:
 
       - name: collection-summary
         message: parallel route, interface, and alarm collections completed
-

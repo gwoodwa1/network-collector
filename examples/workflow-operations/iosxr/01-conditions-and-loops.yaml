@@ -1,5 +1,5 @@
 name_playbook: Conditions and loops
-inventory_file: inventory.yaml
+inventory_file: ../inventory.yaml
 fail_on_fail: true
 
 output:
@@ -64,4 +64,3 @@ ssh:
           steps:
             - name: sample-cpu
               cmd: show processes cpu | include one.minute
-

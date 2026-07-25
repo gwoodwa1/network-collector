@@ -1,0 +1,196 @@
+name_playbook: Multi-device L3VPN VRF provisioning
+inventory_file: ../inventory.yaml
+fail_on_fail: true
+
+execution:
+  max_parallel: 2
+  failure_threshold: 1
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  provider_as: 65000
+  vrf_name: CUST4100
+  route_target: '65000:4100'
+
+workflows:
+  provision-customer-vrf:
+    parameters:
+      - endpoint
+      - rd
+      - prefix_set
+      - route_policy
+      - customer_prefix
+      - access_interface
+      - access_vlan
+      - access_ipv4
+      - access_mask
+    steps:
+      - name: describe-endpoint-specific-values
+        message: >-
+          {{endpoint}} will use RD {{rd}}, RT {{route_target}},
+          policy {{route_policy}}, and interface {{access_interface}}.
+
+      - name: authorize-vrf-provision
+        approval:
+          message: >-
+            Provision VRF {{vrf_name}} on {{endpoint}} with RD {{rd}} and
+            route-policy {{route_policy}}?
+          timeout_seconds: 300
+
+      - name: provision-and-verify-vrf
+        block:
+          steps:
+            # IOS XR uses Routing Policy Language (route-policy) rather than
+            # IOS/IOS-XE route-map syntax. This policy performs the equivalent
+            # export filtering for connected customer routes.
+            - name: configure-vrf-policy-and-access
+              cmd: |-
+                configure terminal
+                prefix-set {{prefix_set}}
+                  {{customer_prefix}}
+                end-set
+                route-policy {{route_policy}}
+                  if destination in {{prefix_set}} then
+                    pass
+                  else
+                    drop
+                  endif
+                end-policy
+                vrf {{vrf_name}}
+                 address-family ipv4 unicast
+                  import route-target
+                   {{route_target}}
+                  !
+                  export route-target
+                   {{route_target}}
+                  !
+                 !
+                !
+                router bgp {{provider_as}}
+                 vrf {{vrf_name}}
+                  rd {{rd}}
+                  address-family ipv4 unicast
+                   redistribute connected route-policy {{route_policy}}
+                  !
+                 !
+                !
+                interface {{access_interface}}
+                 description {{vrf_name}} access on {{endpoint}}
+                 encapsulation dot1q {{access_vlan}}
+                 vrf {{vrf_name}}
+                 ipv4 address {{access_ipv4}} {{access_mask}}
+                 no shutdown
+                !
+                commit
+                end
+
+            - name: verify-vrf-route-target
+              cmd: show running-config vrf {{vrf_name}}
+              validations:
+                - extractor: regex
+                  pattern: '(import route-target)'
+                  condition: eq
+                  expected: import route-target
+                - extractor: regex
+                  pattern: '({{route_target}})'
+                  condition: eq
+                  expected: '{{route_target}}'
+
+            - name: verify-endpoint-rd
+              cmd: show running-config router bgp {{provider_as}} vrf {{vrf_name}}
+              validations:
+                - extractor: regex
+                  pattern: '(rd {{rd}})'
+                  condition: eq
+                  expected: 'rd {{rd}}'
+                - extractor: regex
+                  pattern: '(redistribute connected route-policy {{route_policy}})'
+                  condition: eq
+                  expected: 'redistribute connected route-policy {{route_policy}}'
+
+            - name: verify-route-policy
+              cmd: show running-config route-policy {{route_policy}}
+              validations:
+                - extractor: regex
+                  pattern: '(route-policy {{route_policy}})'
+                  condition: eq
+                  expected: 'route-policy {{route_policy}}'
+                - extractor: regex
+                  pattern: '(destination in {{prefix_set}})'
+                  condition: eq
+                  expected: 'destination in {{prefix_set}}'
+
+            - name: verify-vrf-access-interface
+              cmd: show interfaces {{access_interface}}
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validation:
+                extractor: regex
+                pattern: '(?m)^{{access_interface}} is (up), line protocol is (up)$'
+                condition: eq
+                expected: up
+
+          # LAB TEMPLATE: this assumes the subinterface, VRF, policy, and
+          # prefix-set are dedicated to this service. Review ownership before
+          # using explicit removal in a shared production configuration.
+          rollback:
+            - name: remove-failed-vrf-provision
+              cmd: |-
+                configure terminal
+                no interface {{access_interface}}
+                router bgp {{provider_as}}
+                 no vrf {{vrf_name}}
+                !
+                no vrf {{vrf_name}}
+                no route-policy {{route_policy}}
+                no prefix-set {{prefix_set}}
+                commit
+                end
+
+          always:
+            - name: collect-final-vrf-state
+              # The all-VRF command still succeeds after rollback removes the
+              # requested VRF, so evidence collection does not mask recovery.
+              cmd: show vrf all
+              output:
+                save_raw: true
+
+ssh:
+  # The same reusable workflow receives endpoint-specific values. The RT and
+  # VRF name identify one VPN, while each PE has a unique RD and policy input.
+  - host: xr-lab-01
+    steps:
+      - name: provision-london-pe
+        use: provision-customer-vrf
+        with:
+          endpoint: xr-lab-01
+          rd: '65000:410001'
+          prefix_set: CUST4100-LON-PREFIXES
+          route_policy: CUST4100-LON-CONNECTED
+          customer_prefix: 198.51.100.0/25
+          access_interface: Bundle-Ether100.4100
+          access_vlan: 4100
+          access_ipv4: 198.51.100.1
+          access_mask: 255.255.255.128
+
+  - host: xr-lab-02
+    steps:
+      - name: provision-manchester-pe
+        use: provision-customer-vrf
+        with:
+          endpoint: xr-lab-02
+          rd: '65000:410002'
+          prefix_set: CUST4100-MAN-PREFIXES
+          route_policy: CUST4100-MAN-CONNECTED
+          customer_prefix: 198.51.100.128/25
+          access_interface: Bundle-Ether100.4100
+          access_vlan: 4100
+          access_ipv4: 198.51.100.129
+          access_mask: 255.255.255.128

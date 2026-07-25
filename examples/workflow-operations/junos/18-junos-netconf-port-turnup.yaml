@@ -1,0 +1,92 @@
+name_playbook: Guarded Junos NETCONF port turn-up
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: ge-0/0/3
+  interface_description: NETCONF managed customer handoff
+
+netconf:
+  - host: junos-pe-01
+    steps:
+      - name: capture-interface-before
+        netconf:
+          operation: rpc
+          payload: |-
+            <get-interface-information>
+              <interface-name>{{interface}}</interface-name>
+              <detail/>
+            </get-interface-information>
+        output:
+          save_raw: true
+
+      - name: authorize-port-turnup
+        approval:
+          message: Enable {{interface}} with description "{{interface_description}}"?
+          timeout_seconds: 300
+
+      - name: enable-and-verify-interface
+        block:
+          steps:
+            # Native Junos configuration XML removes the disable leaf without
+            # failing when it is already absent.
+            - name: load-interface-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/interface-enable.xml
+
+            - name: commit-interface-candidate
+              netconf:
+                operation: commit
+
+            - name: verify-interface-up
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-interface-information>
+                    <interface-name>{{interface}}</interface-name>
+                    <terse/>
+                  </get-interface-information>
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<admin-status[^>]*>\s*(up)\s*</admin-status>'
+                  condition: eq
+                  expected: up
+                - extractor: regex
+                  pattern: '<oper-status[^>]*>\s*(up)\s*</oper-status>'
+                  condition: eq
+                  expected: up
+
+          rollback:
+            - name: disable-interface-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/interface-disable.xml
+
+            - name: commit-interface-disable
+              netconf:
+                operation: commit
+
+          always:
+            - name: collect-interface-after
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-interface-information>
+                    <interface-name>{{interface}}</interface-name>
+                    <detail/>
+                  </get-interface-information>
+              output:
+                save_raw: true

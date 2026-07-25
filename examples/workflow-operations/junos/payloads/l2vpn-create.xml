@@ -1,0 +1,42 @@
+<config>
+  <configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm">
+    <interfaces>
+      <interface>
+        <name>{{access_port}}</name>
+        <unit>
+          <name>{{access_unit}}</name>
+          <encapsulation>vlan-ccc</encapsulation>
+          <vlan-id>{{vlan_id}}</vlan-id>
+        </unit>
+      </interface>
+    </interfaces>
+    <routing-instances>
+      <instance>
+        <name>{{l2vpn_name}}</name>
+        <instance-type>l2vpn</instance-type>
+        <interface>
+          <name>{{access_port}}.{{access_unit}}</name>
+        </interface>
+        <route-distinguisher>
+          <rd-type>{{route_distinguisher}}</rd-type>
+        </route-distinguisher>
+        <vrf-target>
+          <community>{{route_target}}</community>
+        </vrf-target>
+        <protocols>
+          <l2vpn>
+            <encapsulation-type>ethernet-vlan</encapsulation-type>
+            <no-tunnel-services/>
+            <site>
+              <name>{{site_name}}</name>
+              <site-identifier>{{site_id}}</site-identifier>
+              <interface>
+                <name>{{access_port}}.{{access_unit}}</name>
+              </interface>
+            </site>
+          </l2vpn>
+        </protocols>
+      </instance>
+    </routing-instances>
+  </configuration>
+</config>

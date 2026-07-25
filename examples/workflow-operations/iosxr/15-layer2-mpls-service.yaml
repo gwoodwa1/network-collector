@@ -1,0 +1,151 @@
+name_playbook: Multi-device Layer 2 MPLS pseudowire service
+inventory_file: ../inventory.yaml
+fail_on_fail: true
+
+execution:
+  max_parallel: 2
+  failure_threshold: 1
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  xconnect_group: CUST4200
+  circuit_name: ELINE4200
+  pw_id: 4200
+
+workflows:
+  provision-eline-endpoint:
+    parameters:
+      - endpoint
+      - parent_interface
+      - access_interface
+      - access_vlan
+      - remote_pe
+    steps:
+      - name: verify-parent-interface
+        cmd: show interfaces {{parent_interface}}
+        validation:
+          extractor: regex
+          pattern: '(?m)^{{parent_interface}} is (up), line protocol is (up)$'
+          condition: eq
+          expected: up
+        on_fail:
+          action: fail
+          message: parent interface {{parent_interface}} is not ready on {{endpoint}}
+
+      - name: authorize-eline-endpoint
+        approval:
+          message: >-
+            Provision {{circuit_name}} on {{endpoint}} using
+            {{access_interface}}, VLAN {{access_vlan}}, remote PE
+            {{remote_pe}}, and PW ID {{pw_id}}?
+          timeout_seconds: 300
+
+      - name: provision-and-verify-eline
+        block:
+          steps:
+            # This is an IOS XR MPLS/LDP VPWS example. The remote PE address
+            # is the MPLS-reachable loopback used to signal the pseudowire.
+            - name: configure-access-circuit-and-pseudowire
+              cmd: |-
+                configure terminal
+                interface {{access_interface}} l2transport
+                 description {{circuit_name}} access on {{endpoint}}
+                 encapsulation dot1q {{access_vlan}}
+                 rewrite ingress tag pop 1 symmetric
+                 no shutdown
+                !
+                l2vpn
+                 xconnect group {{xconnect_group}}
+                  p2p {{circuit_name}}
+                   interface {{access_interface}}
+                   neighbor ipv4 {{remote_pe}} pw-id {{pw_id}}
+                  !
+                 !
+                !
+                commit
+                end
+
+            - name: wait-for-pseudowire
+              wait_seconds: 10
+              message: waiting for {{circuit_name}} pseudowire signalling
+
+            - name: verify-pseudowire-up
+              cmd: show l2vpn xconnect group {{xconnect_group}} xc-name {{circuit_name}} detail
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '(?i)(state is up)'
+                  condition: eq
+                  expected: state is up
+                - extractor: regex
+                  pattern: '(PW ID {{pw_id}})'
+                  condition: eq
+                  expected: 'PW ID {{pw_id}}'
+                - extractor: regex
+                  pattern: '(neighbor {{remote_pe}})'
+                  condition: eq
+                  expected: 'neighbor {{remote_pe}}'
+
+            - name: verify-access-circuit-up
+              cmd: show l2vpn xconnect interface {{access_interface}} detail
+              validation:
+                extractor: regex
+                pattern: '(AC: {{access_interface}}, state is up)'
+                condition: eq
+                expected: 'AC: {{access_interface}}, state is up'
+
+          # LAB TEMPLATE: the subinterface and xconnect must be dedicated to
+          # this service. Confirm the generated removal commands on the target
+          # IOS XR release before enabling this rollback in production.
+          rollback:
+            - name: remove-failed-eline-endpoint
+              cmd: |-
+                configure terminal
+                l2vpn
+                 xconnect group {{xconnect_group}}
+                  no p2p {{circuit_name}}
+                 !
+                !
+                no interface {{access_interface}} l2transport
+                commit
+                end
+
+          always:
+            - name: collect-final-eline-state
+              # The global view remains valid if rollback removed this group.
+              cmd: show l2vpn xconnect detail
+              output:
+                save_raw: true
+
+ssh:
+  # Both endpoints use the same xconnect name and PW ID. Only the local access
+  # attachment and remote MPLS loopback change between workflow invocations.
+  - host: xr-lab-01
+    steps:
+      - name: provision-eline-end-a
+        use: provision-eline-endpoint
+        with:
+          endpoint: xr-lab-01
+          parent_interface: Bundle-Ether200
+          access_interface: Bundle-Ether200.4200
+          access_vlan: 4200
+          remote_pe: 192.0.2.102
+
+  - host: xr-lab-02
+    steps:
+      - name: provision-eline-end-b
+        use: provision-eline-endpoint
+        with:
+          endpoint: xr-lab-02
+          parent_interface: Bundle-Ether200
+          access_interface: Bundle-Ether200.4200
+          access_vlan: 4200
+          remote_pe: 192.0.2.101

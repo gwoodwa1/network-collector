@@ -1,0 +1,81 @@
+name_playbook: Cisco IOS-XE native NETCONF loopback
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  loopback_id: 311
+  loopback_address: 192.0.2.211
+  loopback_mask: 255.255.255.255
+  loopback_description: Native YANG NETCONF loopback
+
+netconf:
+  - host: iosxe-netconf-01
+    steps:
+      - name: authorize-iosxe-netconf-loopback
+        approval:
+          message: Create Loopback{{loopback_id}} using the IOS-XE native YANG model?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-iosxe-native
+        block:
+          steps:
+            - name: create-iosxe-loopback
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/loopback-create.xml
+
+            - name: verify-iosxe-loopback-config
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-config>
+                    <source><running/></source>
+                    <filter type="subtree">
+                      <native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native">
+                        <interface>
+                          <Loopback>
+                            <name>{{loopback_id}}</name>
+                          </Loopback>
+                        </interface>
+                      </native>
+                    </filter>
+                  </get-config>
+              validations:
+                - extractor: regex
+                  pattern: '<description>\s*({{loopback_description}})\s*</description>'
+                  condition: eq
+                  expected: '{{loopback_description}}'
+                - extractor: regex
+                  pattern: '<address>\s*({{loopback_address}})\s*</address>'
+                  condition: eq
+                  expected: '{{loopback_address}}'
+
+          rollback:
+            - name: remove-iosxe-loopback
+              netconf:
+                operation: edit-config
+                target: running
+                payload_file: payloads/loopback-remove.xml
+
+          always:
+            - name: collect-iosxe-loopbacks
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-config>
+                    <source><running/></source>
+                    <filter type="subtree">
+                      <native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native">
+                        <interface><Loopback/></interface>
+                      </native>
+                    </filter>
+                  </get-config>
+              output:
+                save_raw: true

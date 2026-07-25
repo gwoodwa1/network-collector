@@ -1,0 +1,77 @@
+name_playbook: Cisco NX-OS CLI VLAN trunk
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: Ethernet1/3
+  interface_description: Customer VLAN 320 trunk
+  vlan_id: 320
+  vlan_name: CUSTOMER_320
+
+ssh:
+  - host: nxos-cli-01
+    steps:
+      - name: inspect-nxos-interface
+        cmd: show interface {{interface}} brief
+
+      - name: authorize-nxos-trunk
+        approval:
+          message: Add VLAN {{vlan_id}} to trunk {{interface}} on nxos-cli-01?
+          timeout_seconds: 300
+
+      - name: configure-and-verify-nxos-trunk
+        block:
+          steps:
+            - name: configure-nxos-vlan-and-trunk
+              cmd: |-
+                configure terminal
+                vlan {{vlan_id}}
+                name {{vlan_name}}
+                interface {{interface}}
+                description {{interface_description}}
+                switchport
+                switchport mode trunk
+                switchport trunk allowed vlan add {{vlan_id}}
+                no shutdown
+                end
+                copy running-config startup-config
+
+            - name: verify-nxos-vlan
+              cmd: show vlan id {{vlan_id}}
+              validation:
+                extractor: regex
+                pattern: '(?m)^{{vlan_id}}\s+({{vlan_name}})\s+'
+                condition: eq
+                expected: '{{vlan_name}}'
+
+            - name: verify-nxos-trunk
+              cmd: show interface {{interface}} trunk
+              validation:
+                extractor: regex
+                pattern: '(?m)(?:^|,)\s*({{vlan_id}})\s*(?:,|$)'
+                condition: eq
+                expected: '{{vlan_id}}'
+
+          rollback:
+            - name: remove-nxos-vlan-from-trunk
+              cmd: |-
+                configure terminal
+                interface {{interface}}
+                switchport trunk allowed vlan remove {{vlan_id}}
+                no description
+                exit
+                no vlan {{vlan_id}}
+                end
+                copy running-config startup-config
+
+          always:
+            - name: collect-nxos-trunk-after
+              cmd: show interface {{interface}} trunk
+              output:
+                save_raw: true

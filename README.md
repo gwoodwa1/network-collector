@@ -334,6 +334,65 @@ ssh:
 
 Use `host` for one inventory host, `hosts` for a list of inventory hosts, `group` for one inventory group, or `groups` for multiple groups. Inventory hosts can define `name`, `hostname`, `ip` or `address`, `type`, `timeout`, and `operation_timeout`. Values in `config.yaml` override inventory values, so you can set a common `type` or timeout at the playbook entry if needed. Existing single-node entries with inline `hostname`, `ip`, and `type` continue to work without an inventory file.
 
+### NETCONF workflow targets
+
+Use a top-level `netconf` target when every executable device step should run
+through NETCONF rather than a CLI SSH session. Targets use the same inventory,
+credential providers, selectors, scheduling, workflow controls, validation,
+retry, registration, drift, and artifact handling as `ssh` targets. NETCONF
+connects to port 830 and uses `operation_timeout` for RPC operations.
+
+```yaml
+inventory_file: inventory.yaml
+
+netconf:
+  - host: junos-pe-01
+    steps:
+      - name: load-candidate
+        netconf:
+          operation: edit-config
+          target: candidate
+          payload_file: payloads/system-hostname.xml
+
+      - name: commit-candidate
+        netconf:
+          operation: commit
+
+      - name: verify-interface
+        netconf:
+          operation: rpc
+          payload: |
+            <get-interface-information>
+              <interface-name>ge-0/0/0</interface-name>
+              <terse/>
+            </get-interface-information>
+        validation:
+          extractor: regex
+          pattern: '<oper-status[^>]*>\s*(up)\s*</oper-status>'
+          condition: eq
+          expected: up
+```
+
+Supported step operations are:
+
+- `rpc`: send the supplied operation element as a bare NETCONF RPC payload.
+- `edit-config`: merge the supplied configuration into `candidate` (the
+  default) or `running`.
+- `commit`: commit the candidate configuration; optional `confirmed: true`
+  and `confirm_timeout_seconds` enable confirmed commit.
+- `discard-changes` (or `discard`): discard uncommitted candidate changes.
+
+Use either inline `payload` or `payload_file`, but not both. Relative payload
+paths are resolved from the directory containing the main playbook. File
+contents are loaded and then rendered with the same `{{variable}}` values as
+inline payloads, which keeps large XML artifacts separate without losing
+workflow parameterization.
+
+Do not include the outer `<rpc>` element in either payload form; the NETCONF
+driver adds the protocol envelope and message ID. Junos accepts either native
+Junos configuration XML or `<config-text>` within `edit-config`. Use `block`
+with NETCONF edit and commit steps in `rollback` for transactional recovery.
+
 Inventory hosts may also carry arbitrary labels for runtime targeting:
 
 ```yaml
@@ -347,7 +406,7 @@ hosts:
       environment: production
 ```
 
-Use `--limit` and `--exclude` to select resolved SSH devices. Expressions support `and`, `or`, `not`, parentheses, `=` and `!=`; label names and the built-in fields `hostname`, `name`, `ip`, `address`, `type`, and `platform` are case-insensitive. Quote values containing spaces.
+Use `--limit` and `--exclude` to select resolved SSH or NETCONF device targets. Expressions support `and`, `or`, `not`, parentheses, `=` and `!=`; label names and the built-in fields `hostname`, `name`, `ip`, `address`, `type`, and `platform` are case-insensitive. Quote values containing spaces.
 
 ```bash
 network-collector --limit 'site=london and (role=core or role=edge)'

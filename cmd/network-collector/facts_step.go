@@ -23,15 +23,37 @@ type lazyNETCONFExecutor struct {
 	err      error
 }
 
-func (executor *lazyNETCONFExecutor) Execute(filter string) (string, error) {
+func (executor *lazyNETCONFExecutor) connect() error {
 	executor.once.Do(func() {
 		executor.client = &netconf.ScrapligoNETCONF{}
 		executor.err = executor.client.Connect(executor.host, executor.username, executor.password, netconf.WithNetconfTimeouts(executor.timeout, executor.timeout))
 	})
-	if executor.err != nil {
-		return "", executor.err
+	return executor.err
+}
+
+func (executor *lazyNETCONFExecutor) Execute(filter string) (string, error) {
+	if err := executor.connect(); err != nil {
+		return "", err
 	}
 	return executor.client.Execute(filter)
+}
+
+func (executor *lazyNETCONFExecutor) ExecuteNETCONF(config NETCONFStepConfig) (string, error) {
+	if err := executor.connect(); err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(config.Operation)) {
+	case "", "rpc":
+		return executor.client.RPC(config.Payload)
+	case "edit-config", "edit_config":
+		return executor.client.EditConfig(config.Target, config.Payload)
+	case "commit":
+		return executor.client.Commit(config.Confirmed, config.ConfirmTimeoutSeconds)
+	case "discard", "discard-changes", "discard_changes":
+		return executor.client.DiscardChanges()
+	default:
+		return "", fmt.Errorf("unsupported NETCONF operation %q", config.Operation)
+	}
 }
 
 func (executor *lazyNETCONFExecutor) Close() error {
