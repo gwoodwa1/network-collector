@@ -2,7 +2,7 @@
 
 All notable changes to Network Collector are documented here.
 
-## [2.0.0] - 2026-07-27
+## [2.0.1] - 2026-07-27
 
 - Made production security the default configuration policy. The collector now
   rejects legacy SSH profiles, unverified host keys, plaintext or unverified
@@ -14,6 +14,9 @@ All notable changes to Network Collector are documented here.
   explicit maximum-device opt-in capped at 25.
 - Updated the supported Go toolchain to 1.25.12, corrected insecure/stale
   examples, and added a coordinated vulnerability-disclosure policy.
+
+## [2.0.0] - 2026-07-27
+
 - Removed workbook-controlled local process execution. Step-level `local` and
   top-level `local_steps` now fail configuration loading, including nested
   workflow and gNMI-trigger actions. The generic command credential provider
