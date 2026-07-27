@@ -1,8 +1,17 @@
 credentials:
-  provider: command
-  command: [examples/credential-providers/cyberark.sh]
+  provider: cyberark
   timeout_seconds: 30
+  cyberark:
+    url: https://ccp.example/AIMWebService/api/Accounts
+    app_id: NetworkCollector
+    safe: Network-Automation
+    object_prefix: collector-
+    folder: Root
+    reason: Network Collector automation
+    ca_file: /etc/network-collector/ca.pem
+    cert_file: /etc/network-collector/client.pem
+    key_file: /etc/network-collector/client-key.pem
 
-# Point CYBERARK_CCP_URL at the HTTPS AIMWebService/api/Accounts endpoint and
-# configure CYBERARK_APP_ID, CYBERARK_SAFE, and (when required) client
-# certificate variables. credential_profile selects the CyberArk object name.
+# Every nested field has a CYBERARK_* environment fallback. AppID application
+# controls, source restrictions, and the optional client certificate authorize
+# access; no CyberArk password is stored in this YAML.

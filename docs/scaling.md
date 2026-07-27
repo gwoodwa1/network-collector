@@ -96,7 +96,7 @@ entire successful wave.
 - Top-level scheduled occurrences do not overlap. The next occurrence starts
   only after the previous occurrence finishes and the interval elapses.
 
-Credential-provider commands currently resolve sequentially before device
+Credential-provider lookups currently resolve sequentially before device
 execution. This avoids a secret-manager login burst, but it also means 5,000
 devices with a 500 ms provider lookup add about 42 minutes before network work
 starts. Prefer shared `credential_profile` records only when the account is

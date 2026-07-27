@@ -133,9 +133,21 @@ func main() {
 		if credentialFile != "" && !filepath.IsAbs(credentialFile) {
 			credentialFile = filepath.Join(filepath.Dir(configFile), credentialFile)
 		}
+		hashicorpConfig := config.Credentials.Hashicorp
+		cyberArkConfig := config.Credentials.CyberArk
+		for _, configuredPath := range []*string{
+			&hashicorpConfig.CAFile, &hashicorpConfig.CertFile, &hashicorpConfig.KeyFile,
+			&cyberArkConfig.CAFile, &cyberArkConfig.CertFile, &cyberArkConfig.KeyFile,
+		} {
+			if value := strings.TrimSpace(*configuredPath); value != "" && !filepath.IsAbs(value) {
+				*configuredPath = filepath.Join(filepath.Dir(configFile), value)
+			}
+		}
 		provider, providerErr := credentials.NewProvider(credentials.ProviderConfig{
 			Type: providerType, File: credentialFile, Command: config.Credentials.Command,
 			TimeoutSeconds: config.Credentials.TimeoutSeconds,
+			Hashicorp:      hashicorpConfig, OnePassword: config.Credentials.OnePassword,
+			CyberArk: cyberArkConfig,
 		}, os.Stdin, os.Stderr)
 		if providerErr != nil {
 			slog.Error("error configuring credential provider", "error", providerErr)

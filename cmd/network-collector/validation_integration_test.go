@@ -1786,6 +1786,43 @@ func TestModularExampleLoads(t *testing.T) {
 	}
 }
 
+func TestNativeEnterpriseCredentialProviderConfigLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.yaml")
+	content := `credentials:
+  provider: cyberark
+  timeout_seconds: 45
+  hashicorp:
+    address: https://vault.example:8200
+    namespace: network
+    mount: secret
+    path_prefix: devices
+  onepassword:
+    account: automation.1password.com
+    vault: Network Automation
+    item_prefix: collector-
+  cyberark:
+    url: https://ccp.example/AIMWebService/api/Accounts
+    app_id: NetworkCollector
+    safe: Network-Automation
+    object_prefix: collector-
+    ca_file: certificates/ca.pem
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Credentials.Provider != "cyberark" || config.Credentials.TimeoutSeconds != 45 ||
+		config.Credentials.Hashicorp.Mount != "secret" ||
+		config.Credentials.OnePassword.Vault != "Network Automation" ||
+		config.Credentials.CyberArk.AppID != "NetworkCollector" ||
+		config.Credentials.CyberArk.CAFile != "certificates/ca.pem" {
+		t.Fatalf("unexpected enterprise credential config: %#v", config.Credentials)
+	}
+}
+
 func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	directory := filepath.Join("..", "..", "examples", "workflow-operations")
 	var paths []string

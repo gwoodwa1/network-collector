@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/pkg/credentials"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 	"github.com/gwoodwa1/network-collector/pkg/orchestrator"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
@@ -258,11 +259,14 @@ type Config struct {
 }
 
 type CredentialProviderConfig struct {
-	Provider       string   `mapstructure:"provider" yaml:"provider"`
-	File           string   `mapstructure:"file" yaml:"file"`
-	Command        []string `mapstructure:"command" yaml:"command"`
-	TimeoutSeconds int      `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
-	RSAToken       bool     `mapstructure:"rsa_token" yaml:"rsa_token"`
+	Provider       string                        `mapstructure:"provider" yaml:"provider"`
+	File           string                        `mapstructure:"file" yaml:"file"`
+	Command        []string                      `mapstructure:"command" yaml:"command"`
+	TimeoutSeconds int                           `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	RSAToken       bool                          `mapstructure:"rsa_token" yaml:"rsa_token"`
+	Hashicorp      credentials.HashicorpConfig   `mapstructure:"hashicorp" yaml:"hashicorp"`
+	OnePassword    credentials.OnePasswordConfig `mapstructure:"onepassword" yaml:"onepassword"`
+	CyberArk       credentials.CyberArkConfig    `mapstructure:"cyberark" yaml:"cyberark"`
 }
 
 type FactsDefaultsConfig struct {

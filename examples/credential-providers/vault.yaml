@@ -1,12 +1,19 @@
 credentials:
-  provider: command
-  command: [examples/credential-providers/vault.sh]
+  provider: hashicorp
   timeout_seconds: 30
+  hashicorp:
+    address: https://vault.example:8200
+    namespace: network
+    mount: network
+    path_prefix: devices
+    username_field: username
+    password_field: password
+    ca_file: /etc/network-collector/vault-ca.pem
 
-# Export VAULT_ADDR and an authenticated VAULT_TOKEN (or use the configured
-# Vault token helper), then select the KV mount and parent path:
-#   VAULT_KV_MOUNT=network
-#   VAULT_KV_PREFIX=devices
+# Authenticate with VAULT_TOKEN, the Vault token helper, or another supported
+# Vault CLI login method. Address, namespace, mount, prefix, and TLS paths can
+# instead use VAULT_ADDR, VAULT_NAMESPACE, VAULT_KV_MOUNT, VAULT_KV_PREFIX,
+# VAULT_CACERT, VAULT_CLIENT_CERT, and VAULT_CLIENT_KEY.
 #
 # Inventory credential_profile values select children such as:
 #   network/devices/datacenter

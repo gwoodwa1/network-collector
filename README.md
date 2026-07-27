@@ -107,13 +107,21 @@ This command contract can wrap Vault, AWS Secrets Manager, an OS keyring, or ano
 
 `timeout_seconds` can be set from 1 to 300 seconds. The helper receives
 `NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE`; only its
-stdout is decoded, so diagnostics should go to stderr. Complete adapters and
-configuration fragments are included for
+stdout is decoded, so diagnostics should go to stderr. First-class provider
+configurations and optional command adapters are included for
 [HashiCorp Vault](examples/credential-providers/vault.yaml),
 [1Password](examples/credential-providers/onepassword.yaml), and
 [CyberArk CCP](examples/credential-providers/cyberark.yaml). See the
 [credential-provider guide](examples/credential-providers/README.md) for
 least-privilege setup and required variables.
+
+Native provider names are `hashicorp` (aliases `vault` and
+`hashicorp-vault`), `1password` (aliases `onepassword` and `op`), and
+`cyberark` (aliases `cyberark-ccp` and `ccp`). Put non-secret endpoints,
+lookup paths, field names, and certificate paths in their nested YAML block;
+the corresponding vendor environment variables are fallbacks. Vault and
+1Password authentication tokens are intentionally not accepted as YAML
+fields.
 
 ### Docker
 

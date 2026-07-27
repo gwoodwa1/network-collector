@@ -25,9 +25,46 @@ type ProviderConfig struct {
 	Type, File     string
 	Command        []string
 	TimeoutSeconds int
+	Hashicorp      HashicorpConfig
+	OnePassword    OnePasswordConfig
+	CyberArk       CyberArkConfig
+}
+type HashicorpConfig struct {
+	Address       string `mapstructure:"address" yaml:"address"`
+	Namespace     string `mapstructure:"namespace" yaml:"namespace"`
+	Mount         string `mapstructure:"mount" yaml:"mount"`
+	PathPrefix    string `mapstructure:"path_prefix" yaml:"path_prefix"`
+	UsernameField string `mapstructure:"username_field" yaml:"username_field"`
+	PasswordField string `mapstructure:"password_field" yaml:"password_field"`
+	CAFile        string `mapstructure:"ca_file" yaml:"ca_file"`
+	CertFile      string `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile       string `mapstructure:"key_file" yaml:"key_file"`
+	Binary        string `mapstructure:"binary" yaml:"binary"`
+}
+type OnePasswordConfig struct {
+	Account       string `mapstructure:"account" yaml:"account"`
+	Vault         string `mapstructure:"vault" yaml:"vault"`
+	ItemPrefix    string `mapstructure:"item_prefix" yaml:"item_prefix"`
+	UsernameField string `mapstructure:"username_field" yaml:"username_field"`
+	PasswordField string `mapstructure:"password_field" yaml:"password_field"`
+	Binary        string `mapstructure:"binary" yaml:"binary"`
+}
+type CyberArkConfig struct {
+	URL          string `mapstructure:"url" yaml:"url"`
+	AppID        string `mapstructure:"app_id" yaml:"app_id"`
+	Safe         string `mapstructure:"safe" yaml:"safe"`
+	ObjectPrefix string `mapstructure:"object_prefix" yaml:"object_prefix"`
+	Folder       string `mapstructure:"folder" yaml:"folder"`
+	Reason       string `mapstructure:"reason" yaml:"reason"`
+	CAFile       string `mapstructure:"ca_file" yaml:"ca_file"`
+	CertFile     string `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile      string `mapstructure:"key_file" yaml:"key_file"`
 }
 
 func NewProvider(config ProviderConfig, input io.Reader, output io.Writer) (Provider, error) {
+	if err := validateProviderTimeout(config.TimeoutSeconds); err != nil {
+		return nil, err
+	}
 	switch strings.ToLower(strings.TrimSpace(config.Type)) {
 	case "", "env", "environment":
 		return EnvironmentProvider{}, nil
@@ -47,9 +84,29 @@ func NewProvider(config ProviderConfig, input io.Reader, output io.Writer) (Prov
 			timeout = time.Duration(config.TimeoutSeconds) * time.Second
 		}
 		return CommandProvider{Command: append([]string(nil), config.Command...), Timeout: timeout}, nil
+	case "hashicorp", "vault", "hashicorp-vault":
+		return newHashicorpProvider(config.Hashicorp, providerTimeout(config.TimeoutSeconds))
+	case "1password", "onepassword", "op":
+		return newOnePasswordProvider(config.OnePassword, providerTimeout(config.TimeoutSeconds))
+	case "cyberark", "cyberark-ccp", "ccp":
+		return newCyberArkProvider(config.CyberArk, providerTimeout(config.TimeoutSeconds))
 	default:
 		return nil, fmt.Errorf("unsupported credential provider %q", config.Type)
 	}
+}
+
+func providerTimeout(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func validateProviderTimeout(seconds int) error {
+	if seconds < 0 || seconds > 300 {
+		return fmt.Errorf("credential provider timeout_seconds must be between 1 and 300")
+	}
+	return nil
 }
 
 type EnvironmentProvider struct{}
