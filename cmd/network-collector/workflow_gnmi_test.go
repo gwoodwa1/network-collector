@@ -290,3 +290,24 @@ func TestGNMIRepeatTriggerHonoursCooldown(t *testing.T) {
 		t.Fatalf("cooldown allowed repeated action: count=%d\n%s", got, log.String())
 	}
 }
+
+func TestGNMITriggersSharePerDeviceFireBudget(t *testing.T) {
+	failed := false
+	validations := []deviceValidation{}
+	ctx := &stepExecutionContext{
+		hostname: "router-1", sessionLog: io.Discard, variables: map[string]string{},
+		runFailed: &failed, aggregated: &validations,
+		gnmiActionBudget: &gnmiDeviceActionBudget{fires: maxGNMIDeviceTriggerFires},
+	}
+	handler, err := gnmiTriggerHandlerWithBudget(ctx, nil, []GNMITriggerConfig{{
+		Name: "device-budget", Event: "update", Path: "/state",
+		Steps: []StepConfig{{Name: "record", Message: "diagnostic"}},
+	}}, 0, 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler(gnmidriver.Event{Type: "update", Path: "/state", Value: "DOWN"})
+	if err == nil || !strings.Contains(err.Error(), "per-device execution budget") {
+		t.Fatalf("per-device trigger budget was not enforced: %v", err)
+	}
+}

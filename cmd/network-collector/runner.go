@@ -123,6 +123,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		gnmi:           device.GNMI,
 		checkMode:      config.checkMode,
 		reportEnabled:  config.Report.Enabled,
+		gnmiActionBudget: &gnmiDeviceActionBudget{},
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt

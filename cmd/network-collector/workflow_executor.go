@@ -1408,7 +1408,21 @@ const (
 	defaultGNMITriggerCooldown = 30 * time.Second
 	minGNMITriggerCooldown     = time.Second
 	maxGNMITriggerCooldown     = time.Hour
+	maxGNMIDeviceTriggerFires  = 100
 )
+
+func claimGNMIDeviceTriggerFire(ctx *stepExecutionContext) error {
+	if ctx.gnmiActionBudget == nil {
+		ctx.gnmiActionBudget = &gnmiDeviceActionBudget{}
+	}
+	ctx.gnmiActionBudget.mu.Lock()
+	defer ctx.gnmiActionBudget.mu.Unlock()
+	if ctx.gnmiActionBudget.fires >= maxGNMIDeviceTriggerFires {
+		return fmt.Errorf("gNMI triggers exceeded the %d-fire per-device execution budget", maxGNMIDeviceTriggerFires)
+	}
+	ctx.gnmiActionBudget.fires++
+	return nil
+}
 
 func validateGNMIExecutionBudget(config GNMISubscribeConfig) (int, time.Duration, error) {
 	duration := time.Duration(config.DurationSeconds) * time.Second
@@ -1573,6 +1587,9 @@ func gnmiTriggerHandlerWithBudget(ctx *stepExecutionContext, sshClient **ssh.Cli
 			now := time.Now()
 			if trigger.Repeat && !lastFired[index].IsZero() && now.Sub(lastFired[index]) < cooldown {
 				continue
+			}
+			if err := claimGNMIDeviceTriggerFire(ctx); err != nil {
+				return err
 			}
 
 			fired[index][event.Path] = true

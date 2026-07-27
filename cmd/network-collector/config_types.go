@@ -479,6 +479,12 @@ type stepExecutionContext struct {
 	gnmi           *GNMIConnectionConfig
 	checkMode      bool
 	reportEnabled  bool
+	gnmiActionBudget *gnmiDeviceActionBudget
+}
+
+type gnmiDeviceActionBudget struct {
+	mu    sync.Mutex
+	fires int
 }
 
 type approvalAnswer struct {
