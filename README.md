@@ -1572,18 +1572,16 @@ When `events_file` is set, lifecycle events are appended as JSON Lines. Relative
 
 `event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.
 
-### Professional HTML and PDF change reports
+### Professional HTML change reports
 
 Enable the post-run reporter directly from a workbook:
 
 ```yaml
 report:
   enabled: true
-  format: both
+  format: html
   template: professional
   output: change-report.html
-  pdf_output: change-report.pdf
-  # pdf_browser: /opt/google/chrome
   title: Core path change
   change_reference: CHG-2026-0042
   logo_folder: branding
@@ -1603,13 +1601,6 @@ device results, desired-state plans, validation failures and recovery, gNMI
 guard triggers, timelines, and artifact references. Device content is HTML
 escaped, and optional evidence that cannot be decoded appears as a report
 warning rather than aborting the report.
-
-`format` accepts `html`, `pdf`, or `both`. PDF output is rendered from the
-same self-contained HTML report, so both formats have the same content and
-styling; the HTML source is retained for `pdf` too. PDF rendering requires a
-local Chrome or Chromium executable. Set `pdf_browser`, export
-`NETWORK_COLLECTOR_PDF_BROWSER`, or let the reporter search common installed
-locations. HTML-only reporting has no browser dependency.
 
 `logo_folder` resolves relative to the workbook. Logos must be PNG filenames
 directly inside that folder, may not use absolute paths or `..`, and are
@@ -1633,9 +1624,7 @@ report without contacting devices:
 ```bash
 go run ./cmd/reporter \
   --run-dir artifacts/run-20260727T120000 \
-  --format both \
   --output change-report.html \
-  --pdf-output change-report.pdf \
   --title "Core path change" \
   --change-reference CHG-2026-0042 \
   --logo-folder ./branding \
@@ -1648,9 +1637,10 @@ the run directory are not opened.
 
 `xr-routing-monitor` uses this shared professional reporting engine for its
 end-of-run interface traffic and default-route transition report. Its
-`--report-format`, `--report-title`, `--change-reference`, logo, and PDF flags
-provide the same HTML/PDF and branding choices while retaining the
-monitor-specific charts.
+`--report-title`, `--change-reference`, and logo flags provide the same
+branding choices while retaining the monitor-specific charts. The generated
+HTML is self-contained and requires no browser or graphical environment on
+the monitoring host.
 
 ### Reusable orchestration package
 

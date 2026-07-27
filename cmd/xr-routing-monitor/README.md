@@ -59,14 +59,11 @@ files are required.
 | `--type`                   | `cisco_iosxr` | scrapligo platform/driver name used for every device you onboard.                                                                |
 | `--devices`                | *(none)*      | Optional YAML file pre-listing hostname/vrf/interfaces/neighbors per device. See [below](#providing-devices-via-a-yaml-file-optional). |
 | `--passcode-reuse-window`  | `45s`         | How long a just-entered passcode may be offered for reuse on the next device. `0` disables reuse. See [below](#passcode-reuse).  |
-| `--report-format`          | `html`        | End-of-run report output: `html`, `pdf`, `both`, or `none`. PDF output requires Chrome or Chromium. |
 | `--report-output`          | `interface-traffic.html` | HTML report filename inside the run artifact folder. |
 | `--report-title`           | `IOS XR Change Monitoring Report` | Title shown in the report header. |
 | `--change-reference`       | *(none)*      | Optional change or ticket reference shown in the report. |
 | `--logo-folder`            | *(none)*      | Folder containing optional PNG report branding. |
 | `--header-logo`, `--footer-logo` | *(automatic)* | PNG filenames inside `--logo-folder`; defaults to `header.png` and `footer.png` when present. |
-| `--pdf-output`             | `interface-traffic.pdf` | PDF report filename inside the run artifact folder. |
-| `--pdf-browser`            | *(automatic)* | Chrome/Chromium executable used for PDF output. |
 | `--diff-before`, `--diff-after` | *(none)* | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end-written-to-output-dirdevices-file-hostname-timestamp-labeltxtjson). |
 | `--capture-running-config` | `false`       | Also capture `show running-config` before and after the change window, as a separate `<base>-running-config.txt` file per label. See [below](#running-config-optional). |
 | `--diff-before-config`, `--diff-after-config` | *(none)* | Paths to a captured before/after running-config `.txt` pair. When both are set, prints a unified line diff and exits instead of connecting to any device. See [below](#running-config-optional). |
@@ -350,12 +347,6 @@ vertical dashed line, so the traffic shift around the migration can be read
 in context. Older samples already present in an accumulated `.jsonl` from a
 previous run against the same `--devices` file are ignored.
 
-Use `--report-format both` to produce HTML and PDF, or `pdf` when the PDF is
-the primary deliverable. The self-contained HTML render source is retained in
-both cases. PDF rendering uses a local Chrome or Chromium executable selected
-from `--pdf-browser`, then `NETWORK_COLLECTOR_PDF_BROWSER`, then common
-installed locations. No browser is required for HTML-only output.
-
 Branding images must be PNG files directly inside `--logo-folder`; absolute
 logo filenames and `..` traversal are refused. When explicit filenames are
 omitted, `header.png` and `footer.png` are used if present. For example:
@@ -363,7 +354,6 @@ omitted, `header.png` and `footer.png` are used if present. For example:
 ```bash
 ./xr-routing-monitor \
   --devices change-42.yaml \
-  --report-format both \
   --report-title "Core path migration" \
   --change-reference CHG-2026-0042 \
   --logo-folder ./branding
