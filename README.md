@@ -1578,7 +1578,7 @@ When `events_file` is set, lifecycle events are appended as JSON Lines. Relative
 
 `event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.
 
-### Professional HTML change reports
+### HTML change reports
 
 Enable the post-run reporter directly from a workbook:
 
@@ -1601,12 +1601,25 @@ files when their names are not configured. Declarative `ensure` plans are
 retained as structured report evidence even when global `save_raw` is false;
 this does not enable capture of unrelated raw command output.
 
-The built-in `professional` template is colourful, responsive,
-print-friendly, and self-contained. It selects structured run outcomes,
-device results, desired-state plans, validation failures and recovery, gNMI
-guard triggers, timelines, and artifact references. Device content is HTML
-escaped, and optional evidence that cannot be decoded appears as a report
-warning rather than aborting the report.
+Two audited, embedded templates are available:
+
+- `professional` is the default, full change-control report with structured
+  outcomes, desired-state plans, validation and recovery, gNMI guard triggers,
+  timeline, evidence references, and branding.
+- `compact` is a shorter operational summary focused on outcome, device state,
+  changes, exceptions, and warnings.
+
+Both are colourful, responsive, print-friendly, and self-contained. Device
+content is HTML escaped, and optional evidence that cannot be decoded appears
+as a report warning rather than aborting the report. Select the shorter report
+with `template: compact`.
+
+Arbitrary template files are deliberately not accepted from workbooks or the
+reporter CLI. Templates control how potentially sensitive evidence is rendered
+and can otherwise create misleading output or browser network requests. New
+templates must be reviewed, tested, and compiled into the binary. A future
+extension mechanism would require administrator-installed, signed, versioned,
+and allowlisted template packages rather than per-run HTML.
 
 `logo_folder` resolves relative to the workbook. Logos must be PNG filenames
 directly inside that folder, may not use absolute paths or `..`, and are
@@ -1630,6 +1643,7 @@ report without contacting devices:
 ```bash
 go run ./cmd/reporter \
   --run-dir artifacts/run-20260727T120000 \
+  --template compact \
   --output change-report.html \
   --title "Core path change" \
   --change-reference CHG-2026-0042 \
@@ -1639,7 +1653,13 @@ go run ./cmd/reporter \
 ```
 
 The reporter reads only the supplied run bundle. Artifact references outside
-the run directory are not opened.
+the run directory are not opened. `--template` accepts only `professional` or
+`compact`; unknown names are rejected. Template selection can be checked
+without reading a run bundle:
+
+```bash
+go run ./cmd/reporter --template compact --validate-template
+```
 
 `xr-routing-monitor` and `junos-routing-monitor` use this shared professional
 reporting engine for their end-of-run interface traffic and default-route

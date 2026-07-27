@@ -4,6 +4,10 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added an audited, embedded `compact` HTML report template for shorter
+  operational summaries while retaining `professional` as the default.
+- Report template selection now fails closed to the two compiled-in templates;
+  workbook and CLI supplied template files are intentionally unsupported.
 - Added Junos SSH VRF desired state with explicit `instance-type vrf`, exact
   RD and directional route-target replacement, dependency-aware deletion
   refusal, check-mode plans, verification, and inverse rollback.

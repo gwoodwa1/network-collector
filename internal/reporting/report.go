@@ -22,6 +22,7 @@ type Config struct {
 	SummaryFile     string
 	EventsFile      string
 	Output          string
+	Template        string
 	Title           string
 	ChangeReference string
 	LogoFolder      string
@@ -30,6 +31,7 @@ type Config struct {
 }
 
 type Model struct {
+	SchemaVersion       string
 	Title               string
 	ChangeReference     string
 	RunID               string
@@ -207,7 +209,8 @@ func BuildModel(config Config) (Model, error) {
 		return Model{}, fmt.Errorf("decode summary %q: %w", summaryPath, err)
 	}
 	model := Model{
-		Title: strings.TrimSpace(config.Title), ChangeReference: strings.TrimSpace(config.ChangeReference),
+		SchemaVersion: ReportModelVersion,
+		Title:         strings.TrimSpace(config.Title), ChangeReference: strings.TrimSpace(config.ChangeReference),
 		RunID: summary.RunID, Playbook: summary.Playbook, StartedAt: summary.StartedAt,
 		CompletedAt: summary.CompletedAt, Failed: summary.Failed, GeneratedAt: time.Now().UTC(),
 	}
@@ -312,8 +315,15 @@ func Render(config Config, model Model) (string, error) {
 	if !filepath.IsAbs(output) {
 		output = filepath.Join(runDir, output)
 	}
+	reportTemplate, err := resolveReportTemplate(config)
+	if err != nil {
+		return "", err
+	}
+	if model.SchemaVersion == "" {
+		model.SchemaVersion = ReportModelVersion
+	}
 	var rendered bytes.Buffer
-	if err := professionalTemplate.Execute(&rendered, model); err != nil {
+	if err := reportTemplate.Execute(&rendered, model); err != nil {
 		return "", fmt.Errorf("render report: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {

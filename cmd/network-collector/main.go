@@ -91,11 +91,6 @@ func main() {
 			slog.Error("invalid report configuration", "error", "report.format currently supports only html")
 			os.Exit(1)
 		}
-		templateName := strings.ToLower(strings.TrimSpace(config.Report.Template))
-		if templateName != "" && templateName != "professional" {
-			slog.Error("invalid report configuration", "error", "report.template currently supports only professional")
-			os.Exit(1)
-		}
 		if strings.TrimSpace(config.Output.SummaryFile) == "" {
 			config.Output.SummaryFile = "results.json"
 		}
@@ -106,6 +101,12 @@ func main() {
 			LogoFolder: reportLogoFolder, HeaderLogo: config.Report.HeaderLogo, FooterLogo: config.Report.FooterLogo,
 		}); reportErr != nil {
 			slog.Error("invalid report branding", "error", reportErr)
+			os.Exit(1)
+		}
+		if reportErr := reporting.ValidateTemplate(reporting.Config{
+			Template: config.Report.Template,
+		}); reportErr != nil {
+			slog.Error("invalid report template", "error", reportErr)
 			os.Exit(1)
 		}
 	}
@@ -373,7 +374,7 @@ func main() {
 	if config.Report.Enabled {
 		reportPath, reportErr := reporting.Generate(reporting.Config{
 			RunDir: runDir, SummaryFile: summaryPath, EventsFile: eventPath,
-			Output: config.Report.Output, Title: config.Report.Title,
+			Output: config.Report.Output, Template: config.Report.Template, Title: config.Report.Title,
 			ChangeReference: config.Report.ChangeReference, LogoFolder: reportLogoFolder,
 			HeaderLogo: config.Report.HeaderLogo, FooterLogo: config.Report.FooterLogo,
 		})

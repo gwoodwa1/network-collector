@@ -109,6 +109,61 @@ func TestGenerateProfessionalReportExtractsRelevantEvidenceAndEmbedsLogos(t *tes
 	}
 }
 
+func TestRenderCompactReportUsesAuditedBuiltInTemplate(t *testing.T) {
+	runDir := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	path, err := Render(Config{
+		RunDir:   runDir,
+		Output:   "compact.html",
+		Template: "compact",
+	}, Model{
+		Title: `<script>alert("x")</script>`,
+		RunID: "run-compact", Playbook: "compact-example",
+		StartedAt: now.Add(-time.Minute), CompletedAt: now, Duration: time.Minute,
+		Status: "Successful", StatusClass: "success",
+		DeviceCount: 1, DevicePassed: 1,
+		Devices: []Device{{
+			Hostname: "edge-01", IP: "192.0.2.10", Status: "Successful",
+		}},
+		GeneratedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(content)
+	for _, wanted := range []string{
+		"Network change summary · model v1",
+		"run-compact",
+		"edge-01",
+		`&lt;script&gt;alert`,
+	} {
+		if !strings.Contains(html, wanted) {
+			t.Fatalf("compact report is missing %q", wanted)
+		}
+	}
+	if strings.Contains(html, `<script>alert("x")</script>`) {
+		t.Fatal("compact template rendered untrusted content as HTML")
+	}
+}
+
+func TestValidateTemplateFailsClosedForUnknownTemplate(t *testing.T) {
+	for _, name := range []string{"custom", "company.html.tmpl", "../template"} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateTemplate(Config{Template: name})
+			if err == nil || !strings.Contains(err.Error(), "professional or compact") {
+				t.Fatalf("unknown template %q was accepted: %v", name, err)
+			}
+		})
+	}
+	if err := ValidateTemplate(Config{}); err != nil {
+		t.Fatalf("default professional template was rejected: %v", err)
+	}
+}
+
 func TestBuildModelWarnsForMalformedOptionalEvent(t *testing.T) {
 	runDir := t.TempDir()
 	now := time.Now().UTC()
