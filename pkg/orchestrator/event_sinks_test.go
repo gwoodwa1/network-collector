@@ -65,6 +65,26 @@ func TestWebhookSinkRequiresHTTPSAndAllowlistedPublicDestination(t *testing.T) {
 	}
 }
 
+func TestSecureWebhookDialerPinsAndVerifiesConnectedPeer(t *testing.T) {
+	lookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}, nil
+	}
+	dial := func(_ context.Context, _, address string) (net.Conn, error) {
+		if address != "203.0.113.10:443" {
+			t.Fatalf("dialer did not pin the verified IP literal: %s", address)
+		}
+		client, server := net.Pipe()
+		t.Cleanup(func() { _ = server.Close() })
+		return client, nil
+	}
+	_, err := secureWebhookDialerWith(false, lookup, dial)(
+		context.Background(), "tcp", "events.example.test:443",
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not match verified address") {
+		t.Fatalf("connected peer mismatch was not rejected: %v", err)
+	}
+}
+
 func TestSyslogSinkUDP(t *testing.T) {
 	listener, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
