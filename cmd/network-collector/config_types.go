@@ -90,15 +90,39 @@ type EnrichmentConfig struct {
 }
 
 type GNMISubscribeConfig struct {
-	Paths                 []string `mapstructure:"paths" yaml:"paths"`
-	Port                  int      `mapstructure:"port" yaml:"port"`
-	Mode                  string   `mapstructure:"mode" yaml:"mode"`
-	StreamMode            string   `mapstructure:"stream_mode" yaml:"stream_mode"`
-	SampleIntervalSeconds int      `mapstructure:"sample_interval_seconds" yaml:"sample_interval_seconds"`
-	DurationSeconds       int      `mapstructure:"duration_seconds" yaml:"duration_seconds"`
-	MaxUpdates            int      `mapstructure:"max_updates" yaml:"max_updates"`
-	SkipTLS               bool     `mapstructure:"skip_tls" yaml:"skip_tls"`
-	TimeoutSeconds        int      `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	Paths                 []string            `mapstructure:"paths" yaml:"paths"`
+	Port                  int                 `mapstructure:"port" yaml:"port"`
+	Mode                  string              `mapstructure:"mode" yaml:"mode"`
+	StreamMode            string              `mapstructure:"stream_mode" yaml:"stream_mode"`
+	SampleIntervalSeconds int                 `mapstructure:"sample_interval_seconds" yaml:"sample_interval_seconds"`
+	DurationSeconds       int                 `mapstructure:"duration_seconds" yaml:"duration_seconds"`
+	MaxUpdates            int                 `mapstructure:"max_updates" yaml:"max_updates"`
+	SkipTLS               bool                `mapstructure:"skip_tls" yaml:"skip_tls"`
+	TimeoutSeconds        int                 `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	Triggers              []GNMITriggerConfig `mapstructure:"triggers" yaml:"triggers"`
+}
+
+type GNMITriggerConfig struct {
+	Name           string       `mapstructure:"name" yaml:"name"`
+	Event          string       `mapstructure:"event" yaml:"event"`
+	Path           string       `mapstructure:"path" yaml:"path"`
+	PathRegex      string       `mapstructure:"path_regex" yaml:"path_regex"`
+	Value          string       `mapstructure:"value" yaml:"value"`
+	ValueRegex     string       `mapstructure:"value_regex" yaml:"value_regex"`
+	IncludeInitial bool         `mapstructure:"include_initial" yaml:"include_initial"`
+	Once           bool         `mapstructure:"once" yaml:"once"`
+	Steps          []StepConfig `mapstructure:"steps" yaml:"steps"`
+}
+
+type GNMIConnectionConfig struct {
+	Port           int    `mapstructure:"port" yaml:"port"`
+	Insecure       *bool  `mapstructure:"insecure" yaml:"insecure"`
+	SkipVerify     *bool  `mapstructure:"skip_verify" yaml:"skip_verify"`
+	CAFile         string `mapstructure:"ca_file" yaml:"ca_file"`
+	CertFile       string `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile        string `mapstructure:"key_file" yaml:"key_file"`
+	ServerName     string `mapstructure:"server_name" yaml:"server_name"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
 }
 
 type DriftConfig struct {
@@ -160,23 +184,24 @@ type RepeatConfig struct {
 }
 
 type DeviceConfig struct {
-	Hostname          string             `mapstructure:"hostname" yaml:"hostname"`
-	IP                string             `mapstructure:"ip" yaml:"ip"`
-	Host              string             `mapstructure:"host" yaml:"host"`
-	Hosts             []string           `mapstructure:"hosts" yaml:"hosts"`
-	Group             string             `mapstructure:"group" yaml:"group"`
-	Groups            []string           `mapstructure:"groups" yaml:"groups"`
-	Type              string             `mapstructure:"type" yaml:"type"`
-	Timeout           int                `mapstructure:"timeout" yaml:"timeout"`
-	OperationTimeout  int                `mapstructure:"operation_timeout" yaml:"operation_timeout"`
-	Steps             []StepConfig       `mapstructure:"steps" yaml:"steps"`
-	Command           string             `mapstructure:"cmd" yaml:"cmd"`
-	Parser            string             `mapstructure:"parser" yaml:"parser"`
-	Validation        *ValidationConfig  `mapstructure:"validation" yaml:"validation"`
-	Validations       []ValidationConfig `mapstructure:"validations" yaml:"validations"`
-	SSHSecurity       *SSHSecurityConfig `mapstructure:"ssh_security" yaml:"ssh_security"`
-	Labels            map[string]string  `mapstructure:"labels" yaml:"labels"`
-	CredentialProfile string             `mapstructure:"credential_profile" yaml:"credential_profile"`
+	Hostname          string                `mapstructure:"hostname" yaml:"hostname"`
+	IP                string                `mapstructure:"ip" yaml:"ip"`
+	Host              string                `mapstructure:"host" yaml:"host"`
+	Hosts             []string              `mapstructure:"hosts" yaml:"hosts"`
+	Group             string                `mapstructure:"group" yaml:"group"`
+	Groups            []string              `mapstructure:"groups" yaml:"groups"`
+	Type              string                `mapstructure:"type" yaml:"type"`
+	Timeout           int                   `mapstructure:"timeout" yaml:"timeout"`
+	OperationTimeout  int                   `mapstructure:"operation_timeout" yaml:"operation_timeout"`
+	Steps             []StepConfig          `mapstructure:"steps" yaml:"steps"`
+	Command           string                `mapstructure:"cmd" yaml:"cmd"`
+	Parser            string                `mapstructure:"parser" yaml:"parser"`
+	Validation        *ValidationConfig     `mapstructure:"validation" yaml:"validation"`
+	Validations       []ValidationConfig    `mapstructure:"validations" yaml:"validations"`
+	SSHSecurity       *SSHSecurityConfig    `mapstructure:"ssh_security" yaml:"ssh_security"`
+	GNMI              *GNMIConnectionConfig `mapstructure:"gnmi" yaml:"gnmi"`
+	Labels            map[string]string     `mapstructure:"labels" yaml:"labels"`
+	CredentialProfile string                `mapstructure:"credential_profile" yaml:"credential_profile"`
 }
 
 type SSHSecurityConfig struct {
@@ -265,16 +290,17 @@ type ExecutionConfig struct {
 }
 
 type InventoryHostConfig struct {
-	Name              string             `yaml:"name"`
-	Hostname          string             `yaml:"hostname"`
-	IP                string             `yaml:"ip"`
-	Address           string             `yaml:"address"`
-	Type              string             `yaml:"type"`
-	Timeout           int                `yaml:"timeout"`
-	OperationTimeout  int                `yaml:"operation_timeout"`
-	SSHSecurity       *SSHSecurityConfig `yaml:"ssh_security"`
-	Labels            map[string]string  `yaml:"labels"`
-	CredentialProfile string             `yaml:"credential_profile"`
+	Name              string                `yaml:"name"`
+	Hostname          string                `yaml:"hostname"`
+	IP                string                `yaml:"ip"`
+	Address           string                `yaml:"address"`
+	Type              string                `yaml:"type"`
+	Timeout           int                   `yaml:"timeout"`
+	OperationTimeout  int                   `yaml:"operation_timeout"`
+	SSHSecurity       *SSHSecurityConfig    `yaml:"ssh_security"`
+	GNMI              *GNMIConnectionConfig `yaml:"gnmi"`
+	Labels            map[string]string     `yaml:"labels"`
+	CredentialProfile string                `yaml:"credential_profile"`
 }
 
 type InventoryGroupConfig struct {
@@ -282,8 +308,9 @@ type InventoryGroupConfig struct {
 }
 
 type InventoryConfig struct {
-	Hosts  []InventoryHostConfig           `yaml:"hosts"`
-	Groups map[string]InventoryGroupConfig `yaml:"groups"`
+	Hosts   []InventoryHostConfig           `yaml:"hosts"`
+	Groups  map[string]InventoryGroupConfig `yaml:"groups"`
+	baseDir string
 }
 
 type ParserFieldConfig struct {
@@ -387,6 +414,7 @@ type stepExecutionContext struct {
 	events         *eventDispatcher
 	reauthenticate func() (string, string, error)
 	netconf        netconfStepExecutor
+	gnmi           *GNMIConnectionConfig
 }
 
 type approvalAnswer struct {

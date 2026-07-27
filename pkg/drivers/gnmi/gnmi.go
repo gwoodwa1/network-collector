@@ -11,6 +11,7 @@ import (
 
 	"github.com/gwoodwa1/network-collector/pkg/drivers"
 	"github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/openconfig/gnmi/value"
 	"github.com/openconfig/gnmic/pkg/api/path"
 	"github.com/openconfig/gnmic/pkg/api/target"
 	"github.com/openconfig/gnmic/pkg/api/types"
@@ -26,6 +27,16 @@ type Subscription struct {
 	MaxUpdates     int
 }
 
+type Event struct {
+	Type      string      `json:"type"`
+	Path      string      `json:"path"`
+	Value     interface{} `json:"value,omitempty"`
+	Timestamp int64       `json:"timestamp"`
+	Initial   bool        `json:"initial"`
+}
+
+type EventHandler func(Event) error
+
 // Option is a type-safe option for configuring GNMIClient
 type Option func(*GNMIClient)
 
@@ -38,9 +49,36 @@ type GNMIClient struct {
 func WithSkipTLS() Option {
 	return func(g *GNMIClient) {
 		if g != nil {
-			g.TLSConfig.SkipVerify = true
 			g.TLSConfig.Insecure = true
 		}
+	}
+}
+
+func WithInsecure(insecure bool) Option {
+	return func(g *GNMIClient) {
+		if g != nil {
+			g.TLSConfig.Insecure = insecure
+		}
+	}
+}
+
+func WithSkipVerify(skipVerify bool) Option {
+	return func(g *GNMIClient) {
+		if g != nil {
+			g.TLSConfig.SkipVerify = skipVerify
+		}
+	}
+}
+
+func WithTLSCredentials(caFile, certFile, keyFile, serverName string) Option {
+	return func(g *GNMIClient) {
+		if g == nil {
+			return
+		}
+		g.TLSConfig.CAFile = strings.TrimSpace(caFile)
+		g.TLSConfig.CertFile = strings.TrimSpace(certFile)
+		g.TLSConfig.KeyFile = strings.TrimSpace(keyFile)
+		g.TLSConfig.ServerName = strings.TrimSpace(serverName)
 	}
 }
 
@@ -82,12 +120,22 @@ func (g *GNMIClient) Connect(address, username, password string, opts ...Option)
 	}
 
 	tc := &types.TargetConfig{
-		Address:    address,
-		Username:   &username,
-		Password:   &password,
-		Insecure:   &g.TLSConfig.Insecure,
-		SkipVerify: &g.TLSConfig.SkipVerify,
-		Timeout:    g.timeout,
+		Address:       address,
+		Username:      &username,
+		Password:      &password,
+		Insecure:      &g.TLSConfig.Insecure,
+		SkipVerify:    &g.TLSConfig.SkipVerify,
+		Timeout:       g.timeout,
+		TLSServerName: g.TLSConfig.ServerName,
+	}
+	if g.TLSConfig.CAFile != "" {
+		tc.TLSCA = &g.TLSConfig.CAFile
+	}
+	if g.TLSConfig.CertFile != "" {
+		tc.TLSCert = &g.TLSConfig.CertFile
+	}
+	if g.TLSConfig.KeyFile != "" {
+		tc.TLSKey = &g.TLSConfig.KeyFile
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
@@ -137,6 +185,10 @@ func (g *GNMIClient) Execute(gnmiPath string) (string, error) {
 }
 
 func (g *GNMIClient) Subscribe(ctx context.Context, config Subscription) (string, error) {
+	return g.SubscribeEvents(ctx, config, nil)
+}
+
+func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, handler EventHandler) (string, error) {
 	if g == nil || g.target == nil {
 		return "", errors.New("GNMI client is not connected")
 	}
@@ -206,6 +258,7 @@ func (g *GNMIClient) Subscribe(ctx context.Context, config Subscription) (string
 	encoded := make([]json.RawMessage, 0)
 	updates := 0
 	options := &formatters.MarshalOptions{Multiline: false}
+	synced := false
 	for {
 		select {
 		case response, ok := <-responses:
@@ -220,11 +273,19 @@ func (g *GNMIClient) Subscribe(ctx context.Context, config Subscription) (string
 				return "", fmt.Errorf("failed to marshal gNMI subscription response: %w", err)
 			}
 			encoded = append(encoded, json.RawMessage(body))
-			if response.GetUpdate() != nil {
+			if notification := response.GetUpdate(); notification != nil {
 				updates++
+				if handler != nil {
+					if err := handleNotification(notification, !synced, handler); err != nil {
+						return "", err
+					}
+				}
 			}
-			if response.GetSyncResponse() && mode == "once" {
-				return marshalSubscriptionResponses(encoded)
+			if response.GetSyncResponse() {
+				synced = true
+				if mode == "once" {
+					return marshalSubscriptionResponses(encoded)
+				}
 			}
 			if config.MaxUpdates > 0 && updates >= config.MaxUpdates {
 				return marshalSubscriptionResponses(encoded)
@@ -238,6 +299,46 @@ func (g *GNMIClient) Subscribe(ctx context.Context, config Subscription) (string
 			return marshalSubscriptionResponses(encoded)
 		}
 	}
+}
+
+func handleNotification(notification *gnmi.Notification, initial bool, handler EventHandler) error {
+	for _, update := range notification.GetUpdate() {
+		scalar, err := value.ToScalar(update.GetVal())
+		if err != nil {
+			return fmt.Errorf("failed to decode gNMI value: %w", err)
+		}
+		event := Event{
+			Type: "update", Path: notificationPath(notification.GetPrefix(), update.GetPath()),
+			Value: scalar, Timestamp: notification.GetTimestamp(), Initial: initial,
+		}
+		if err := handler(event); err != nil {
+			return fmt.Errorf("gNMI event handler failed for %s: %w", event.Path, err)
+		}
+	}
+	for _, deleted := range notification.GetDelete() {
+		event := Event{
+			Type: "delete", Path: notificationPath(notification.GetPrefix(), deleted),
+			Timestamp: notification.GetTimestamp(), Initial: initial,
+		}
+		if err := handler(event); err != nil {
+			return fmt.Errorf("gNMI event handler failed for %s: %w", event.Path, err)
+		}
+	}
+	return nil
+}
+
+func notificationPath(prefix, leaf *gnmi.Path) string {
+	combined := &gnmi.Path{Elem: path.PathElems(prefix, leaf)}
+	if leaf.GetOrigin() != "" {
+		combined.Origin = leaf.GetOrigin()
+	} else {
+		combined.Origin = prefix.GetOrigin()
+	}
+	result := path.GnmiPathToXPath(combined, false)
+	if combined.GetOrigin() == "" && result != "" {
+		return "/" + result
+	}
+	return result
 }
 
 func marshalSubscriptionResponses(responses []json.RawMessage) (string, error) {

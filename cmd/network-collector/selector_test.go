@@ -52,6 +52,37 @@ func TestInventoryLabelsMergeWithDeviceOverride(t *testing.T) {
 	}
 }
 
+func TestInventoryGNMIConfigIsInherited(t *testing.T) {
+	insecure := true
+	resolved := applyInventoryHost(
+		DeviceConfig{},
+		InventoryHostConfig{
+			Name: "router-1", IP: "192.0.2.1",
+			GNMI: &GNMIConnectionConfig{Port: 6030, Insecure: &insecure, CAFile: "/certs/ca.pem"},
+		},
+	)
+	if resolved.GNMI == nil || resolved.GNMI.Port != 6030 || resolved.GNMI.Insecure == nil || !*resolved.GNMI.Insecure || resolved.GNMI.CAFile != "/certs/ca.pem" {
+		t.Fatalf("unexpected inherited gNMI config: %+v", resolved.GNMI)
+	}
+}
+
+func TestLoadInventoryResolvesGNMICertificatePaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inventory.yaml")
+	content := []byte("hosts:\n  - name: router-1\n    ip: 192.0.2.1\n    gnmi:\n      ca_file: certs/ca.pem\n      cert_file: certs/client.pem\n      key_file: certs/client-key.pem\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := loadInventory(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := inventory.Hosts[0].GNMI
+	if got == nil || got.CAFile != filepath.Join(dir, "certs/ca.pem") || got.CertFile != filepath.Join(dir, "certs/client.pem") || got.KeyFile != filepath.Join(dir, "certs/client-key.pem") {
+		t.Fatalf("certificate paths were not resolved relative to inventory: %+v", got)
+	}
+}
+
 func TestLoadFailedDevices(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "results.json")

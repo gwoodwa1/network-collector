@@ -1808,8 +1808,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 26 {
-		t.Fatalf("expected twenty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 27 {
+		t.Fatalf("expected twenty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1825,12 +1825,16 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 26 {
-		t.Fatalf("expected twenty-six loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 27 {
+		t.Fatalf("expected twenty-seven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
 		t.Fatalf("conditions example is missing workflow operations: %+v", conditions)
+	}
+	gnmiEvents := loaded["27-gnmi-event-actions.yaml"].SSH[0].Steps[0].GNMISubscribe
+	if gnmiEvents == nil || len(gnmiEvents.Triggers) != 2 || gnmiEvents.Triggers[0].Event != "update" || gnmiEvents.Triggers[1].Event != "delete" {
+		t.Fatalf("gNMI event example is incomplete: %+v", gnmiEvents)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {

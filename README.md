@@ -1047,7 +1047,59 @@ Use `parallel` for independent same-device branches. Each branch gets a separate
 
 A control step may define one of `repeat`, `foreach`, `use`, `block`, or `parallel`; executable fields belong in its nested steps. An `approval` gate is a standalone step. `when` may guard any normal or control step.
 
-Use `gnmi_subscribe` for a finite telemetry collection. `once` completes when the target sends its synchronization response. A `stream` must set `duration_seconds` or `max_updates`; subscriptions without an explicit duration remain bounded by `timeout_seconds` (30 seconds by default), so an ordinary playbook can never wait forever. The resulting JSON array supports `register`, `validations`, `drift`, retries, and structured output like other step output:
+Use `gnmi_subscribe` for finite telemetry collection and event-driven actions. `once` completes when the target sends its synchronization response. A `stream` must set `duration_seconds` or `max_updates`; subscriptions without an explicit duration remain bounded by `timeout_seconds` (30 seconds by default), so an ordinary playbook can never wait forever. The resulting JSON array supports `register`, `validations`, `drift`, retries, and structured output like other step output.
+
+Keep reusable connection and TLS settings on the inventory host:
+
+```yaml
+hosts:
+  - name: router-01
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    gnmi:
+      port: 57400
+      ca_file: certs/gnmi-ca.pem
+      server_name: router-01.example.net
+      timeout_seconds: 30
+```
+
+Certificate paths are relative to the inventory file. The supported security modes are:
+
+- Production server TLS: set `ca_file` and, when the certificate name differs from the inventory address, `server_name`.
+- Mutual TLS: also set both `cert_file` and `key_file`. They must be configured together.
+- TLS without certificate verification: set `skip_verify: true`. Traffic remains encrypted, but this is suitable only for controlled migration or lab use.
+- Plaintext gRPC: set `insecure: true`. Use this only when the target is explicitly configured without TLS on a trusted lab network.
+
+For a small lab CA and mutual-TLS client certificate, create a private directory and issue the files before starting the collector:
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:3072 -nodes -days 365 \
+  -keyout certs/gnmi-ca-key.pem -out certs/gnmi-ca.pem \
+  -subj "/CN=network-collector-lab-ca"
+openssl req -newkey rsa:3072 -nodes \
+  -keyout certs/collector-key.pem -out certs/collector.csr \
+  -subj "/CN=network-collector"
+openssl x509 -req -days 365 -in certs/collector.csr \
+  -CA certs/gnmi-ca.pem -CAkey certs/gnmi-ca-key.pem -CAcreateserial \
+  -out certs/collector.pem
+chmod 600 certs/collector-key.pem certs/gnmi-ca-key.pem
+```
+
+Install the CA/server certificate and enable gNMI on the router using the platform procedure, then use:
+
+```yaml
+gnmi:
+  port: 57400
+  ca_file: certs/gnmi-ca.pem
+  cert_file: certs/collector.pem
+  key_file: certs/collector-key.pem
+  server_name: router-01.example.net
+```
+
+The older per-step `skip_tls: true` remains compatible and means plaintext gRPC; new inventories should use `gnmi.insecure` so the security choice is explicit.
+
+Add `triggers` to react immediately to individual updates or deletes while the subscription is open:
 
 ```yaml
 - name: collect-interface-changes
@@ -1059,15 +1111,34 @@ Use `gnmi_subscribe` for a finite telemetry collection. `once` completes when th
     stream_mode: on_change
     duration_seconds: 30
     max_updates: 20
-    skip_tls: true
+    triggers:
+      - name: interface-became-up
+        event: update
+        path_regex: '^/interfaces/interface\[name=.*\]/state/oper-status$'
+        value: UP
+        steps:
+          - name: collect-interface-detail
+            cmd: show interfaces brief
+
+      - name: route-disappeared
+        event: delete
+        path_regex: '/afts/(ipv4|ipv6)-unicast/.*entry'
+        steps:
+          - name: verify-routes-over-netconf
+            netconf:
+              operation: get
+              payload: |
+                <filter type="subtree">
+                  <network-instances xmlns="http://openconfig.net/yang/network-instance"/>
+                </filter>
   register: interface_changes
-  validation:
-    extractor: json_path
-    json_path: "$[0]"
-    condition: exists
 ```
 
-Streaming modes are `target_defined`, `on_change`, and `sample`. For `sample`, also set `sample_interval_seconds`. Use `mode: once` for a synchronized snapshot without a duration.
+Trigger `event` is `update` (the default) or `delete`. Match an exact canonical path with `path`, or use `path_regex`; updates may also match an exact `value` or `value_regex`. Initial values sent before the first gNMI sync response are ignored by default, preventing an already-UP interface from looking like a new transition. Set `include_initial: true` when the initial state should trigger, and `once: true` when a rule should run only on its first match.
+
+Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, local commands, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
+
+Streaming modes are `target_defined`, `on_change`, and `sample`. For `sample`, also set `sample_interval_seconds`. Use `mode: once` for a synchronized snapshot without a duration. See [`examples/workflow-operations/multivendor/27-gnmi-event-actions.yaml`](examples/workflow-operations/multivendor/27-gnmi-event-actions.yaml) for a complete mixed-transport example.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 

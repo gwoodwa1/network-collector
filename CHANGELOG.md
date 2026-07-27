@@ -4,6 +4,10 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added event-driven gNMI `Subscribe` triggers for update and delete notifications, with post-sync filtering, exact or regular-expression matching, event variables, lifecycle events, and immediate nested SSH, NETCONF, local, or reusable workflow actions.
+- Added inventory-level gNMI connection profiles for plaintext lab connections, verified TLS, TLS without verification, and mutual TLS, with certificate paths resolved relative to the inventory file.
+- Updated direct and transitive Go dependencies to their latest compatible releases.
+
 ## [1.2.0] - 2026-07-25
 
 - Added first-class NETCONF workflow targets and steps with RPC, candidate or running `edit-config`, commit, confirmed commit, discard, validation, retry, registration, drift, parallel execution, and transactional rollback support.

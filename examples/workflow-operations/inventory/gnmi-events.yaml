@@ -1,0 +1,20 @@
+hosts:
+  - name: xr-gnmi-lab-01
+    ip: 192.0.2.10
+    type: cisco_iosxr
+    operation_timeout: 60
+    gnmi:
+      port: 57400
+      # Lab-only plaintext gRPC. For production, remove insecure and use the
+      # certificate configuration shown in README.md.
+      insecure: true
+      timeout_seconds: 30
+    labels:
+      site: london
+      role: core
+      telemetry: gnmi
+
+groups:
+  gnmi-lab:
+    hosts:
+      - xr-gnmi-lab-01

@@ -1,0 +1,42 @@
+name_playbook: gnmi-event-actions
+inventory_file: ../inventory/gnmi-events.yaml
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: react-to-telemetry
+        gnmi_subscribe:
+          paths:
+            - /interfaces/interface/state/oper-status
+            - /network-instances/network-instance/afts
+          mode: stream
+          stream_mode: on_change
+          duration_seconds: 300
+          max_updates: 1000
+          triggers:
+            - name: interface-became-up
+              event: update
+              path_regex: '^/interfaces/interface\[name=.*\]/state/oper-status$'
+              value: UP
+              steps:
+                - name: collect-interface-detail-over-ssh
+                  cmd: show interfaces brief
+
+            - name: route-disappeared
+              event: delete
+              path_regex: '/afts/(ipv4|ipv6)-unicast/.*entry'
+              steps:
+                - name: verify-routing-table-over-netconf
+                  netconf:
+                    operation: get
+                    payload: |
+                      <filter type="subtree">
+                        <network-instances xmlns="http://openconfig.net/yang/network-instance"/>
+                      </filter>
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl

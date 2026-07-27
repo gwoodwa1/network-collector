@@ -40,6 +40,7 @@ easier to read.
 | `nxos/24-cisco-nxos-netconf-interface.yaml` | NX-OS OpenConfig NETCONF interface configuration, state query, rollback |
 | `sros/25-nokia-sros-cli-port.yaml` | SR OS model-driven CLI port turn-up, commit, verification, rollback |
 | `sros/26-nokia-sros-netconf-port.yaml` | SR OS native YANG candidate edit, commit, verification, rollback |
+| `multivendor/27-gnmi-event-actions.yaml` | gNMI on-change update/delete triggers with immediate nested SSH and NETCONF actions |
 
 Run one example from the repository root:
 

@@ -4,6 +4,10 @@ package drivers
 type TLSConfig struct {
 	SkipVerify bool
 	Insecure   bool
+	CAFile     string
+	CertFile   string
+	KeyFile    string
+	ServerName string
 }
 
 // Option is a shared generic option type for driver configuration.

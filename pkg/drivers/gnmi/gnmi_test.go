@@ -83,3 +83,45 @@ func TestValidationErrors(t *testing.T) {
 		t.Fatal("unbounded stream accepted")
 	}
 }
+
+func TestNotificationEventsIncludeFullPathsAndDeletes(t *testing.T) {
+	prefix := &gnmipb.Path{Elem: []*gnmipb.PathElem{{Name: "interfaces"}, {Name: "interface", Key: map[string]string{"name": "Ethernet1"}}}}
+	notification := &gnmipb.Notification{
+		Timestamp: 42,
+		Prefix:    prefix,
+		Update: []*gnmipb.Update{{
+			Path: &gnmipb.Path{Elem: []*gnmipb.PathElem{{Name: "state"}, {Name: "oper-status"}}},
+			Val:  &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "UP"}},
+		}},
+		Delete: []*gnmipb.Path{{Elem: []*gnmipb.PathElem{{Name: "subinterfaces"}, {Name: "subinterface", Key: map[string]string{"index": "100"}}}}},
+	}
+	var events []Event
+	if err := handleNotification(notification, true, func(event Event) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2", len(events))
+	}
+	if events[0].Type != "update" || events[0].Path != "/interfaces/interface[name=Ethernet1]/state/oper-status" || events[0].Value != "UP" || !events[0].Initial {
+		t.Fatalf("unexpected update event: %+v", events[0])
+	}
+	if events[1].Type != "delete" || events[1].Path != "/interfaces/interface[name=Ethernet1]/subinterfaces/subinterface[index=100]" {
+		t.Fatalf("unexpected delete event: %+v", events[1])
+	}
+}
+
+func TestTLSOptionsKeepPlaintextAndSkipVerifySeparate(t *testing.T) {
+	client := &GNMIClient{}
+	WithInsecure(true)(client)
+	WithSkipVerify(false)(client)
+	WithTLSCredentials("ca.pem", "client.pem", "client-key.pem", "router.example.net")(client)
+	if !client.Insecure || client.SkipVerify {
+		t.Fatalf("unexpected security flags: %+v", client.TLSConfig)
+	}
+	if client.CAFile != "ca.pem" || client.CertFile != "client.pem" || client.KeyFile != "client-key.pem" || client.ServerName != "router.example.net" {
+		t.Fatalf("unexpected TLS credentials: %+v", client.TLSConfig)
+	}
+}

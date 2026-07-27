@@ -62,6 +62,10 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 		copied := *host.SSHSecurity
 		resolved.SSHSecurity = &copied
 	}
+	if resolved.GNMI == nil && host.GNMI != nil {
+		copied := *host.GNMI
+		resolved.GNMI = &copied
+	}
 	if strings.TrimSpace(resolved.CredentialProfile) == "" {
 		resolved.CredentialProfile = strings.TrimSpace(host.CredentialProfile)
 	}
@@ -102,7 +106,23 @@ func loadInventory(inventoryFile, configFile string) (*InventoryConfig, error) {
 	if err := yaml.Unmarshal(b, &inventory); err != nil {
 		return nil, err
 	}
+	inventory.baseDir = filepath.Dir(path)
+	for index := range inventory.Hosts {
+		resolveGNMICertificatePaths(inventory.Hosts[index].GNMI, inventory.baseDir)
+	}
 	return &inventory, nil
+}
+
+func resolveGNMICertificatePaths(config *GNMIConnectionConfig, baseDir string) {
+	if config == nil {
+		return
+	}
+	for _, value := range []*string{&config.CAFile, &config.CertFile, &config.KeyFile} {
+		path := strings.TrimSpace(*value)
+		if path != "" && !filepath.IsAbs(path) {
+			*value = filepath.Clean(filepath.Join(baseDir, path))
+		}
+	}
 }
 
 func loadOptionalInventory(inventoryFile, configFile string) (*InventoryConfig, error) {

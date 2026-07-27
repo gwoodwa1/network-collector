@@ -114,6 +114,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		factsDefaults:  config.Facts,
 		events:         events,
 		netconf:        netconfExecutor,
+		gnmi:           device.GNMI,
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt

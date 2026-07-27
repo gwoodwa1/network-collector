@@ -561,6 +561,13 @@ func stepsNeedSSH(steps []StepConfig, workflows map[string]WorkflowConfig, seen 
 		if step.SSHProbe != nil {
 			return true
 		}
+		if step.GNMISubscribe != nil {
+			for _, trigger := range step.GNMISubscribe.Triggers {
+				if stepsNeedSSH(trigger.Steps, workflows, seen) {
+					return true
+				}
+			}
+		}
 		if step.Repeat != nil && stepsNeedSSH(step.Repeat.Steps, workflows, seen) {
 			return true
 		}
@@ -1030,7 +1037,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				output, commandDisplay, err = executeLocalCommand(*step.Local, ctx.variables)
 			} else if step.GNMISubscribe != nil {
 				commandDisplay = strings.Join(step.GNMISubscribe.Paths, ",")
-				output, err = executeGNMISubscribe(ctx, *step.GNMISubscribe)
+				output, err = executeGNMISubscribe(ctx, client, *step.GNMISubscribe, depth)
 			} else if step.NETCONF != nil {
 				output, commandDisplay, err = executeNETCONFStep(ctx, *step.NETCONF)
 			} else {
@@ -1202,27 +1209,147 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 	return stopDeviceSteps
 }
 
-func executeGNMISubscribe(ctx *stepExecutionContext, config GNMISubscribeConfig) (string, error) {
+func executeGNMISubscribe(ctx *stepExecutionContext, sshClient **ssh.Client, config GNMISubscribeConfig, depth int) (string, error) {
 	port := config.Port
+	if port <= 0 && ctx.gnmi != nil {
+		port = ctx.gnmi.Port
+	}
 	if port <= 0 {
 		port = 57400
 	}
 	address := net.JoinHostPort(ctx.ip, strconv.Itoa(port))
 	options := []gnmidriver.Option{}
+	if ctx.gnmi != nil {
+		if ctx.gnmi.Insecure != nil && *ctx.gnmi.Insecure && (ctx.gnmi.CAFile != "" || ctx.gnmi.CertFile != "" || ctx.gnmi.KeyFile != "" || ctx.gnmi.ServerName != "") {
+			return "", fmt.Errorf("gNMI insecure plaintext mode cannot be combined with TLS certificate settings")
+		}
+		if ctx.gnmi.Insecure != nil {
+			options = append(options, gnmidriver.WithInsecure(*ctx.gnmi.Insecure))
+		}
+		if ctx.gnmi.SkipVerify != nil {
+			options = append(options, gnmidriver.WithSkipVerify(*ctx.gnmi.SkipVerify))
+		}
+		if ctx.gnmi.CAFile != "" || ctx.gnmi.CertFile != "" || ctx.gnmi.KeyFile != "" || ctx.gnmi.ServerName != "" {
+			if (ctx.gnmi.CertFile == "") != (ctx.gnmi.KeyFile == "") {
+				return "", fmt.Errorf("gNMI cert_file and key_file must be configured together")
+			}
+			options = append(options, gnmidriver.WithTLSCredentials(ctx.gnmi.CAFile, ctx.gnmi.CertFile, ctx.gnmi.KeyFile, ctx.gnmi.ServerName))
+		}
+	}
 	if config.SkipTLS {
 		options = append(options, gnmidriver.WithSkipTLS())
 	}
-	if config.TimeoutSeconds > 0 {
-		options = append(options, gnmidriver.WithRequestTimeout(time.Duration(config.TimeoutSeconds)*time.Second))
+	timeoutSeconds := config.TimeoutSeconds
+	if timeoutSeconds <= 0 && ctx.gnmi != nil {
+		timeoutSeconds = ctx.gnmi.TimeoutSeconds
+	}
+	if timeoutSeconds > 0 {
+		options = append(options, gnmidriver.WithRequestTimeout(time.Duration(timeoutSeconds)*time.Second))
 	}
 	client := &gnmidriver.GNMIClient{}
 	if err := client.Connect(address, ctx.username, ctx.password, options...); err != nil {
 		return "", err
 	}
 	defer client.Close()
-	return client.Subscribe(context.Background(), gnmidriver.Subscription{
+	subscription := gnmidriver.Subscription{
 		Paths: config.Paths, Mode: config.Mode, StreamMode: config.StreamMode,
 		SampleInterval: time.Duration(config.SampleIntervalSeconds) * time.Second,
 		Duration:       time.Duration(config.DurationSeconds) * time.Second, MaxUpdates: config.MaxUpdates,
-	})
+	}
+	handler, err := gnmiTriggerHandler(ctx, sshClient, config.Triggers, depth)
+	if err != nil {
+		return "", err
+	}
+	return client.SubscribeEvents(context.Background(), subscription, handler)
+}
+
+func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, triggers []GNMITriggerConfig, depth int) (gnmidriver.EventHandler, error) {
+	if len(triggers) == 0 {
+		return nil, nil
+	}
+	if depth >= maxWorkflowDepth {
+		return nil, fmt.Errorf("gNMI trigger nesting exceeds %d control levels", maxWorkflowDepth)
+	}
+	pathPatterns := make([]*regexp.Regexp, len(triggers))
+	valuePatterns := make([]*regexp.Regexp, len(triggers))
+	for index, trigger := range triggers {
+		if len(trigger.Steps) == 0 {
+			return nil, fmt.Errorf("gNMI trigger %q must contain at least one step", trigger.Name)
+		}
+		eventType := strings.ToLower(strings.TrimSpace(trigger.Event))
+		if eventType != "" && eventType != "update" && eventType != "delete" {
+			return nil, fmt.Errorf("gNMI trigger %q event must be update or delete", trigger.Name)
+		}
+		if strings.TrimSpace(trigger.Path) == "" && strings.TrimSpace(trigger.PathRegex) == "" {
+			return nil, fmt.Errorf("gNMI trigger %q must define path or path_regex", trigger.Name)
+		}
+		var err error
+		if pattern := strings.TrimSpace(trigger.PathRegex); pattern != "" {
+			pathPatterns[index], err = regexp.Compile(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("gNMI trigger %q has invalid path_regex: %w", trigger.Name, err)
+			}
+		}
+		if pattern := strings.TrimSpace(trigger.ValueRegex); pattern != "" {
+			valuePatterns[index], err = regexp.Compile(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("gNMI trigger %q has invalid value_regex: %w", trigger.Name, err)
+			}
+		}
+	}
+
+	fired := make([]bool, len(triggers))
+	return func(event gnmidriver.Event) error {
+		for index, trigger := range triggers {
+			if trigger.Once && fired[index] {
+				continue
+			}
+			if event.Initial && !trigger.IncludeInitial {
+				continue
+			}
+			eventType := strings.ToLower(strings.TrimSpace(trigger.Event))
+			if eventType == "" {
+				eventType = "update"
+			}
+			if event.Type != eventType {
+				continue
+			}
+			if exact := strings.TrimSpace(trigger.Path); exact != "" && event.Path != exact {
+				continue
+			}
+			if pathPatterns[index] != nil && !pathPatterns[index].MatchString(event.Path) {
+				continue
+			}
+			valueText := fmt.Sprint(event.Value)
+			if trigger.Value != "" && valueText != trigger.Value {
+				continue
+			}
+			if valuePatterns[index] != nil && !valuePatterns[index].MatchString(valueText) {
+				continue
+			}
+
+			fired[index] = true
+			eventJSON, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			name := strings.TrimSpace(trigger.Name)
+			if name == "" {
+				name = fmt.Sprintf("trigger-%d", index+1)
+			}
+			ctx.events.emit(lifecycleEvent{
+				Type: "gnmi.triggered", Hostname: ctx.hostname, IP: ctx.ip, Step: name,
+				Data: map[string]interface{}{"event": event.Type, "path": event.Path, "value": event.Value, "initial": event.Initial},
+			})
+			writeSessionf(ctx.sessionLog, "[gnmi:%s] event=%s path=%s value=%s initial=%t\n", name, event.Type, event.Path, valueText, event.Initial)
+			bindings := map[string]string{
+				"gnmi_event": string(eventJSON), "gnmi_event_type": event.Type,
+				"gnmi_event_path": event.Path, "gnmi_event_value": valueText,
+			}
+			scopedVariables(ctx.variables, bindings, func() bool {
+				return executeStepsAtDepth(ctx, sshClient, trigger.Steps, depth+1)
+			})
+		}
+		return nil
+	}, nil
 }
