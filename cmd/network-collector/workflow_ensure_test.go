@@ -642,6 +642,64 @@ func TestEOSStaticRouteAbsentPlanTargetsExactNextHop(t *testing.T) {
 	}
 }
 
+func TestIOSXEStaticRouteParsingAndMaskRendering(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "iosxe", "static-routes.txt")
+	customerRoute := parseIOSXEStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 || customerRoute.NextHops[0] != "192.0.2.10" || customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected IOS-XE VRF route: %+v", customerRoute)
+	}
+	cidrRoute := parseIOSXEStaticRoutes(fixture, "192.0.2.128/25", "")
+	if len(cidrRoute.NextHops) != 1 || cidrRoute.NextHops[0] != "198.51.100.1" {
+		t.Fatalf("IOS-XE CIDR route was not normalized: %+v", cidrRoute)
+	}
+	network, mask := iosXEPrefixParts("203.0.114.0/24")
+	if network != "203.0.114.0" || mask != "255.255.255.0" {
+		t.Fatalf("unexpected IOS-XE prefix rendering: network=%s mask=%s", network, mask)
+	}
+}
+
+func TestIOSXEStaticRouteEnsureCheckApplyAndVerify(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "iosxe", "static-routes.txt")
+	verifiedFixture := fixture + "ip route vrf CUSTOMER-A 203.0.114.0 255.255.255.0 192.0.2.10\n"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Building configuration...\n[OK]", verifiedFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxe"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != "show running-config | include ^ip route" ||
+		!strings.Contains(executor.commands[1], "ip route vrf CUSTOMER-A 203.0.114.0 255.255.255.0 192.0.2.10") ||
+		!strings.Contains(executor.commands[1], "write memory") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("IOS-XE route did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestIOSXEStaticRouteAbsentPlanIsExact(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "iosxe", "static-routes.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxe"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `no ip route vrf CUSTOMER-A 203.0.113.0 255.255.255.0 192.0.2.10`) ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("IOS-XE route removal plan was not exact: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

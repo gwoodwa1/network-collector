@@ -396,9 +396,15 @@ func sshStaticRouteAdapter(platform string) (sshStaticRoutePlatformAdapter, erro
 			parse:            parseEOSStaticRoutes,
 			commands:         eosStaticRouteCommands,
 		}, nil
+	case "cisco_iosxe":
+		return sshStaticRoutePlatformAdapter{
+			discoveryCommand: "show running-config | include ^ip route",
+			parse:            parseIOSXEStaticRoutes,
+			commands:         iosXEStaticRouteCommands,
+		}, nil
 	default:
 		return sshStaticRoutePlatformAdapter{}, fmt.Errorf(
-			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos",
+			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe",
 			platform,
 		)
 	}
@@ -517,6 +523,86 @@ func eosStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string 
 		route = "no " + route
 	}
 	return []string{"configure terminal", route, "end", "write memory"}
+}
+
+func parseIOSXEStaticRoutes(output, wantedPrefix, wantedVRF string) sshStaticRouteState {
+	state := sshStaticRouteState{Prefix: wantedPrefix, VRF: wantedVRF, NextHops: []string{}}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) < 4 || fields[0] != "ip" || fields[1] != "route" {
+			continue
+		}
+		routeVRF := ""
+		prefixIndex := 2
+		if fields[2] == "vrf" {
+			if len(fields) < 6 {
+				continue
+			}
+			routeVRF = fields[3]
+			prefixIndex = 4
+		}
+		if routeVRF != wantedVRF {
+			continue
+		}
+		prefix, nextHopIndex, ok := parseIOSXERoutePrefix(fields, prefixIndex)
+		if !ok || prefix != wantedPrefix || nextHopIndex >= len(fields) {
+			continue
+		}
+		nextHop := fields[nextHopIndex]
+		if net.ParseIP(nextHop) != nil && !containsString(state.NextHops, nextHop) {
+			state.NextHops = append(state.NextHops, nextHop)
+		}
+	}
+	sort.Strings(state.NextHops)
+	return state
+}
+
+func parseIOSXERoutePrefix(fields []string, prefixIndex int) (string, int, bool) {
+	if prefixIndex >= len(fields) {
+		return "", 0, false
+	}
+	if strings.Contains(fields[prefixIndex], "/") {
+		ip, network, err := net.ParseCIDR(fields[prefixIndex])
+		if err != nil || ip.To4() == nil {
+			return "", 0, false
+		}
+		return network.String(), prefixIndex + 1, true
+	}
+	if prefixIndex+1 >= len(fields) {
+		return "", 0, false
+	}
+	ip := net.ParseIP(fields[prefixIndex]).To4()
+	maskIP := net.ParseIP(fields[prefixIndex+1]).To4()
+	if ip == nil || maskIP == nil {
+		return "", 0, false
+	}
+	mask := net.IPMask(maskIP)
+	ones, bits := mask.Size()
+	if bits != 32 || ones < 0 {
+		return "", 0, false
+	}
+	return (&net.IPNet{IP: ip.Mask(mask), Mask: mask}).String(), prefixIndex + 2, true
+}
+
+func iosXEStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string {
+	network, mask := iosXEPrefixParts(prefix)
+	route := "ip route "
+	if vrf != "" {
+		route += "vrf " + vrf + " "
+	}
+	route += network + " " + mask + " " + nextHop
+	if !present {
+		route = "no " + route
+	}
+	return []string{"configure terminal", route, "end", "write memory"}
+}
+
+func iosXEPrefixParts(prefix string) (string, string) {
+	_, network, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return prefix, ""
+	}
+	return network.IP.String(), net.IP(network.Mask).String()
 }
 
 func routeVRFLabel(vrf string) string {

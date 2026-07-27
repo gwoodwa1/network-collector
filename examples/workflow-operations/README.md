@@ -54,6 +54,7 @@ easier to read.
 | `arista/38-arista-eos-declarative-interface.yaml` | Arista EOS SSH interface desired state with admin-down precondition, rollback-on-failure, verification, and `--check` |
 | `arista/39-arista-eos-declarative-static-route.yaml` | Arista EOS exact VRF/prefix/next-hop desired state with ECMP preservation, rollback-on-failure, verification, and `--check` |
 | `iosxe/40-cisco-iosxe-declarative-interface.yaml` | Cisco IOS-XE SSH interface desired state with admin-down precondition, rollback-on-failure, verification, and `--check` |
+| `iosxe/41-cisco-iosxe-declarative-static-route.yaml` | Cisco IOS-XE exact VRF/prefix/next-hop desired state with CIDR/netmask normalization, ECMP preservation, and `--check` |
 
 Run one example from the repository root:
 
