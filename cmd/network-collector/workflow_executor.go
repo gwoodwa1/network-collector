@@ -348,6 +348,13 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 		if err != nil {
 			return validationActionOutcome{}, err
 		}
+		limit, err := deviceOutputLimit(action.MaxOutputBytes)
+		if err != nil {
+			return validationActionOutcome{}, err
+		}
+		if err := enforceDeviceOutputLimit(output, limit); err != nil {
+			return validationActionOutcome{}, err
+		}
 		writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] action command=%q", stepName, cmd), output)
 		if err := saveStepArtifact(ctx, StepConfig{Output: action.Output}, stepName+"-action", 1, "raw", output); err != nil {
 			return validationActionOutcome{}, err

@@ -27,11 +27,12 @@ type SSHProbeConfig struct {
 }
 
 type ValidationActionConfig struct {
-	Action  string            `mapstructure:"action" yaml:"action"`
-	Command string            `mapstructure:"cmd" yaml:"cmd"`
-	Message string            `mapstructure:"message" yaml:"message"`
-	Steps   []StepConfig      `mapstructure:"steps" yaml:"steps"`
-	Output  *StepOutputConfig `mapstructure:"output" yaml:"output"`
+	Action         string            `mapstructure:"action" yaml:"action"`
+	Command        string            `mapstructure:"cmd" yaml:"cmd"`
+	Message        string            `mapstructure:"message" yaml:"message"`
+	Steps          []StepConfig      `mapstructure:"steps" yaml:"steps"`
+	Output         *StepOutputConfig `mapstructure:"output" yaml:"output"`
+	MaxOutputBytes int               `mapstructure:"max_output_bytes" yaml:"max_output_bytes"`
 }
 
 type StepConfig struct {
