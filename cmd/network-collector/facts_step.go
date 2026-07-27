@@ -21,6 +21,7 @@ type lazyNETCONFExecutor struct {
 	timeout        time.Duration
 	hostKeyPolicy  string
 	knownHostsFile string
+	connectClient  func(string, string, string, netconfConnectionPolicy) (*netconf.ScrapligoNETCONF, error)
 	err            error
 }
 
@@ -41,15 +42,33 @@ func newLazyNETCONFExecutor(host, username, password string, policy netconfConne
 	}
 }
 
+func connectScrapligoNETCONF(host, username, password string, policy netconfConnectionPolicy) (*netconf.ScrapligoNETCONF, error) {
+	client := &netconf.ScrapligoNETCONF{}
+	err := client.Connect(
+		host,
+		username,
+		password,
+		netconf.WithNetconfTimeouts(policy.timeout, policy.timeout),
+		netconf.WithHostKeyPolicy(policy.hostKeyPolicy, policy.knownHostsFile),
+	)
+	return client, err
+}
+
 func (executor *lazyNETCONFExecutor) connect() error {
 	executor.once.Do(func() {
-		executor.client = &netconf.ScrapligoNETCONF{}
-		executor.err = executor.client.Connect(
+		connectClient := executor.connectClient
+		if connectClient == nil {
+			connectClient = connectScrapligoNETCONF
+		}
+		executor.client, executor.err = connectClient(
 			executor.host,
 			executor.username,
 			executor.password,
-			netconf.WithNetconfTimeouts(executor.timeout, executor.timeout),
-			netconf.WithHostKeyPolicy(executor.hostKeyPolicy, executor.knownHostsFile),
+			netconfConnectionPolicy{
+				timeout:        executor.timeout,
+				hostKeyPolicy:  executor.hostKeyPolicy,
+				knownHostsFile: executor.knownHostsFile,
+			},
 		)
 	})
 	return executor.err
