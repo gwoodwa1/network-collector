@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 type MonitorConfig struct {
@@ -116,7 +114,7 @@ func GenerateMonitorReport(config MonitorConfig, series []MonitorSeries, events 
 	if err := monitorTemplate.Execute(&rendered, view); err != nil {
 		return "", err
 	}
-	if err := secureartifact.EnsureDir(filepath.Dir(output)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
 		return "", err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(output), ".monitor-report-*")
