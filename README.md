@@ -480,8 +480,8 @@ device is already compliant. With `--check`, the discovery still runs but the
 edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
-IOS XR supports state-aware SSH `ensure` adapters for interfaces and exact
-static routes. Arista EOS supports the same interface resource schema:
+IOS XR and Arista EOS support state-aware SSH `ensure` adapters for interfaces
+and exact static routes:
 
 ```yaml
 ssh:
@@ -517,10 +517,13 @@ semantics; EOS exits configuration mode and saves with `write memory`. See
 [`38-arista-eos-declarative-interface.yaml`](examples/workflow-operations/arista/38-arista-eos-declarative-interface.yaml)
 for the EOS form.
 
-The static-route adapter discovers `router static` configuration and treats
-`vrf`, `prefix`, and `next_hop` as the resource identity. `state` is `present`
-or `absent`; removing one tuple preserves other next-hops for intentional
-ECMP. IPv4 is supported in this first adapter release.
+The static-route adapters discover native configuration (`router static` on
+IOS XR and global `ip route` statements on EOS) and treat `vrf`, `prefix`, and
+`next_hop` as the resource identity. `state` is `present` or `absent`;
+removing one tuple preserves other next-hops for intentional ECMP. IPv4 is
+supported in this first adapter release. The EOS commands follow Arista's
+documented `ip route [vrf NAME] PREFIX NEXT_HOP` form; see
+[`39-arista-eos-declarative-static-route.yaml`](examples/workflow-operations/arista/39-arista-eos-declarative-static-route.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,

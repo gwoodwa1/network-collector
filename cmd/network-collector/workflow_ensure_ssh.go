@@ -43,6 +43,12 @@ type sshInterfacePlatformAdapter struct {
 	commands func(string, bool, *string) []string
 }
 
+type sshStaticRoutePlatformAdapter struct {
+	discoveryCommand string
+	parse            func(string, string, string) sshStaticRouteState
+	commands         func(string, string, string, bool) []string
+}
+
 func executeSSHEnsureStep(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, config EnsureConfig) (string, string, error) {
 	if executor == nil {
 		return "", "", fmt.Errorf("SSH executor is not configured")
@@ -265,8 +271,9 @@ func eosInterfaceCommands(name string, enabled bool, description *string) []stri
 }
 
 func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {
-	if platform != "cisco_iosxr" {
-		return "", "", fmt.Errorf("SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr", platform)
+	adapter, err := sshStaticRouteAdapter(platform)
+	if err != nil {
+		return "", "", err
 	}
 	prefix := strings.TrimSpace(config.Prefix)
 	if prefix == "" {
@@ -304,17 +311,17 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 		return "", "", err
 	}
 
-	discoveryCommand := "show running-config router static"
+	discoveryCommand := adapter.discoveryCommand
 	output, err := executor.Execute(discoveryCommand)
 	if err != nil {
 		return output, "ensure static route " + prefix, fmt.Errorf("discover static route %q over SSH: %w", prefix, err)
 	}
-	current := parseIOSXRStaticRoutes(output, prefix, vrf)
+	current := adapter.parse(output, prefix, vrf)
 	exactExists := containsString(current.NextHops, nextHop)
 	changed := exactExists != present
 	desired := map[string]interface{}{"prefix": prefix, "vrf": vrf, "next_hop": nextHop, "present": present}
-	apply := iosXRStaticRouteCommands(prefix, nextHop, vrf, present)
-	rollback := iosXRStaticRouteCommands(prefix, nextHop, vrf, !present)
+	apply := adapter.commands(prefix, nextHop, vrf, present)
+	rollback := adapter.commands(prefix, nextHop, vrf, !present)
 	if !changed {
 		apply, rollback = nil, nil
 	}
@@ -341,7 +348,7 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 		cause := fmt.Errorf("verify static route %q over SSH: %w", prefix, err)
 		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
-	verified := parseIOSXRStaticRoutes(verifyOutput, prefix, vrf)
+	verified := adapter.parse(verifyOutput, prefix, vrf)
 	if containsString(verified.NextHops, nextHop) != present {
 		cause := fmt.Errorf("static route %q via %s did not reach desired SSH state", prefix, nextHop)
 		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
@@ -349,6 +356,28 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 	plan.Action = "changed"
 	plan.Verified = verified
 	return marshalSSHEnsurePlan(plan), display, nil
+}
+
+func sshStaticRouteAdapter(platform string) (sshStaticRoutePlatformAdapter, error) {
+	switch platform {
+	case "cisco_iosxr":
+		return sshStaticRoutePlatformAdapter{
+			discoveryCommand: "show running-config router static",
+			parse:            parseIOSXRStaticRoutes,
+			commands:         iosXRStaticRouteCommands,
+		}, nil
+	case "arista_eos":
+		return sshStaticRoutePlatformAdapter{
+			discoveryCommand: "show running-config | include ^ip route",
+			parse:            parseEOSStaticRoutes,
+			commands:         eosStaticRouteCommands,
+		}, nil
+	default:
+		return sshStaticRoutePlatformAdapter{}, fmt.Errorf(
+			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos",
+			platform,
+		)
+	}
 }
 
 func desiredRoutePresent(state string) (bool, error) {
@@ -424,6 +453,46 @@ func iosXRStaticRouteCommands(prefix, nextHop, vrf string, present bool) []strin
 		}
 	}
 	return append(commands, "commit", "end")
+}
+
+func parseEOSStaticRoutes(output, wantedPrefix, wantedVRF string) sshStaticRouteState {
+	state := sshStaticRouteState{Prefix: wantedPrefix, VRF: wantedVRF, NextHops: []string{}}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) < 4 || fields[0] != "ip" || fields[1] != "route" {
+			continue
+		}
+		routeVRF := ""
+		prefixIndex := 2
+		if fields[2] == "vrf" {
+			if len(fields) < 6 {
+				continue
+			}
+			routeVRF = fields[3]
+			prefixIndex = 4
+		}
+		if routeVRF != wantedVRF || fields[prefixIndex] != wantedPrefix {
+			continue
+		}
+		nextHop := fields[prefixIndex+1]
+		if net.ParseIP(nextHop) != nil && !containsString(state.NextHops, nextHop) {
+			state.NextHops = append(state.NextHops, nextHop)
+		}
+	}
+	sort.Strings(state.NextHops)
+	return state
+}
+
+func eosStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string {
+	route := "ip route "
+	if vrf != "" {
+		route += "vrf " + vrf + " "
+	}
+	route += prefix + " " + nextHop
+	if !present {
+		route = "no " + route
+	}
+	return []string{"configure terminal", route, "end", "write memory"}
 }
 
 func routeVRFLabel(vrf string) string {

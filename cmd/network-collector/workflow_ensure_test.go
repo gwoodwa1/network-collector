@@ -551,6 +551,65 @@ func TestSSHEnsureStaticRouteAppliesAndVerifies(t *testing.T) {
 	}
 }
 
+func TestParseEOSStaticRoutesSeparatesVRFsAndPreservesECMP(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "eos", "static-routes.txt")
+	defaultRoute := parseEOSStaticRoutes(fixture, "198.51.100.0/24", "")
+	if len(defaultRoute.NextHops) != 1 || defaultRoute.NextHops[0] != "192.0.2.1" {
+		t.Fatalf("unexpected EOS default route: %+v", defaultRoute)
+	}
+	customerRoute := parseEOSStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 || customerRoute.NextHops[0] != "192.0.2.10" || customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected EOS customer route: %+v", customerRoute)
+	}
+	customerBRoute := parseEOSStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-B")
+	if len(customerBRoute.NextHops) != 1 || customerBRoute.NextHops[0] != "192.0.2.20" {
+		t.Fatalf("EOS route leaked across VRFs: %+v", customerBRoute)
+	}
+}
+
+func TestEOSStaticRouteEnsureCheckApplyAndVerify(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "eos", "static-routes.txt")
+	verifiedFixture := fixture + "ip route vrf CUSTOMER-A 203.0.114.0/24 192.0.2.10\n"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Copy completed successfully", verifiedFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != "show running-config | include ^ip route" ||
+		!strings.Contains(executor.commands[1], "ip route vrf CUSTOMER-A 203.0.114.0/24 192.0.2.10") ||
+		!strings.Contains(executor.commands[1], "write memory") ||
+		strings.Contains(executor.commands[1], "commit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("EOS route did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestEOSStaticRouteAbsentPlanTargetsExactNextHop(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "eos", "static-routes.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `no ip route vrf CUSTOMER-A 203.0.113.0/24 192.0.2.10`) ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("EOS route removal plan was not exact: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
@@ -559,12 +618,6 @@ func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
 	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos") {
 		t.Fatalf("unsupported platform was accepted: %v", err)
-	}
-	ctx.deviceType = "arista_eos"
-	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
-		Resource: "static_route", Prefix: "192.0.2.0/24", NextHop: "198.51.100.1", State: "present", Transport: "ssh",
-	}); err == nil || !strings.Contains(err.Error(), "static_route") {
-		t.Fatalf("unsupported EOS route adapter was accepted: %v", err)
 	}
 	ctx.deviceType = "cisco_iosxr"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{

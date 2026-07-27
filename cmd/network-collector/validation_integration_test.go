@@ -1845,8 +1845,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 38 {
-		t.Fatalf("expected thirty-eight vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 39 {
+		t.Fatalf("expected thirty-nine vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1865,8 +1865,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 38 {
-		t.Fatalf("expected thirty-eight loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 39 {
+		t.Fatalf("expected thirty-nine loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1937,6 +1937,13 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		eosDesiredState[1].Ensure.Transport != "ssh" || eosDesiredState[1].Ensure.RequireState != "disabled" ||
 		!eosDesiredState[1].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative EOS interface example is incomplete: %+v", eosDesiredState)
+	}
+	eosRouteState := loaded["39-arista-eos-declarative-static-route.yaml"].SSH[0].Steps
+	if len(eosRouteState) != 2 || eosRouteState[0].Approval == nil ||
+		eosRouteState[1].Ensure == nil || eosRouteState[1].Ensure.Resource != "static_route" ||
+		eosRouteState[1].Ensure.Transport != "ssh" || eosRouteState[1].Ensure.Prefix == "" ||
+		eosRouteState[1].Ensure.NextHop == "" || !eosRouteState[1].Ensure.RollbackOnFailure {
+		t.Fatalf("declarative EOS static-route example is incomplete: %+v", eosRouteState)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || !hardGate(recovery.Workflows["inspect-interface"].Steps[0]) || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 || !hardGate(recovery.SSH[0].Steps[2].Block.Steps[2]) {
