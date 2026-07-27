@@ -1904,6 +1904,38 @@ func TestLoadConfigRejectsDuplicateImport(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsAggregateImportFileCount(t *testing.T) {
+	dir := t.TempDir()
+	partsDir := filepath.Join(dir, "parts")
+	if err := os.Mkdir(partsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxConfigImportFiles; index++ {
+		path := filepath.Join(partsDir, fmt.Sprintf("%03d.yaml", index))
+		if err := os.WriteFile(path, []byte("vars:\n  value: test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(root, []byte("imports: [parts/*.yaml]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "file limit") {
+		t.Fatalf("expected aggregate import file-limit error, got %v", err)
+	}
+}
+
+func TestConfigImportBudgetRejectsAggregateBytesAndNodes(t *testing.T) {
+	byteBudget := &configImportBudget{bytes: maxConfigImportBytes}
+	if err := byteBudget.consumeFile("extra.yaml", []byte("x")); err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("expected byte-limit error, got %v", err)
+	}
+	nodeBudget := &configImportBudget{nodes: maxConfigImportNodes}
+	if err := nodeBudget.consumeNodes("extra.yaml", 1); err == nil || !strings.Contains(err.Error(), "node YAML limit") {
+		t.Fatalf("expected node-limit error, got %v", err)
+	}
+}
+
 func TestModularExampleLoads(t *testing.T) {
 	configPath := filepath.Join("..", "..", "examples", "modular", "config.yaml")
 	config, _, err := loadConfig(configPath)

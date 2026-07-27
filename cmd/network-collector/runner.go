@@ -103,11 +103,12 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	if device.OperationTimeout > 0 {
 		netconfTimeout = time.Duration(device.OperationTimeout) * time.Second
 	}
-	netconfExecutor := &lazyNETCONFExecutor{
-		host: ip, username: username, password: password, timeout: netconfTimeout,
+	netconfPolicy := netconfConnectionPolicy{
+		timeout: netconfTimeout,
 		hostKeyPolicy:  effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).HostKeyPolicy,
 		knownHostsFile: effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).KnownHostsFile,
 	}
+	netconfExecutor := newLazyNETCONFExecutor(ip, username, password, netconfPolicy)
 	ctx := stepExecutionContext{
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, consoleOutput: config.Output.ConsoleOutput,
@@ -120,6 +121,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		factsDefaults:    config.Facts,
 		events:           events,
 		netconf:          netconfExecutor,
+		netconfPolicy:    netconfPolicy,
 		gnmi:             device.GNMI,
 		checkMode:        config.checkMode,
 		reportEnabled:    config.Report.Enabled,

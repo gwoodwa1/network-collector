@@ -28,17 +28,39 @@ func ReadFile(path string) ([]byte, error) {
 }
 
 func Unmarshal(content []byte, target interface{}) error {
+	_, err := UnmarshalWithNodeCount(content, target)
+	return err
+}
+
+// UnmarshalWithNodeCount decodes YAML and returns the number of syntax-tree
+// nodes consumed so callers can enforce an aggregate multi-file budget.
+func UnmarshalWithNodeCount(content []byte, target interface{}) (int, error) {
 	if len(content) > MaxFileBytes {
-		return fmt.Errorf("YAML input exceeds the %d-byte limit", MaxFileBytes)
+		return 0, fmt.Errorf("YAML input exceeds the %d-byte limit", MaxFileBytes)
 	}
 	var document yaml.Node
 	if err := yaml.Unmarshal(content, &document); err != nil {
-		return err
+		return 0, err
 	}
 	if err := rejectAliases(&document); err != nil {
-		return err
+		return 0, err
 	}
-	return document.Decode(target)
+	nodes := countNodes(&document)
+	if err := document.Decode(target); err != nil {
+		return 0, err
+	}
+	return nodes, nil
+}
+
+func countNodes(node *yaml.Node) int {
+	if node == nil {
+		return 0
+	}
+	count := 1
+	for _, child := range node.Content {
+		count += countNodes(child)
+	}
+	return count
 }
 
 func rejectAliases(node *yaml.Node) error {

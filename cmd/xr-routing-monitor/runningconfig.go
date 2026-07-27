@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 	"github.com/pmezard/go-difflib/difflib"
 )
 
@@ -32,7 +33,7 @@ func captureRunningConfig(session *deviceSession, label, outputDir, runLabel str
 	base := snapshotFilenameBase(runLabel, session.hostname, label, capturedAt)
 	path := filepath.Join(outputDir, base+"-running-config.txt")
 	header := fmt.Sprintf("# %s running-config for %s captured %s\n\n", label, session.hostname, capturedAt.Format(time.RFC3339))
-	if err := os.WriteFile(path, []byte(header+output), 0o644); err != nil {
+	if err := secureartifact.WriteFile(path, []byte(header+output)); err != nil {
 		return fmt.Errorf("write running-config: %w", err)
 	}
 

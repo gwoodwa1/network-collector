@@ -128,7 +128,39 @@ func init() {
 	}
 }
 
-const maxConfigImportDepth = 20
+const (
+	maxConfigImportDepth = 20
+	maxConfigImportFiles = 128
+	maxConfigImportBytes = 32 * 1024 * 1024
+	maxConfigImportNodes = 500_000
+)
+
+type configImportBudget struct {
+	files int
+	bytes int
+	nodes int
+}
+
+func (budget *configImportBudget) consumeFile(path string, content []byte) error {
+	budget.files++
+	budget.bytes += len(content)
+	switch {
+	case budget.files > maxConfigImportFiles:
+		return fmt.Errorf("config import session exceeds the %d-file limit at %q", maxConfigImportFiles, path)
+	case budget.bytes > maxConfigImportBytes:
+		return fmt.Errorf("config import session exceeds the %d-byte limit at %q", maxConfigImportBytes, path)
+	default:
+		return nil
+	}
+}
+
+func (budget *configImportBudget) consumeNodes(path string, nodes int) error {
+	budget.nodes += nodes
+	if budget.nodes > maxConfigImportNodes {
+		return fmt.Errorf("config import session exceeds the %d-node YAML limit at %q", maxConfigImportNodes, path)
+	}
+	return nil
+}
 
 func mergeConfigMaps(destination, source map[string]interface{}) map[string]interface{} {
 	if destination == nil {
@@ -183,14 +215,21 @@ func configImports(value interface{}) ([]string, error) {
 	}
 }
 
-func loadVariableFile(path string) (map[string]interface{}, error) {
+func loadVariableFile(path string, budget *configImportBudget) (map[string]interface{}, error) {
 	content, err := safeyaml.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read variable file %q: %w", path, err)
 	}
+	if err := budget.consumeFile(path, content); err != nil {
+		return nil, err
+	}
 	values := map[string]interface{}{}
-	if err := safeyaml.Unmarshal(content, &values); err != nil {
+	nodes, err := safeyaml.UnmarshalWithNodeCount(content, &values)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse variable file %q: %w", path, err)
+	}
+	if err := budget.consumeNodes(path, nodes); err != nil {
+		return nil, err
 	}
 	if wrapped, ok := values["vars"].(map[string]interface{}); ok {
 		if len(values) != 1 {
@@ -201,7 +240,7 @@ func loadVariableFile(path string) (map[string]interface{}, error) {
 	return values, nil
 }
 
-func mergeConfigVariables(current map[string]interface{}, configPath string) error {
+func mergeConfigVariables(current map[string]interface{}, configPath string, budget *configImportBudget) error {
 	files, err := configImports(current["vars_files"])
 	if err != nil {
 		return fmt.Errorf("vars_files: %w", err)
@@ -213,7 +252,7 @@ func mergeConfigVariables(current map[string]interface{}, configPath string) err
 			return fmt.Errorf("vars_files: %w", err)
 		}
 		for _, path := range paths {
-			values, err := loadVariableFile(path)
+			values, err := loadVariableFile(path, budget)
 			if err != nil {
 				return err
 			}
@@ -326,7 +365,7 @@ func expandConfigImport(importingFile, configuredPath string) ([]string, error) 
 	return []string{path}, nil
 }
 
-func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[string]interface{}, error) {
+func loadConfigMap(path string, depth int, loaded, active map[string]bool, budget *configImportBudget) (map[string]interface{}, error) {
 	if depth > maxConfigImportDepth {
 		return nil, fmt.Errorf("config imports exceed maximum depth of %d", maxConfigImportDepth)
 	}
@@ -346,11 +385,18 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config %q: %w", absolutePath, err)
 	}
+	if err := budget.consumeFile(absolutePath, content); err != nil {
+		return nil, err
+	}
 	current := map[string]interface{}{}
-	if err := safeyaml.Unmarshal(content, &current); err != nil {
+	nodes, err := safeyaml.UnmarshalWithNodeCount(content, &current)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse config %q: %w", absolutePath, err)
 	}
-	if err := mergeConfigVariables(current, absolutePath); err != nil {
+	if err := budget.consumeNodes(absolutePath, nodes); err != nil {
+		return nil, err
+	}
+	if err := mergeConfigVariables(current, absolutePath, budget); err != nil {
 		return nil, fmt.Errorf("config %q: %w", absolutePath, err)
 	}
 	imports, err := configImports(current["imports"])
@@ -367,7 +413,7 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[
 			return nil, fmt.Errorf("config %q: %w", absolutePath, err)
 		}
 		for _, importPath := range paths {
-			imported, err := loadConfigMap(importPath, depth+1, loaded, active)
+			imported, err := loadConfigMap(importPath, depth+1, loaded, active, budget)
 			if err != nil {
 				return nil, err
 			}
@@ -381,7 +427,7 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[
 }
 
 func loadConfig(configFile string) (Config, bool, error) {
-	configMap, err := loadConfigMap(configFile, 0, map[string]bool{}, map[string]bool{})
+	configMap, err := loadConfigMap(configFile, 0, map[string]bool{}, map[string]bool{}, &configImportBudget{})
 	if err != nil {
 		return Config{}, false, err
 	}

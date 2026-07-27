@@ -476,6 +476,7 @@ type stepExecutionContext struct {
 	events           *eventDispatcher
 	reauthenticate   func() (string, string, error)
 	netconf          netconfStepExecutor
+	netconfPolicy    netconfConnectionPolicy
 	sshCommand       sshEnsureCommandExecutor
 	sshEnsure        sshEnsureCommandExecutor
 	gnmi             *GNMIConnectionConfig

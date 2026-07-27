@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 // collectionSpec maps each data point to the IOS-XR command and parser
@@ -105,7 +106,7 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 	}()
 
 	outputPath := filepath.Join(outputDir, sanitizeFilename(session.hostname)+".jsonl")
-	file, err := os.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := secureartifact.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		slog.Error("failed to open output file", "hostname", session.hostname, "path", outputPath, "error", err)
 		return

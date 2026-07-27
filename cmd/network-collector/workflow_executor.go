@@ -719,9 +719,7 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 			branchCtx.sessionLog = &log
 			branchCtx.artifactSeq = 0
 			branchCtx.artifactPrefix = fmt.Sprintf("parallel-%02d", index+1)
-			branchNETCONF := &lazyNETCONFExecutor{
-				host: ctx.ip, username: ctx.username, password: ctx.password, timeout: 30 * time.Second,
-			}
+			branchNETCONF := newLazyNETCONFExecutor(ctx.ip, ctx.username, ctx.password, ctx.netconfPolicy)
 			branchCtx.netconf = branchNETCONF
 			var client *ssh.Client
 			needsSSH := ctx.sshCommand == nil && stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{})

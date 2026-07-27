@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 // snapshotResult is the structured counterpart to the raw .txt snapshot:
@@ -103,7 +104,7 @@ func captureSnapshot(session *deviceSession, label, outputDir, runLabel string, 
 	textPath := filepath.Join(outputDir, base+".txt")
 	header := fmt.Sprintf("# snapshot %s for %s captured %s\n\n", label, session.hostname, result.Timestamp)
 	textContent := header + strings.Join(rawSections, "\n")
-	if err := os.WriteFile(textPath, []byte(textContent), 0o644); err != nil {
+	if err := secureartifact.WriteFile(textPath, []byte(textContent)); err != nil {
 		return fmt.Errorf("write raw snapshot: %w", err)
 	}
 
@@ -112,7 +113,7 @@ func captureSnapshot(session *deviceSession, label, outputDir, runLabel string, 
 		return fmt.Errorf("encode structured snapshot: %w", err)
 	}
 	jsonPath := filepath.Join(outputDir, base+".json")
-	if err := os.WriteFile(jsonPath, encoded, 0o644); err != nil {
+	if err := secureartifact.WriteFile(jsonPath, encoded); err != nil {
 		return fmt.Errorf("write structured snapshot: %w", err)
 	}
 

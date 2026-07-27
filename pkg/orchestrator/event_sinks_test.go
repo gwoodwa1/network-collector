@@ -65,6 +65,26 @@ func TestWebhookSinkRequiresHTTPSAndAllowlistedPublicDestination(t *testing.T) {
 	}
 }
 
+func TestWebhookSinkDoesNotInheritEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:8443")
+	t.Setenv("HTTP_PROXY", "http://proxy.example.test:8080")
+
+	sink, err := NewWebhookSinkWithPolicy(
+		"https://events.example.test/hook", nil, "", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"events.example.test"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := sink.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", sink.client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("hardened webhook transport inherited proxy configuration")
+	}
+}
+
 func TestSecureWebhookDialerPinsAndVerifiesConnectedPeer(t *testing.T) {
 	lookup := func(context.Context, string) ([]net.IPAddr, error) {
 		return []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}, nil

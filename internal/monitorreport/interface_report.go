@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 type tickLine struct {
@@ -90,7 +92,7 @@ func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) 
 	}
 
 	path := filepath.Join(outputDir, "interface-traffic.html")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	if err != nil {
 		return "", fmt.Errorf("open report: %w", err)
 	}

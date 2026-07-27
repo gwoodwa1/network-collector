@@ -132,7 +132,6 @@ func NewWebhookSinkWithPolicy(rawURL string, headers map[string]string, hmacSecr
 		timeout = 5 * time.Second
 	}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},

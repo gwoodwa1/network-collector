@@ -23,6 +23,7 @@ import (
 
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
 	"github.com/gwoodwa1/network-collector/internal/reporting"
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
@@ -137,7 +138,7 @@ func main() {
 		changeDirName = fmt.Sprintf("%s-%d", startedAt.Format("20060102-150405"), os.Getpid())
 	}
 	outputDir = filepath.Join(outputDir, changeDirName)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := secureartifact.EnsureDir(outputDir); err != nil {
 		slog.Error("failed to create output directory", "output_dir", outputDir, "error", err)
 		os.Exit(1)
 	}
@@ -153,7 +154,7 @@ func main() {
 	}
 	sessionLogNameParts = append(sessionLogNameParts, startedAt.Format("20060102-150405"), "session.log")
 	sessionLogPath := filepath.Join(outputDir, strings.Join(sessionLogNameParts, "-"))
-	sessionLogFile, err := os.OpenFile(sessionLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	sessionLogFile, err := secureartifact.OpenFile(sessionLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		slog.Error("failed to open session log", "path", sessionLogPath, "error", err)
 		os.Exit(1)

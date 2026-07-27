@@ -24,3 +24,14 @@ func TestReadFileRejectsOversizedYAML(t *testing.T) {
 		t.Fatalf("oversized YAML was not rejected: %v", err)
 	}
 }
+
+func TestUnmarshalReportsNodeCount(t *testing.T) {
+	var target map[string]interface{}
+	nodes, err := UnmarshalWithNodeCount([]byte("items:\n  - one\n  - two\n"), &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes < 5 {
+		t.Fatalf("node count = %d, want at least 5", nodes)
+	}
+}
