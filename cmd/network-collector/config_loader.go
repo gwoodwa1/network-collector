@@ -412,6 +412,12 @@ func rejectRemovedLocalExecution(config Config) error {
 	if config.Credentials.RemovedCommand != nil || provider == "command" || provider == "exec" {
 		return fmt.Errorf("credentials.command is unsupported: workbook-controlled process execution has been removed")
 	}
+	if config.Credentials.Hashicorp.RemovedBinary != nil {
+		return fmt.Errorf("credentials.hashicorp.binary is unsupported: executable selection is fixed to the approved vault CLI")
+	}
+	if config.Credentials.OnePassword.RemovedBinary != nil {
+		return fmt.Errorf("credentials.onepassword.binary is unsupported: executable selection is fixed to the approved op CLI")
+	}
 	if config.RemovedLocalSteps != nil {
 		return fmt.Errorf("local_steps is unsupported: arbitrary local execution has been removed; use a Go-native processor")
 	}
