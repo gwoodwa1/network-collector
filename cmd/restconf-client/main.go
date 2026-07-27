@@ -71,7 +71,7 @@ func main() {
 
 		opts := []restconf.Option{}
 		if device.SkipTLS {
-			opts = append(opts, restconf.WithSkipTLS())
+			opts = append(opts, restconf.WithSkipTLSVerification())
 		}
 		if device.Timeout > 0 {
 			opts = append(opts, restconf.WithRequestTimeout(time.Duration(device.Timeout)*time.Second))

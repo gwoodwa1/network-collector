@@ -26,12 +26,22 @@ type AristaHTTP struct {
 	drivers.TLSConfig
 }
 
-func WithSkipTLS() Option {
+const (
+	defaultRequestTimeout = 30 * time.Second
+	maxResponseBytes      = 10 << 20
+	maxErrorPreviewBytes  = 4 << 10
+)
+
+func WithSkipTLSVerification() Option {
 	return func(a *AristaHTTP) {
 		if a != nil {
 			a.TLSConfig.SkipVerify = true
 		}
 	}
+}
+
+func WithSkipTLS() Option {
+	return WithSkipTLSVerification()
 }
 
 func WithRequestTimeout(timeout time.Duration) Option {
@@ -65,9 +75,15 @@ func (a *AristaHTTP) Connect(ip string, username string, password string, opts .
 		}
 		opt(a)
 	}
+	if a.requestTimeout <= 0 {
+		a.requestTimeout = defaultRequestTimeout
+	}
 
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: a.TLSConfig.SkipVerify},
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: a.TLSConfig.SkipVerify,
+		},
 	}
 
 	a.session = &http.Client{
@@ -126,13 +142,20 @@ func (a *AristaHTTP) Execute(cmd string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
+	if len(body) > maxResponseBytes {
+		return "", fmt.Errorf("Arista HTTP response exceeds maximum size of %d bytes", maxResponseBytes)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		preview := body
+		if len(preview) > maxErrorPreviewBytes {
+			preview = preview[:maxErrorPreviewBytes]
+		}
+		return "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(preview))
 	}
 
 	return string(body), nil

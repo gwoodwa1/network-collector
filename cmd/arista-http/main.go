@@ -68,7 +68,7 @@ func main() {
 
 		opts := []aristahttp.Option{}
 		if device.SkipTLS {
-			opts = append(opts, aristahttp.WithSkipTLS())
+			opts = append(opts, aristahttp.WithSkipTLSVerification())
 		}
 		if device.Timeout > 0 {
 			opts = append(opts, aristahttp.WithRequestTimeout(time.Duration(device.Timeout)*time.Second))

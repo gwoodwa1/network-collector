@@ -24,13 +24,33 @@ type RESTCONFClient struct {
 	TLSConfig      drivers.TLSConfig
 	requestTimeout time.Duration
 	client         *http.Client
+	allowHTTP      bool
 }
 
-func WithSkipTLS() Option {
+const (
+	defaultRequestTimeout = 30 * time.Second
+	maxResponseBytes      = 10 << 20
+	maxErrorPreviewBytes  = 4 << 10
+)
+
+func WithSkipTLSVerification() Option {
 	return func(r *RESTCONFClient) {
 		if r != nil {
 			r.TLSConfig.SkipVerify = true
-			r.TLSConfig.Insecure = true
+		}
+	}
+}
+
+// WithSkipTLS is retained as a source-compatible alias. It skips certificate
+// verification; it does not disable TLS.
+func WithSkipTLS() Option {
+	return WithSkipTLSVerification()
+}
+
+func WithInsecureHTTP() Option {
+	return func(r *RESTCONFClient) {
+		if r != nil {
+			r.allowHTTP = true
 		}
 	}
 }
@@ -57,19 +77,28 @@ func (r *RESTCONFClient) Connect(baseURL, username, password string, opts ...Opt
 		return errors.New("password is required")
 	}
 
-	r.BaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	r.Username = username
-	r.Password = password
-
 	for _, opt := range opts {
 		if opt == nil {
 			continue
 		}
 		opt(r)
 	}
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(r.allowHTTP && parsed.Scheme == "http")) {
+		return errors.New("RESTCONF base URL must be an absolute HTTPS URL; plaintext HTTP requires the explicit lab-only WithInsecureHTTP option")
+	}
+	r.BaseURL = strings.TrimRight(parsed.String(), "/")
+	r.Username = username
+	r.Password = password
+	if r.requestTimeout <= 0 {
+		r.requestTimeout = defaultRequestTimeout
+	}
 
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.TLSConfig.SkipVerify},
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: r.TLSConfig.SkipVerify,
+		},
 	}
 	r.client = &http.Client{
 		Transport: transport,
@@ -112,18 +141,25 @@ func (r *RESTCONFClient) Execute(method, endpoint string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
+	if len(body) > maxResponseBytes {
+		return "", fmt.Errorf("RESTCONF response exceeds maximum size of %d bytes", maxResponseBytes)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("request failed with status %s: %s", resp.Status, string(body))
+		preview := body
+		if len(preview) > maxErrorPreviewBytes {
+			preview = preview[:maxErrorPreviewBytes]
+		}
+		return "", fmt.Errorf("request failed with status %s: %s", resp.Status, string(preview))
 	}
 
 	var jsonResponse map[string]interface{}
 	if err := json.Unmarshal(body, &jsonResponse); err != nil {
-		return "", fmt.Errorf("failed to unmarshal JSON: %w; body=%s", err, string(body))
+		return "", fmt.Errorf("failed to unmarshal RESTCONF JSON response: %w", err)
 	}
 
 	output, err := json.MarshalIndent(jsonResponse, "", "  ")
