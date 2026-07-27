@@ -2,7 +2,7 @@
 
 All notable changes to Network Collector are documented here.
 
-## Unreleased
+## [2.0.0] - 2026-07-27
 
 - Removed workbook-controlled local process execution. Step-level `local` and
   top-level `local_steps` now fail configuration loading, including nested
