@@ -784,8 +784,10 @@ Imports are recursive and paths are relative to the file containing the import. 
 The loader rejects import cycles, duplicate inclusion, unmatched glob patterns,
 invalid entries, and nesting deeper than 20 files. Every external YAML file is
 limited to 4 MiB; YAML anchors and aliases are unsupported to prevent expansion
-amplification. This prevents the same upgrade role from silently running
-twice. See [`examples/modular`](examples/modular) for a complete master,
+amplification. One load session, including `vars_files`, is also limited to
+128 YAML files, 32 MiB in aggregate, and 500,000 decoded YAML nodes. This
+prevents the same upgrade role from silently running twice and bounds broad
+glob imports. See [`examples/modular`](examples/modular) for a complete master,
 inventory, and role layout. The [`workflow operation examples`](examples/workflow-operations)
 provide full playbooks for every control operation described below.
 
@@ -1579,8 +1581,11 @@ When `events_file` is set, lifecycle events are appended as JSON Lines. Relative
 
 Webhook destinations must be explicitly allow-listed. The client resolves the
 host once, rejects private/local addresses unless explicitly enabled, dials the
-verified IP literal, and verifies the connected peer address. Prefer IP
-literals in the allow-list when operational DNS is unnecessary.
+verified IP literal, and verifies the connected peer address. Hardened webhook
+delivery deliberately ignores `HTTP_PROXY`, `HTTPS_PROXY`, and related ambient
+proxy variables so a proxy cannot perform destination DNS or bypass the IP
+policy. Prefer IP literals in the allow-list when operational DNS is
+unnecessary.
 
 ### HTML change reports
 

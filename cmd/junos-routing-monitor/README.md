@@ -236,6 +236,11 @@ protocol next hop changed is marked as a labeled vertical line so the traffic
 shift around a migration can be read in context. Older samples already present
 in an accumulated `.jsonl` from a previous run are ignored.
 
+The run artifact directory is owner-only (`0700`), and JSONL, session logs,
+snapshots, running configurations, and reports are owner-only (`0600`).
+Existing reused artifacts are tightened before writing, and symlink artifact
+targets are rejected.
+
 Branding images must be PNG files directly inside `--logo-folder`; absolute
 paths and parent traversal are rejected. For example:
 

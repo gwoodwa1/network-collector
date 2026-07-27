@@ -321,6 +321,11 @@ overwrite the first's; only the per-device `.jsonl` accumulates across
 repeat runs against the same file, same as it always has. The paths below
 all omit the `<output-dir>/<change>/` prefix for brevity.
 
+The run artifact directory is owner-only (`0700`), and JSONL, session logs,
+snapshots, running configurations, and reports are owner-only (`0600`).
+Existing reused artifacts are tightened before writing, and symlink artifact
+targets are rejected.
+
 ### Every `--interval`, per device (written to `<hostname>.jsonl`, one JSON line per tick)
 
 | Data point                   | Command                                              | Condition                  |
