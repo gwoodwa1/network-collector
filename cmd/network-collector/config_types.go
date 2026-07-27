@@ -85,10 +85,13 @@ type EnsureConfig struct {
 type NETCONFStepConfig struct {
 	Operation             string `mapstructure:"operation" yaml:"operation"`
 	Target                string `mapstructure:"target" yaml:"target"`
+	Source                string `mapstructure:"source" yaml:"source"`
 	Payload               string `mapstructure:"payload" yaml:"payload"`
 	PayloadFile           string `mapstructure:"payload_file" yaml:"payload_file"`
 	Confirmed             bool   `mapstructure:"confirmed" yaml:"confirmed"`
 	ConfirmTimeoutSeconds int    `mapstructure:"confirm_timeout_seconds" yaml:"confirm_timeout_seconds"`
+	Persist               string `mapstructure:"persist" yaml:"persist"`
+	PersistID             string `mapstructure:"persist_id" yaml:"persist_id"`
 }
 
 type EnrichmentConfig struct {

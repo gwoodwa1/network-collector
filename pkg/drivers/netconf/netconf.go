@@ -1,6 +1,8 @@
 package netconf
 
 import (
+	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"strings"
@@ -141,6 +143,10 @@ func (n *ScrapligoNETCONF) EditConfig(target, payload string) (string, error) {
 }
 
 func (n *ScrapligoNETCONF) Commit(confirmed bool, confirmTimeoutSeconds int) (string, error) {
+	return n.CommitPersistent(confirmed, confirmTimeoutSeconds, "", "")
+}
+
+func (n *ScrapligoNETCONF) CommitPersistent(confirmed bool, confirmTimeoutSeconds int, persist, persistID string) (string, error) {
 	if err := n.ready(false, ""); err != nil {
 		return "", err
 	}
@@ -154,6 +160,12 @@ func (n *ScrapligoNETCONF) Commit(confirmed bool, confirmTimeoutSeconds int) (st
 	if confirmTimeoutSeconds > 0 {
 		options = append(options, opoptions.WithCommitConfirmTimeout(uint(confirmTimeoutSeconds)))
 	}
+	if persist != "" {
+		options = append(options, opoptions.WithCommitConfirmedPersist(persist))
+	}
+	if persistID != "" {
+		options = append(options, opoptions.WithCommitConfirmedPersistID(persistID))
+	}
 	response, err := n.network.Commit(options...)
 	return netconfResult("commit", response, err)
 }
@@ -164,6 +176,113 @@ func (n *ScrapligoNETCONF) DiscardChanges() (string, error) {
 	}
 	response, err := n.network.Discard()
 	return netconfResult("discard-changes", response, err)
+}
+
+func (n *ScrapligoNETCONF) Lock(target string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	target, err := normalizeDatastore(target, "candidate", "candidate", "running", "startup")
+	if err != nil {
+		return "", err
+	}
+	response, err := n.network.Lock(target)
+	return netconfResult("lock", response, err)
+}
+
+func (n *ScrapligoNETCONF) Unlock(target string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	target, err := normalizeDatastore(target, "candidate", "candidate", "running", "startup")
+	if err != nil {
+		return "", err
+	}
+	response, err := n.network.Unlock(target)
+	return netconfResult("unlock", response, err)
+}
+
+func (n *ScrapligoNETCONF) Validate(source string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	source, err := normalizeDatastore(source, "candidate", "candidate", "running", "startup")
+	if err != nil {
+		return "", err
+	}
+	response, err := n.network.Validate(source)
+	return netconfResult("validate", response, err)
+}
+
+func (n *ScrapligoNETCONF) GetConfig(source, filter string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	source, err := normalizeDatastore(source, "running", "running", "candidate", "startup")
+	if err != nil {
+		return "", err
+	}
+	options := []util.Option{}
+	if strings.TrimSpace(filter) != "" {
+		options = append(options, opoptions.WithFilter(filter))
+	}
+	response, err := n.network.GetConfig(source, options...)
+	return netconfResult("get-config", response, err)
+}
+
+func (n *ScrapligoNETCONF) CopyConfig(source, target string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	source, err := normalizeDatastore(source, "", "running", "candidate", "startup")
+	if err != nil {
+		return "", err
+	}
+	target, err = normalizeDatastore(target, "", "running", "candidate", "startup")
+	if err != nil {
+		return "", err
+	}
+	response, err := n.network.CopyConfig(source, target)
+	return netconfResult("copy-config", response, err)
+}
+
+func (n *ScrapligoNETCONF) DeleteConfig(target string) (string, error) {
+	if err := n.ready(false, ""); err != nil {
+		return "", err
+	}
+	target, err := normalizeDatastore(target, "", "startup")
+	if err != nil {
+		return "", err
+	}
+	response, err := n.network.DeleteConfig(target)
+	return netconfResult("delete-config", response, err)
+}
+
+func (n *ScrapligoNETCONF) CancelCommit(persistID string) (string, error) {
+	var payload string
+	if strings.TrimSpace(persistID) == "" {
+		payload = `<cancel-commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"/>`
+	} else {
+		var escaped bytes.Buffer
+		if err := xml.EscapeText(&escaped, []byte(persistID)); err != nil {
+			return "", err
+		}
+		payload = `<cancel-commit xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><persist-id>` + escaped.String() + `</persist-id></cancel-commit>`
+	}
+	return n.RPC(payload)
+}
+
+func normalizeDatastore(value, fallback string, allowed ...string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		value = fallback
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported NETCONF datastore %q", value)
 }
 
 func (n *ScrapligoNETCONF) Close() error {

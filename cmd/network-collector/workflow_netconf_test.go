@@ -98,7 +98,12 @@ func TestValidateNETCONFOperations(t *testing.T) {
 		{name: "commit payload file", config: NETCONFStepConfig{Operation: "commit", PayloadFile: "commit.xml"}, want: "does not support payload"},
 		{name: "commit timeout", config: NETCONFStepConfig{Operation: "commit", ConfirmTimeoutSeconds: 30}, want: "confirmed must be true"},
 		{name: "discard fields", config: NETCONFStepConfig{Operation: "discard-changes", Target: "candidate"}, want: "does not support"},
-		{name: "unknown", config: NETCONFStepConfig{Operation: "copy-config"}, want: "unsupported"},
+		{name: "copy missing target", config: NETCONFStepConfig{Operation: "copy-config", Source: "running"}, want: "required"},
+		{name: "delete running", config: NETCONFStepConfig{Operation: "delete-config", Target: "running"}, want: "must be startup"},
+		{name: "lock payload", config: NETCONFStepConfig{Operation: "lock", Payload: "<config/>"}, want: "only target"},
+		{name: "commit persist", config: NETCONFStepConfig{Operation: "commit", Persist: "change-1"}, want: "requires confirmed"},
+		{name: "commit persist id confirmed", config: NETCONFStepConfig{Operation: "commit", Confirmed: true, PersistID: "change-1"}, want: "cannot set confirmed"},
+		{name: "unknown", config: NETCONFStepConfig{Operation: "replace-config"}, want: "unsupported"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -114,6 +119,16 @@ func TestValidateNETCONFOperations(t *testing.T) {
 		{Operation: "commit"},
 		{Operation: "commit", Confirmed: true, ConfirmTimeoutSeconds: 30},
 		{Operation: "discard-changes"},
+		{Operation: "rollback"},
+		{Operation: "lock", Target: "candidate"},
+		{Operation: "unlock", Target: "candidate"},
+		{Operation: "validate", Source: "candidate"},
+		{Operation: "get-config", Source: "running", Payload: "<interfaces/>"},
+		{Operation: "copy-config", Source: "running", Target: "startup"},
+		{Operation: "delete-config", Target: "startup"},
+		{Operation: "commit", Confirmed: true, ConfirmTimeoutSeconds: 60, Persist: "change-1"},
+		{Operation: "commit", PersistID: "change-1"},
+		{Operation: "cancel-commit", PersistID: "change-1"},
 	} {
 		if err := validateNETCONFStep(config); err != nil {
 			t.Fatalf("valid NETCONF operation rejected: config=%+v error=%v", config, err)

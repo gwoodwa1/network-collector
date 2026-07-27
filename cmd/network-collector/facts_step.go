@@ -48,9 +48,23 @@ func (executor *lazyNETCONFExecutor) ExecuteNETCONF(config NETCONFStepConfig) (s
 	case "edit-config", "edit_config":
 		return executor.client.EditConfig(config.Target, config.Payload)
 	case "commit":
-		return executor.client.Commit(config.Confirmed, config.ConfirmTimeoutSeconds)
-	case "discard", "discard-changes", "discard_changes":
+		return executor.client.CommitPersistent(config.Confirmed, config.ConfirmTimeoutSeconds, config.Persist, config.PersistID)
+	case "discard", "discard-changes", "discard_changes", "rollback":
 		return executor.client.DiscardChanges()
+	case "lock":
+		return executor.client.Lock(config.Target)
+	case "unlock":
+		return executor.client.Unlock(config.Target)
+	case "validate":
+		return executor.client.Validate(config.Source)
+	case "get-config", "get_config":
+		return executor.client.GetConfig(config.Source, config.Payload)
+	case "copy-config", "copy_config":
+		return executor.client.CopyConfig(config.Source, config.Target)
+	case "delete-config", "delete_config":
+		return executor.client.DeleteConfig(config.Target)
+	case "cancel-commit", "cancel_commit":
+		return executor.client.CancelCommit(config.PersistID)
 	default:
 		return "", fmt.Errorf("unsupported NETCONF operation %q", config.Operation)
 	}

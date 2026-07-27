@@ -239,7 +239,9 @@ Check mode never sends generic SSH commands, local commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
 operations. NETCONF RPC payloads whose top-level operation is `get` or
 `get-config` still run because they are unambiguously read-only; arbitrary
-vendor RPCs are previewed but skipped. Declarative `ensure` steps perform their
+vendor RPCs are previewed but skipped. Native `get-config` and `validate`
+steps also run; lock, unlock, edit, commit, copy, delete, discard, and
+cancel-commit are previewed only. Declarative `ensure` steps perform their
 discovery read and emit a JSON current/desired diff plus the exact OpenConfig
 XML that would be applied.
 This intentionally treats arbitrary imperative commands as unsafe instead of
@@ -417,8 +419,25 @@ Supported step operations are:
 - `edit-config`: merge the supplied configuration into `candidate` (the
   default) or `running`.
 - `commit`: commit the candidate configuration; optional `confirmed: true`
-  and `confirm_timeout_seconds` enable confirmed commit.
-- `discard-changes` (or `discard`): discard uncommitted candidate changes.
+  and `confirm_timeout_seconds` enable confirmed commit. `persist` starts a
+  persistent confirmed commit; a later commit with `persist_id` confirms it.
+- `discard-changes` (`discard` or `rollback`): discard uncommitted candidate
+  changes.
+- `lock` / `unlock`: lock or release `candidate`, `running`, or `startup`
+  (default `candidate`).
+- `validate`: validate `candidate`, `running`, or `startup` (default
+  `candidate`) when the target advertises `:validate`.
+- `get-config`: read `running` (default), `candidate`, or `startup`, with an
+  optional subtree filter in `payload` or `payload_file`.
+- `copy-config`: copy between named `running`, `candidate`, and `startup`
+  datastores.
+- `delete-config`: delete only the `startup` datastore. Running configuration
+  deletion is rejected.
+- `cancel-commit`: cancel a confirmed commit, optionally using `persist_id`.
+
+The target must advertise the corresponding NETCONF capability. Unsupported
+operations fail with the returned RPC error rather than being approximated.
+Mutating operations are rendered but not sent under `--check`.
 
 Use either inline `payload` or `payload_file`, but not both. Relative payload
 paths are resolved from the directory containing the main playbook. File
@@ -463,6 +482,21 @@ Do not include the outer `<rpc>` element in either payload form; the NETCONF
 driver adds the protocol envelope and message ID. Junos accepts either native
 Junos configuration XML or `<config-text>` within `edit-config`. Use `block`
 with NETCONF edit and commit steps in `rollback` for transactional recovery.
+[`36-junos-netconf-transaction.yaml`](examples/workflow-operations/junos/36-junos-netconf-transaction.yaml)
+demonstrates filtered running/candidate reads, candidate locking, edit,
+validation, confirmed commit, immediate cancellation or automatic timed
+rollback, discard recovery, and guaranteed unlock.
+
+### Configuration-management scope
+
+Network Collector provides useful configuration orchestration: templated
+multi-line CLI, native or OpenConfig NETCONF payload files, datastore
+transactions, reusable workflows, approval gates, rollback blocks, validation,
+and a growing declarative `ensure` model. It is not yet a full
+configuration-management platform: there is no broad catalogue of rich,
+idempotent resource modules or service models comparable to Ansible
+collections or Cisco NSO. Use it for focused network workflows and assurance,
+or compose it with a larger source-of-truth and service-orchestration system.
 
 Inventory hosts may also carry arbitrary labels for runtime targeting:
 

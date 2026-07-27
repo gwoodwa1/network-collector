@@ -1,0 +1,115 @@
+name_playbook: Transactional Junos NETCONF candidate change
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+vars:
+  interface: ge-0/0/3
+  interface_description: Transactionally managed customer handoff
+
+netconf:
+  - host: junos-pe-01
+    steps:
+      - name: inspect-running-interface-config
+        netconf:
+          operation: get-config
+          source: running
+          payload: |-
+            <configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm">
+              <interfaces>
+                <interface>
+                  <name>{{interface}}</name>
+                </interface>
+              </interfaces>
+            </configuration>
+
+      - name: authorize-transaction
+        approval:
+          message: Run the locked confirmed-commit transaction on {{interface}}?
+          timeout_seconds: 300
+
+      - name: locked-candidate-transaction
+        block:
+          steps:
+            - name: lock-candidate
+              netconf:
+                operation: lock
+                target: candidate
+
+            - name: load-interface-candidate
+              netconf:
+                operation: edit-config
+                target: candidate
+                payload_file: payloads/interface-enable.xml
+
+            - name: validate-candidate
+              netconf:
+                operation: validate
+                source: candidate
+
+            - name: inspect-candidate
+              netconf:
+                operation: get-config
+                source: candidate
+                payload: |-
+                  <configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm">
+                    <interfaces>
+                      <interface>
+                        <name>{{interface}}</name>
+                      </interface>
+                    </interfaces>
+                  </configuration>
+
+            # If verification never succeeds, the server automatically restores
+            # the previous running configuration after 120 seconds.
+            - name: start-confirmed-commit
+              netconf:
+                operation: commit
+                confirmed: true
+                confirm_timeout_seconds: 120
+
+            - name: verify-interface
+              netconf:
+                operation: rpc
+                payload: |-
+                  <get-interface-information>
+                    <interface-name>{{interface}}</interface-name>
+                    <terse/>
+                  </get-interface-information>
+              retry:
+                until_pass: true
+                interval_seconds: 10
+                max_attempts: 6
+              validations:
+                - extractor: regex
+                  pattern: '<admin-status[^>]*>\s*(up)\s*</admin-status>'
+                  condition: eq
+                  expected: up
+
+            # A normal commit confirms the pending confirmed commit.
+            - name: confirm-commit
+              netconf:
+                operation: commit
+
+          # cancel-commit immediately restores running after a verification
+          # failure. If failure occurred before confirmed commit, it can return
+          # an RPC error; discard still runs and the workbook remains failed.
+          rollback:
+            - name: cancel-pending-confirmed-commit
+              netconf:
+                operation: cancel-commit
+
+            - name: discard-candidate
+              netconf:
+                operation: rollback
+
+          always:
+            - name: unlock-candidate
+              netconf:
+                operation: unlock
+                target: candidate

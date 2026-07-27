@@ -23,6 +23,18 @@ func renderNETCONFStep(config NETCONFStepConfig, vars map[string]string, baseDir
 	if err != nil {
 		return NETCONFStepConfig{}, fmt.Errorf("render NETCONF target: %w", err)
 	}
+	config.Source, err = renderTemplate(strings.TrimSpace(config.Source), vars)
+	if err != nil {
+		return NETCONFStepConfig{}, fmt.Errorf("render NETCONF source: %w", err)
+	}
+	config.Persist, err = renderTemplate(strings.TrimSpace(config.Persist), vars)
+	if err != nil {
+		return NETCONFStepConfig{}, fmt.Errorf("render NETCONF persist: %w", err)
+	}
+	config.PersistID, err = renderTemplate(strings.TrimSpace(config.PersistID), vars)
+	if err != nil {
+		return NETCONFStepConfig{}, fmt.Errorf("render NETCONF persist_id: %w", err)
+	}
 	config.PayloadFile, err = renderTemplate(strings.TrimSpace(config.PayloadFile), vars)
 	if err != nil {
 		return NETCONFStepConfig{}, fmt.Errorf("render NETCONF payload_file: %w", err)
@@ -58,8 +70,8 @@ func validateNETCONFStep(config NETCONFStepConfig) error {
 		if config.Payload == "" {
 			return fmt.Errorf("netconf.payload or netconf.payload_file is required for rpc")
 		}
-		if config.Target != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 {
-			return fmt.Errorf("NETCONF rpc does not support target or confirmed-commit fields")
+		if hasNETCONFControlFields(config) {
+			return fmt.Errorf("NETCONF rpc does not support datastore or confirmed-commit fields")
 		}
 	case "edit-config", "edit_config":
 		if config.Payload == "" {
@@ -69,12 +81,12 @@ func validateNETCONFStep(config NETCONFStepConfig) error {
 		if target != "" && target != "candidate" && target != "running" {
 			return fmt.Errorf("unsupported NETCONF edit-config target %q", config.Target)
 		}
-		if config.Confirmed || config.ConfirmTimeoutSeconds != 0 {
-			return fmt.Errorf("NETCONF edit-config does not support confirmed-commit fields")
+		if config.Source != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF edit-config does not support source or confirmed-commit fields")
 		}
 	case "commit":
-		if config.Payload != "" || config.PayloadFile != "" || config.Target != "" {
-			return fmt.Errorf("NETCONF commit does not support payload, payload_file, or target")
+		if config.Payload != "" || config.PayloadFile != "" || config.Target != "" || config.Source != "" {
+			return fmt.Errorf("NETCONF commit does not support payload, payload_file, target, or source")
 		}
 		if config.ConfirmTimeoutSeconds < 0 {
 			return fmt.Errorf("netconf.confirm_timeout_seconds must be greater than or equal to 0")
@@ -82,14 +94,89 @@ func validateNETCONFStep(config NETCONFStepConfig) error {
 		if config.ConfirmTimeoutSeconds > 0 && !config.Confirmed {
 			return fmt.Errorf("netconf.confirmed must be true when confirm_timeout_seconds is set")
 		}
-	case "discard", "discard-changes", "discard_changes":
-		if config.Payload != "" || config.PayloadFile != "" || config.Target != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 {
-			return fmt.Errorf("NETCONF discard-changes does not support payload, payload_file, target, or confirmed-commit fields")
+		if config.Persist != "" && !config.Confirmed {
+			return fmt.Errorf("netconf.persist requires confirmed: true")
+		}
+		if config.PersistID != "" && config.Confirmed {
+			return fmt.Errorf("netconf.persist_id confirms an existing persistent commit and cannot set confirmed: true")
+		}
+		if config.Persist != "" && config.PersistID != "" {
+			return fmt.Errorf("netconf.persist and netconf.persist_id are mutually exclusive")
+		}
+	case "discard", "discard-changes", "discard_changes", "rollback":
+		if hasAnyNETCONFArguments(config) {
+			return fmt.Errorf("NETCONF discard-changes does not support additional fields")
+		}
+	case "lock", "unlock":
+		if config.Source != "" || config.Payload != "" || config.PayloadFile != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF %s supports only target", operation)
+		}
+		if err := validateNETCONFDatastore("target", config.Target, "candidate", "running", "startup"); err != nil {
+			return err
+		}
+	case "validate":
+		if config.Target != "" || config.Payload != "" || config.PayloadFile != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF validate supports only source")
+		}
+		if err := validateNETCONFDatastore("source", config.Source, "candidate", "running", "startup"); err != nil {
+			return err
+		}
+	case "get-config", "get_config":
+		if config.Target != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF get-config supports source and an optional filter payload")
+		}
+		if err := validateNETCONFDatastore("source", config.Source, "running", "candidate", "startup"); err != nil {
+			return err
+		}
+	case "copy-config", "copy_config":
+		if config.Payload != "" || config.PayloadFile != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF copy-config supports only source and target")
+		}
+		if strings.TrimSpace(config.Source) == "" || strings.TrimSpace(config.Target) == "" {
+			return fmt.Errorf("netconf.source and netconf.target are required for copy-config")
+		}
+		if err := validateNETCONFDatastore("source", config.Source, "running", "candidate", "startup"); err != nil {
+			return err
+		}
+		if err := validateNETCONFDatastore("target", config.Target, "running", "candidate", "startup"); err != nil {
+			return err
+		}
+	case "delete-config", "delete_config":
+		if config.Source != "" || config.Payload != "" || config.PayloadFile != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != "" {
+			return fmt.Errorf("NETCONF delete-config supports only target")
+		}
+		if strings.ToLower(strings.TrimSpace(config.Target)) != "startup" {
+			return fmt.Errorf("NETCONF delete-config target must be startup")
+		}
+	case "cancel-commit", "cancel_commit":
+		if config.Target != "" || config.Source != "" || config.Payload != "" || config.PayloadFile != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" {
+			return fmt.Errorf("NETCONF cancel-commit supports only persist_id")
 		}
 	default:
 		return fmt.Errorf("unsupported NETCONF operation %q", config.Operation)
 	}
 	return nil
+}
+
+func hasNETCONFControlFields(config NETCONFStepConfig) bool {
+	return config.Target != "" || config.Source != "" || config.Confirmed || config.ConfirmTimeoutSeconds != 0 || config.Persist != "" || config.PersistID != ""
+}
+
+func hasAnyNETCONFArguments(config NETCONFStepConfig) bool {
+	return config.Payload != "" || config.PayloadFile != "" || hasNETCONFControlFields(config)
+}
+
+func validateNETCONFDatastore(field, value string, defaultsAndAllowed ...string) error {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return nil
+	}
+	for _, allowed := range defaultsAndAllowed {
+		if value == allowed {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsupported NETCONF %s datastore %q", field, value)
 }
 
 func executeNETCONFStep(ctx *stepExecutionContext, config NETCONFStepConfig) (string, string, error) {
@@ -110,6 +197,9 @@ func executeNETCONFStep(ctx *stepExecutionContext, config NETCONFStepConfig) (st
 	display := "netconf " + operation
 	if rendered.Target != "" {
 		display += " target=" + rendered.Target
+	}
+	if rendered.Source != "" {
+		display += " source=" + rendered.Source
 	}
 	if ctx.checkMode && netconfCheckSkips(operation, rendered.Payload) {
 		message := fmt.Sprintf("[check] would execute %s", display)
@@ -146,7 +236,8 @@ func netconfCheckSkips(operation, payload string) bool {
 
 func netconfOperationMutates(operation string) bool {
 	switch strings.ToLower(strings.TrimSpace(operation)) {
-	case "edit-config", "edit_config", "commit", "discard", "discard-changes", "discard_changes":
+	case "edit-config", "edit_config", "commit", "discard", "discard-changes", "discard_changes", "rollback",
+		"lock", "unlock", "copy-config", "copy_config", "delete-config", "delete_config", "cancel-commit", "cancel_commit":
 		return true
 	default:
 		return false

@@ -49,6 +49,7 @@ easier to read.
 | `multivendor/33-gnmi-all-interface-light-level-guard.yaml` | per-interface and per-channel RX/TX optical baselines with an absolute 1 dB drop guard |
 | `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process monitor combining optics, discards, errors, and IS-IS/LDP/BGP neighbor state |
 | `multivendor/35-declarative-interface-ensure.yaml` | idempotent OpenConfig interface state with NETCONF discovery, diff, apply, verification, and `--check` preview |
+| `junos/36-junos-netconf-transaction.yaml` | candidate lock, edit, validation, filtered get-config, confirmed commit, cancel/timed rollback, discard recovery, and guaranteed unlock |
 
 Run one example from the repository root:
 
