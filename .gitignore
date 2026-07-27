@@ -14,6 +14,7 @@ SECURITY_AUDIT.md
 /dist/
 /artifacts/
 /session_logs/
+/sbom.cdx.json
 
 # Repository-local Go caches
 /.gocache/
