@@ -38,6 +38,24 @@ func TestFileProviderRejectsOpenPermissions(t *testing.T) {
 	}
 }
 
+func TestFileProviderRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require additional privileges")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yaml")
+	link := filepath.Join(dir, "credentials.yaml")
+	if err := os.WriteFile(target, []byte("default: {username: u, password: p}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileProvider(link); err == nil {
+		t.Fatal("accepted symbolic-link credential file")
+	}
+}
+
 func TestCommandProviderIsRejected(t *testing.T) {
 	_, err := NewProvider(ProviderConfig{Type: "command"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "process execution has been removed") {

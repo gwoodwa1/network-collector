@@ -126,16 +126,23 @@ func NewFileProvider(path string) (*FileProvider, error) {
 	if path == "" {
 		return nil, fmt.Errorf("credential file path cannot be empty")
 	}
-	info, err := os.Stat(path)
+	file, info, err := secureOpenCredentialFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("stat credential file: %w", err)
+		return nil, fmt.Errorf("open credential file securely: %w", err)
 	}
+	defer file.Close()
 	if info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("credential file %q permissions must not allow group or other access", path)
 	}
-	content, err := os.ReadFile(path)
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("credential file %q must be a regular file", path)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, 4<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read credential file: %w", err)
+	}
+	if len(content) == 4<<20 {
+		return nil, fmt.Errorf("credential file %q exceeds 4 MiB", path)
 	}
 	var data credentialFile
 	if err := yaml.Unmarshal(content, &data); err != nil {

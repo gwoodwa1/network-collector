@@ -59,17 +59,24 @@ func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (
 	ctx, cancel := context.WithTimeout(ctx, provider.Timeout)
 	defer cancel()
 	secretPath := cleanSecretPath(provider.Config.PathPrefix, selector)
+	vaultBinary, err := exec.LookPath("vault")
+	if err != nil {
+		return Credentials{}, fmt.Errorf("approved vault CLI was not found in PATH: %w", err)
+	}
 	command := exec.CommandContext(
-		ctx, "vault", "kv", "get", "-format=json",
+		ctx, vaultBinary, "kv", "get", "-format=json",
 		"-mount="+provider.Config.Mount, secretPath,
 	)
-	command.Env = environmentWith(os.Environ(), map[string]string{
+	command.Env = minimalEnvironment(
+		[]string{"PATH", "HOME", "LANG", "LC_ALL", "VAULT_TOKEN", "VAULT_AGENT_ADDR"},
+		map[string]string{
 		"VAULT_ADDR":        provider.Config.Address,
 		"VAULT_NAMESPACE":   provider.Config.Namespace,
 		"VAULT_CACERT":      provider.Config.CAFile,
 		"VAULT_CLIENT_CERT": provider.Config.CertFile,
 		"VAULT_CLIENT_KEY":  provider.Config.KeyFile,
-	})
+		},
+	)
 	output, err := command.Output()
 	if err != nil {
 		return Credentials{}, fmt.Errorf("HashiCorp Vault credential lookup failed: %w", err)
@@ -118,10 +125,17 @@ func (provider *OnePasswordProvider) Resolve(ctx context.Context, target Target)
 	ctx, cancel := context.WithTimeout(ctx, provider.Timeout)
 	defer cancel()
 	item := provider.Config.ItemPrefix + selector
+	opBinary, err := exec.LookPath("op")
+	if err != nil {
+		return Credentials{}, fmt.Errorf("approved 1Password CLI was not found in PATH: %w", err)
+	}
 	read := func(field string) (string, error) {
 		reference := fmt.Sprintf("op://%s/%s/%s", provider.Config.Vault, item, field)
-		command := exec.CommandContext(ctx, "op", "read", reference)
-		command.Env = environmentWith(os.Environ(), map[string]string{"OP_ACCOUNT": provider.Config.Account})
+		command := exec.CommandContext(ctx, opBinary, "read", reference)
+		command.Env = minimalEnvironment(
+			[]string{"PATH", "HOME", "LANG", "LC_ALL", "OP_SERVICE_ACCOUNT_TOKEN", "OP_CONNECT_HOST", "OP_CONNECT_TOKEN"},
+			map[string]string{"OP_ACCOUNT": provider.Config.Account},
+		)
 		output, commandErr := command.Output()
 		if commandErr != nil {
 			return "", commandErr
@@ -295,18 +309,14 @@ func stringField(values map[string]interface{}, name string) string {
 	return value
 }
 
-func environmentWith(current []string, overrides map[string]string) []string {
-	values := make(map[string]string, len(current)+len(overrides))
-	order := make([]string, 0, len(current)+len(overrides))
-	for _, entry := range current {
-		key, value, found := strings.Cut(entry, "=")
-		if !found {
-			continue
-		}
-		if _, exists := values[key]; !exists {
+func minimalEnvironment(allowed []string, overrides map[string]string) []string {
+	values := make(map[string]string, len(allowed)+len(overrides))
+	order := make([]string, 0, len(allowed)+len(overrides))
+	for _, key := range allowed {
+		if value := os.Getenv(key); value != "" {
 			order = append(order, key)
+			values[key] = value
 		}
-		values[key] = value
 	}
 	for key, value := range overrides {
 		if value == "" {
