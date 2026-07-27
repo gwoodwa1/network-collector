@@ -65,8 +65,10 @@ func executeSSHEnsureStep(ctx *stepExecutionContext, executor sshEnsureCommandEx
 		return executeSSHInterfaceEnsure(ctx, executor, platform, config)
 	case "static_route":
 		return executeSSHStaticRouteEnsure(ctx, executor, platform, config)
+	case "vrf":
+		return executeSSHVRFEnsure(ctx, executor, platform, config)
 	default:
-		return "", "", fmt.Errorf("SSH ensure.resource must be interface or static_route")
+		return "", "", fmt.Errorf("SSH ensure.resource must be interface, static_route, or vrf")
 	}
 }
 
@@ -113,6 +115,9 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 	}
 	if strings.TrimSpace(config.Target) != "" {
 		return "", "", fmt.Errorf("ensure.target is not used with SSH interface resources")
+	}
+	if !ensureAttributesEmpty(config.Attributes) || config.Cascade {
+		return "", "", fmt.Errorf("ensure.attributes and ensure.cascade are supported only for SSH vrf resources")
 	}
 	if config.Description != nil {
 		if err := validateCLIDescription(*config.Description); err != nil {
@@ -465,6 +470,9 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 	}
 	if strings.TrimSpace(config.Target) != "" {
 		return "", "", fmt.Errorf("ensure.target is not used with SSH static_route resources")
+	}
+	if !ensureAttributesEmpty(config.Attributes) || config.Cascade {
+		return "", "", fmt.Errorf("ensure.attributes and ensure.cascade are supported only for SSH vrf resources")
 	}
 	present, err := desiredRoutePresent(config.State)
 	if err != nil {
@@ -918,6 +926,12 @@ func validateCLIDescription(value string) error {
 		}
 	}
 	return nil
+}
+
+func ensureAttributesEmpty(attributes EnsureAttributesConfig) bool {
+	return strings.TrimSpace(attributes.RouteDistinguisher) == "" &&
+		len(attributes.ImportRouteTargets) == 0 &&
+		len(attributes.ExportRouteTargets) == 0
 }
 
 func boolValue(value *bool) bool {

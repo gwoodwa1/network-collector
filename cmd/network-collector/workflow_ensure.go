@@ -129,6 +129,21 @@ func renderEnsureConfig(config EnsureConfig, vars map[string]string) (EnsureConf
 		}
 		config.Description = &rendered
 	}
+	config.Attributes.RouteDistinguisher, err = renderTemplate(strings.TrimSpace(config.Attributes.RouteDistinguisher), vars)
+	if err != nil {
+		return EnsureConfig{}, fmt.Errorf("render ensure.attributes.route_distinguisher: %w", err)
+	}
+	for label, targets := range map[string]*[]string{
+		"import_route_targets": &config.Attributes.ImportRouteTargets,
+		"export_route_targets": &config.Attributes.ExportRouteTargets,
+	} {
+		for index := range *targets {
+			(*targets)[index], err = renderTemplate(strings.TrimSpace((*targets)[index]), vars)
+			if err != nil {
+				return EnsureConfig{}, fmt.Errorf("render ensure.attributes.%s[%d]: %w", label, index, err)
+			}
+		}
+	}
 	return config, nil
 }
 
@@ -144,6 +159,9 @@ func validateEnsureConfig(config EnsureConfig) (bool, error) {
 	}
 	if config.RollbackOnFailure {
 		return false, fmt.Errorf("ensure.rollback_on_failure is currently supported only for SSH resources")
+	}
+	if !ensureAttributesEmpty(config.Attributes) || config.Cascade {
+		return false, fmt.Errorf("ensure.attributes and ensure.cascade are currently supported only for SSH vrf resources")
 	}
 	if strings.TrimSpace(config.Prefix) != "" || strings.TrimSpace(config.NextHop) != "" || strings.TrimSpace(config.VRF) != "" {
 		return false, fmt.Errorf("ensure.prefix, next_hop, and vrf are supported only for SSH static_route resources")

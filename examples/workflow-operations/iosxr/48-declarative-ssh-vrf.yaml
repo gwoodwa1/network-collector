@@ -1,0 +1,38 @@
+name_playbook: Declarative IOS XR SSH VRF
+inventory_file: ../inventory.yaml
+fail_on_fail: true
+
+vars:
+  vrf_name: CUSTOMER-C
+  route_distinguisher: 65000:300
+  route_target: 65000:300
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - group: xr-lab
+    steps:
+      - name: authorize-iosxr-vrf
+        approval:
+          message: >-
+            Ensure VRF {{vrf_name}} uses RD {{route_distinguisher}} and
+            route target {{route_target}}?
+          timeout_seconds: 300
+
+      - name: ensure-iosxr-vrf
+        ensure:
+          resource: vrf
+          name: "{{vrf_name}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+          attributes:
+            route_distinguisher: "{{route_distinguisher}}"
+            import_route_targets:
+              - "{{route_target}}"
+            export_route_targets:
+              - "{{route_target}}"
+        register: vrf_plan

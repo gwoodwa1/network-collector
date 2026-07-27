@@ -974,6 +974,123 @@ func TestSROSStaticRouteAbsentPlanIsExact(t *testing.T) {
 	}
 }
 
+func TestIOSXRVRFParsingFindsAttributesAndDependencies(t *testing.T) {
+	state := parseIOSXRVRFState(readEnsureFixture(t, "vrfs.txt"), "CUSTOMER-A")
+	if !state.Exists || state.RouteDistinguisher != "65000:100" ||
+		len(state.ImportRouteTargets) != 1 || state.ImportRouteTargets[0] != "65000:100" ||
+		len(state.ExportRouteTargets) != 1 || state.ExportRouteTargets[0] != "65000:100" ||
+		len(state.Dependencies) != 2 ||
+		state.Dependencies[0] != "interface HundredGigE0/0/0/3" ||
+		state.Dependencies[1] != "router static" {
+		t.Fatalf("unexpected IOS XR VRF state: %+v", state)
+	}
+}
+
+func TestIOSXRVRFCheckModePlansExplicitReplacementAndInverse(t *testing.T) {
+	fixture := readEnsureFixture(t, "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:100", "65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `"action": "would-change"`) ||
+		!strings.Contains(output, `" rd 65000:110"`) ||
+		!strings.Contains(output, `"   no 65000:101"`) ||
+		!strings.Contains(output, `"   no 65000:100"`) ||
+		!strings.Contains(output, `" rd 65000:100"`) ||
+		!strings.Contains(output, `"   65000:101"`) {
+		t.Fatalf("IOS XR VRF replacement or inverse plan is incomplete: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestIOSXRVRFDeletionRefusesDependencies(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{readEnsureFixture(t, "vrfs.txt")}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	_, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interface HundredGigE0/0/0/3") ||
+		!strings.Contains(err.Error(), "router static") {
+		t.Fatalf("dependent VRF deletion was not refused clearly: %v", err)
+	}
+	if len(executor.commands) != 1 {
+		t.Fatalf("VRF dependency refusal sent a mutation: %+v", executor.commands)
+	}
+}
+
+func TestIOSXRVRFRejectsInvalidTargetsAndCascadeBeforeDiscovery(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	for _, config := range []EnsureConfig{
+		{
+			Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+			Attributes: EnsureAttributesConfig{RouteDistinguisher: "not-an-rd"},
+		},
+		{
+			Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+			Cascade: true,
+		},
+	} {
+		if _, _, err := executeSSHEnsureStep(ctx, executor, config); err == nil {
+			t.Fatalf("unsafe VRF configuration was accepted: %+v", config)
+		}
+	}
+	if len(executor.commands) != 0 {
+		t.Fatalf("invalid VRF input reached the transport: %+v", executor.commands)
+	}
+}
+
+func TestIOSXRVRFEnsureApplyAndVerify(t *testing.T) {
+	fixture := readEnsureFixture(t, "vrfs-no-dependencies.txt")
+	verified := fixture + `vrf CUSTOMER-C
+ rd 65000:300
+ address-family ipv4 unicast
+  import route-target
+   65000:300
+  !
+  export route-target
+   65000:300
+  !
+!
+`
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Commit complete.", verified}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-C", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:300",
+			ImportRouteTargets: []string{"65000:300"},
+			ExportRouteTargets: []string{"65000:300"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "vrf CUSTOMER-C") ||
+		!strings.Contains(executor.commands[1], "commit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("IOS XR VRF did not apply and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

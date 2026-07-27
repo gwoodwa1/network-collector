@@ -74,17 +74,25 @@ type StepConfig struct {
 }
 
 type EnsureConfig struct {
-	Resource          string  `mapstructure:"resource" yaml:"resource"`
-	Name              string  `mapstructure:"name" yaml:"name"`
-	Prefix            string  `mapstructure:"prefix" yaml:"prefix"`
-	NextHop           string  `mapstructure:"next_hop" yaml:"next_hop"`
-	VRF               string  `mapstructure:"vrf" yaml:"vrf"`
-	State             string  `mapstructure:"state" yaml:"state"`
-	RequireState      string  `mapstructure:"require_state" yaml:"require_state"`
-	Description       *string `mapstructure:"description" yaml:"description"`
-	Transport         string  `mapstructure:"transport" yaml:"transport"`
-	Target            string  `mapstructure:"target" yaml:"target"`
-	RollbackOnFailure bool    `mapstructure:"rollback_on_failure" yaml:"rollback_on_failure"`
+	Resource          string                 `mapstructure:"resource" yaml:"resource"`
+	Name              string                 `mapstructure:"name" yaml:"name"`
+	Prefix            string                 `mapstructure:"prefix" yaml:"prefix"`
+	NextHop           string                 `mapstructure:"next_hop" yaml:"next_hop"`
+	VRF               string                 `mapstructure:"vrf" yaml:"vrf"`
+	State             string                 `mapstructure:"state" yaml:"state"`
+	RequireState      string                 `mapstructure:"require_state" yaml:"require_state"`
+	Description       *string                `mapstructure:"description" yaml:"description"`
+	Transport         string                 `mapstructure:"transport" yaml:"transport"`
+	Target            string                 `mapstructure:"target" yaml:"target"`
+	RollbackOnFailure bool                   `mapstructure:"rollback_on_failure" yaml:"rollback_on_failure"`
+	Attributes        EnsureAttributesConfig `mapstructure:"attributes" yaml:"attributes"`
+	Cascade           bool                   `mapstructure:"cascade" yaml:"cascade"`
+}
+
+type EnsureAttributesConfig struct {
+	RouteDistinguisher string   `mapstructure:"route_distinguisher" yaml:"route_distinguisher"`
+	ImportRouteTargets []string `mapstructure:"import_route_targets" yaml:"import_route_targets"`
+	ExportRouteTargets []string `mapstructure:"export_route_targets" yaml:"export_route_targets"`
 }
 
 type NETCONFStepConfig struct {

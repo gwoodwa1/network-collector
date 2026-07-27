@@ -549,6 +549,29 @@ statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
 and
 [`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
+IOS XR also supports declarative SSH VRFs:
+
+```yaml
+ensure:
+  resource: vrf
+  name: CUSTOMER-C
+  state: present
+  transport: ssh
+  rollback_on_failure: true
+  attributes:
+    route_distinguisher: 65000:300
+    import_route_targets: [65000:300]
+    export_route_targets: [65000:300]
+```
+
+RD and IPv4-unicast import/export route targets are compared explicitly.
+Changes produce ordered forward and inverse plans while leaving other address
+families and policies untouched. `state: absent` first scans the running
+configuration and refuses deletion if an interface, static route, or other
+configuration hierarchy references the VRF. `cascade: true` is intentionally
+rejected until dependency removal can be planned without broad deletion. See
+[`48-declarative-ssh-vrf.yaml`](examples/workflow-operations/iosxr/48-declarative-ssh-vrf.yaml).
+
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,
 `commands`, and `rollback_commands`; no configuration is sent. Normal mode

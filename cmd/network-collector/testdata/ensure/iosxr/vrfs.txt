@@ -1,0 +1,31 @@
+vrf CUSTOMER-A
+ rd 65000:100
+ address-family ipv4 unicast
+  import route-target
+   65000:100
+  !
+  export route-target
+   65000:100
+  !
+!
+vrf CUSTOMER-B
+ rd 65000:200
+ address-family ipv4 unicast
+  import route-target
+   65000:200
+  !
+  export route-target
+   65000:200
+  !
+!
+interface HundredGigE0/0/0/3
+ description Customer A handoff
+ vrf CUSTOMER-A
+!
+router static
+ vrf CUSTOMER-A
+  address-family ipv4 unicast
+   203.0.113.0/24 192.0.2.10
+  !
+ !
+!
