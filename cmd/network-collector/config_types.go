@@ -111,6 +111,12 @@ type GNMITriggerConfig struct {
 	ValueRegex     string       `mapstructure:"value_regex" yaml:"value_regex"`
 	IncludeInitial bool         `mapstructure:"include_initial" yaml:"include_initial"`
 	Once           bool         `mapstructure:"once" yaml:"once"`
+	Condition      string       `mapstructure:"condition" yaml:"condition"`
+	Threshold      *float64     `mapstructure:"threshold" yaml:"threshold"`
+	CounterRate    bool         `mapstructure:"counter_rate" yaml:"counter_rate"`
+	BaselineSamples int         `mapstructure:"baseline_samples" yaml:"baseline_samples"`
+	MaxDropPercent float64      `mapstructure:"max_drop_percent" yaml:"max_drop_percent"`
+	Fail           bool         `mapstructure:"fail" yaml:"fail"`
 	Steps          []StepConfig `mapstructure:"steps" yaml:"steps"`
 }
 
