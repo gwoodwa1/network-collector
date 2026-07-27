@@ -52,6 +52,12 @@ func TestGNMITriggerMatchesPostSyncUpdateAndRunsNestedStep(t *testing.T) {
 	if !strings.Contains(log.String(), "handled:UP") {
 		t.Fatalf("trigger action did not run:\n%s", log.String())
 	}
+	if err := handler(event); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(log.String(), "handled:UP"); got != 1 {
+		t.Fatalf("trigger without repeat did not default to once-per-path: count=%d\n%s", got, log.String())
+	}
 }
 
 func TestGNMITriggerMatchesRouteDelete(t *testing.T) {
@@ -230,5 +236,57 @@ func TestGNMIValueNotMatchesUnhealthyStatePerNeighbor(t *testing.T) {
 	}
 	if got := strings.Count(log.String(), "[gnmi:bgp-not-established]"); got != 1 {
 		t.Fatalf("got %d unhealthy alarms, want one per neighbor path:\n%s", got, log.String())
+	}
+}
+
+func TestGNMIRepeatTriggerHonoursFireBudget(t *testing.T) {
+	failed := false
+	validations := []deviceValidation{}
+	ctx := &stepExecutionContext{
+		hostname: "router-1", sessionLog: io.Discard, variables: map[string]string{},
+		runFailed: &failed, aggregated: &validations,
+	}
+	handler, err := gnmiTriggerHandlerWithBudget(ctx, nil, []GNMITriggerConfig{{
+		Name: "repeat-diagnostic", Event: "update", PathRegex: `/state$`, Repeat: true,
+		Steps: []StepConfig{{Name: "record", Message: "diagnostic"}},
+	}}, 0, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/one/state", "/two/state"} {
+		if err := handler(gnmidriver.Event{Type: "update", Path: path, Value: "DOWN"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = handler(gnmidriver.Event{Type: "update", Path: "/three/state", Value: "DOWN"})
+	if err == nil || !strings.Contains(err.Error(), "2-fire execution budget") {
+		t.Fatalf("repeat trigger fire budget was not enforced: %v", err)
+	}
+}
+
+func TestGNMIRepeatTriggerHonoursCooldown(t *testing.T) {
+	failed := false
+	validations := []deviceValidation{}
+	var log bytes.Buffer
+	ctx := &stepExecutionContext{
+		hostname: "router-1", sessionLog: &log, variables: map[string]string{},
+		runFailed: &failed, aggregated: &validations,
+	}
+	handler, err := gnmiTriggerHandlerWithBudget(ctx, nil, []GNMITriggerConfig{{
+		Name: "cooled", Event: "update", PathRegex: `/state$`, Repeat: true,
+		Steps: []StepConfig{{Name: "record", Message: "cooled diagnostic"}},
+	}}, 0, 5, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := gnmidriver.Event{Type: "update", Path: "/one/state", Value: "DOWN"}
+	if err := handler(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler(event); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(log.String(), "[gnmi:cooled]"); got != 1 {
+		t.Fatalf("cooldown allowed repeated action: count=%d\n%s", got, log.String())
 	}
 }

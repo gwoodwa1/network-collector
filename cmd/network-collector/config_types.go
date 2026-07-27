@@ -110,16 +110,20 @@ type EnrichmentConfig struct {
 }
 
 type GNMISubscribeConfig struct {
-	Paths                 []string            `mapstructure:"paths" yaml:"paths"`
-	Port                  int                 `mapstructure:"port" yaml:"port"`
-	Mode                  string              `mapstructure:"mode" yaml:"mode"`
-	StreamMode            string              `mapstructure:"stream_mode" yaml:"stream_mode"`
-	SampleIntervalSeconds int                 `mapstructure:"sample_interval_seconds" yaml:"sample_interval_seconds"`
-	DurationSeconds       int                 `mapstructure:"duration_seconds" yaml:"duration_seconds"`
-	MaxUpdates            int                 `mapstructure:"max_updates" yaml:"max_updates"`
-	SkipTLS               bool                `mapstructure:"skip_tls" yaml:"skip_tls"`
-	TimeoutSeconds        int                 `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
-	Triggers              []GNMITriggerConfig `mapstructure:"triggers" yaml:"triggers"`
+	Paths                  []string            `mapstructure:"paths" yaml:"paths"`
+	Port                   int                 `mapstructure:"port" yaml:"port"`
+	Mode                   string              `mapstructure:"mode" yaml:"mode"`
+	StreamMode             string              `mapstructure:"stream_mode" yaml:"stream_mode"`
+	SampleIntervalSeconds  int                 `mapstructure:"sample_interval_seconds" yaml:"sample_interval_seconds"`
+	DurationSeconds        int                 `mapstructure:"duration_seconds" yaml:"duration_seconds"`
+	MaxUpdates             int                 `mapstructure:"max_updates" yaml:"max_updates"`
+	MaxResponseBytes       int                 `mapstructure:"max_response_bytes" yaml:"max_response_bytes"`
+	MaxResponseCount       int                 `mapstructure:"max_response_count" yaml:"max_response_count"`
+	MaxTriggerFires        int                 `mapstructure:"max_trigger_fires" yaml:"max_trigger_fires"`
+	TriggerCooldownSeconds int                 `mapstructure:"trigger_cooldown_seconds" yaml:"trigger_cooldown_seconds"`
+	SkipTLS                bool                `mapstructure:"skip_tls" yaml:"skip_tls"`
+	TimeoutSeconds         int                 `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	Triggers               []GNMITriggerConfig `mapstructure:"triggers" yaml:"triggers"`
 }
 
 type GNMITriggerConfig struct {
@@ -132,6 +136,7 @@ type GNMITriggerConfig struct {
 	ValueRegex      string       `mapstructure:"value_regex" yaml:"value_regex"`
 	IncludeInitial  bool         `mapstructure:"include_initial" yaml:"include_initial"`
 	Once            bool         `mapstructure:"once" yaml:"once"`
+	Repeat          bool         `mapstructure:"repeat" yaml:"repeat"`
 	Condition       string       `mapstructure:"condition" yaml:"condition"`
 	Threshold       *float64     `mapstructure:"threshold" yaml:"threshold"`
 	CounterRate     bool         `mapstructure:"counter_rate" yaml:"counter_rate"`

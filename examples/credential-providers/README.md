@@ -17,6 +17,18 @@ Keep authentication tokens out of YAML:
 Credentials are resolved once per selected inventory device before network
 execution begins.
 
+Vault and 1Password executable selection is administrator-controlled and is
+not available in YAML. Set an absolute path before startup:
+
+```bash
+export NETWORK_COLLECTOR_VAULT_BINARY=/usr/local/bin/vault
+export NETWORK_COLLECTOR_ONEPASSWORD_BINARY=/usr/local/bin/op
+```
+
+Each executable must be a regular, non-symlinked file in a directory that the
+collector account cannot write. The executable is resolved and verified once
+when the provider is created; `PATH` is not searched.
+
 ## HashiCorp Vault KV
 
 Use [`vault.yaml`](vault.yaml):
@@ -95,7 +107,8 @@ For `credential_profile: datacenter`, the provider queries
 `UserName` and `Content` response fields to the collector credential contract.
 Client certificate fields are optional but must be supplied as a pair. The
 provider requires HTTPS with TLS 1.2 or newer and deliberately has no insecure
-TLS option.
+TLS option. Redirect responses are never followed, including redirects to the
+same origin.
 
 Every nested field has an environment fallback: `CYBERARK_CCP_URL`,
 `CYBERARK_APP_ID`, `CYBERARK_SAFE`, `CYBERARK_OBJECT_PREFIX`,

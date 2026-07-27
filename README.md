@@ -110,8 +110,12 @@ Native provider names are `hashicorp` (aliases `vault` and
 lookup paths, field names, and certificate paths in their nested YAML block;
 the corresponding vendor environment variables are fallbacks. Vault and
 1Password authentication tokens are intentionally not accepted as YAML
-fields. Their approved CLI names are fixed to `vault` and `op`; workbooks
-cannot select another executable. CyberArk uses the built-in HTTPS client.
+fields. Their executable paths are supplied outside the workbook through
+`NETWORK_COLLECTOR_VAULT_BINARY` and
+`NETWORK_COLLECTOR_ONEPASSWORD_BINARY`. Each path must be absolute, regular,
+non-symlinked, executable, and located in a directory that the collector
+account cannot modify. The paths are resolved and verified once at startup.
+CyberArk uses the built-in HTTPS client and refuses redirects.
 The generic `command`/`exec` credential provider has been removed.
 
 ### Docker
@@ -1323,7 +1327,14 @@ Use `parallel` for independent same-device branches. Each branch gets a separate
 
 A control step may define one of `repeat`, `foreach`, `use`, `block`, or `parallel`; executable fields belong in its nested steps. An `approval` gate is a standalone step. `when` may guard any normal or control step.
 
-Use `gnmi_subscribe` for finite telemetry collection and event-driven actions. `once` completes when the target sends its synchronization response. A `stream` must set `duration_seconds` or `max_updates`; subscriptions without an explicit duration remain bounded by `timeout_seconds` (30 seconds by default), so an ordinary playbook can never wait forever. The resulting JSON array supports `register`, `validations`, `drift`, retries, and structured output like other step output.
+Use `gnmi_subscribe` for finite telemetry collection and event-driven actions.
+`once` completes when the target sends its synchronization response. A `stream`
+must set `duration_seconds` or `max_updates`; subscriptions without an explicit
+duration remain bounded by `timeout_seconds` (30 seconds by default). The
+collector enforces a one-hour duration ceiling, 100,000-update ceiling, 1 MiB
+per-response ceiling, 10 MiB aggregate retained-response ceiling, and a bounded
+response count. The resulting JSON array supports `register`, `validations`,
+`drift`, retries, and structured output like other step output.
 
 Keep reusable connection and TLS settings on the inventory host:
 
@@ -1390,6 +1401,10 @@ Add `triggers` to react immediately to individual updates or deletes while the s
     stream_mode: on_change
     duration_seconds: 30
     max_updates: 20
+    max_response_bytes: 10485760
+    max_response_count: 10000
+    max_trigger_fires: 5
+    trigger_cooldown_seconds: 30
     triggers:
       - name: interface-became-up
         event: update
@@ -1413,7 +1428,14 @@ Add `triggers` to react immediately to individual updates or deletes while the s
   register: interface_changes
 ```
 
-Trigger `event` is `update` (the default) or `delete`. Match an exact canonical path with `path`, or use `path_regex`; updates may also match an exact `value` or `value_regex`. Initial values sent before the first gNMI sync response are ignored by default, preventing an already-UP interface from looking like a new transition. Set `include_initial: true` when the initial state should trigger, and `once: true` when a rule should run only on its first match.
+Trigger `event` is `update` (the default) or `delete`. Match an exact canonical
+path with `path`, or use `path_regex`; updates may also match an exact `value`
+or `value_regex`. Initial values sent before the first gNMI sync response are
+ignored by default, preventing an already-UP interface from looking like a new
+transition. Trigger actions default to once per canonical path. Repeated
+execution requires `repeat: true`, is capped by `max_trigger_fires`, and is
+rate-limited by `trigger_cooldown_seconds`. `once` and `repeat` are mutually
+exclusive.
 
 Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, registered Go functionality, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
 

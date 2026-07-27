@@ -44,6 +44,10 @@ func (executor *sequenceNETCONFExecutor) ExecuteNETCONF(config NETCONFStepConfig
 	return output, nil
 }
 
+func (executor *sequenceNETCONFExecutor) Execute(filter string) (string, error) {
+	return executor.ExecuteNETCONF(NETCONFStepConfig{Operation: "get", Payload: filter})
+}
+
 func interfaceReply(name, description string, enabled bool) string {
 	return `<rpc-reply><data><interfaces xmlns="http://openconfig.net/yang/interfaces"><interface><name>` +
 		xmlText(name) + `</name><config><name>` + xmlText(name) + `</name><description>` + xmlText(description) +

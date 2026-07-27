@@ -48,6 +48,10 @@ func (executor *fakeNETCONFStepExecutor) ExecuteNETCONF(config NETCONFStepConfig
 	return executor.output, executor.err
 }
 
+func (executor *fakeNETCONFStepExecutor) Execute(filter string) (string, error) {
+	return executor.ExecuteNETCONF(NETCONFStepConfig{Operation: "get", Payload: filter})
+}
+
 func TestNETCONFWorkflowStepRendersAndValidatesWithoutSSH(t *testing.T) {
 	ctx, failed := interactionContext(t, map[string]string{
 		"table":  "CUST3100.inet.0",

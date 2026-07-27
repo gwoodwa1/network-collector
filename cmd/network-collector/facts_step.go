@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -108,16 +107,9 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 		transports = ctx.factsDefaults.DefaultTransports
 	}
 	config := internalfacts.Config{Format: internalfacts.Format(strings.ToLower(format)), Subsets: subsets, Transports: transports}
-	timeout := 30 * time.Second
-	netconfExecutor := &lazyNETCONFExecutor{host: ctx.ip, username: ctx.username, password: ctx.password, timeout: timeout}
-	defer func() {
-		if err := netconfExecutor.Close(); err != nil {
-			slog.Warn("error closing facts NETCONF session", "hostname", ctx.hostname, "error", err)
-		}
-	}()
 	collector := internalfacts.Collector{
 		Platform: ctx.deviceType,
-		NETCONF:  netconfExecutor,
+		NETCONF:  ctx.netconf,
 		SSH:      sshFactsExecutor{client: client},
 		Parse: func(output, parser string) (json.RawMessage, error) {
 			parsed, err := parseOutputWithModule(output, parser, ctx.parsers)

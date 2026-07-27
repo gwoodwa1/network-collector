@@ -18,6 +18,7 @@ import (
 type HashicorpProvider struct {
 	Config  HashicorpConfig
 	Timeout time.Duration
+	Binary  string
 }
 
 func newHashicorpProvider(config HashicorpConfig, timeout time.Duration) (*HashicorpProvider, error) {
@@ -31,7 +32,7 @@ func newHashicorpProvider(config HashicorpConfig, timeout time.Duration) (*Hashi
 	config.CertFile = configuredValue(config.CertFile, "VAULT_CLIENT_CERT")
 	config.KeyFile = configuredValue(config.KeyFile, "VAULT_CLIENT_KEY")
 	if config.RemovedBinary != nil {
-		return nil, fmt.Errorf("hashicorp.binary is unsupported: executable selection is fixed to the approved vault CLI")
+		return nil, fmt.Errorf("hashicorp.binary is unsupported: executable selection is administrator-controlled through NETWORK_COLLECTOR_VAULT_BINARY")
 	}
 	if config.Mount == "" {
 		return nil, fmt.Errorf("hashicorp.mount or VAULT_KV_MOUNT is required")
@@ -48,7 +49,11 @@ func newHashicorpProvider(config HashicorpConfig, timeout time.Duration) (*Hashi
 	if (config.CertFile == "") != (config.KeyFile == "") {
 		return nil, fmt.Errorf("hashicorp.cert_file and hashicorp.key_file must be configured together")
 	}
-	return &HashicorpProvider{Config: config, Timeout: timeout}, nil
+	binary, err := secureProviderExecutable(os.Getenv("NETWORK_COLLECTOR_VAULT_BINARY"), "NETWORK_COLLECTOR_VAULT_BINARY")
+	if err != nil {
+		return nil, err
+	}
+	return &HashicorpProvider{Config: config, Timeout: timeout, Binary: binary}, nil
 }
 
 func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (Credentials, error) {
@@ -59,12 +64,8 @@ func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (
 	ctx, cancel := context.WithTimeout(ctx, provider.Timeout)
 	defer cancel()
 	secretPath := cleanSecretPath(provider.Config.PathPrefix, selector)
-	vaultBinary, err := exec.LookPath("vault")
-	if err != nil {
-		return Credentials{}, fmt.Errorf("approved vault CLI was not found in PATH: %w", err)
-	}
 	command := exec.CommandContext(
-		ctx, vaultBinary, "kv", "get", "-format=json",
+		ctx, provider.Binary, "kv", "get", "-format=json",
 		"-mount="+provider.Config.Mount, secretPath,
 	)
 	command.Env = minimalEnvironment(
@@ -100,6 +101,7 @@ func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (
 type OnePasswordProvider struct {
 	Config  OnePasswordConfig
 	Timeout time.Duration
+	Binary  string
 }
 
 func newOnePasswordProvider(config OnePasswordConfig, timeout time.Duration) (*OnePasswordProvider, error) {
@@ -109,12 +111,16 @@ func newOnePasswordProvider(config OnePasswordConfig, timeout time.Duration) (*O
 	config.UsernameField = defaultValue(config.UsernameField, "username")
 	config.PasswordField = defaultValue(config.PasswordField, "password")
 	if config.RemovedBinary != nil {
-		return nil, fmt.Errorf("onepassword.binary is unsupported: executable selection is fixed to the approved op CLI")
+		return nil, fmt.Errorf("onepassword.binary is unsupported: executable selection is administrator-controlled through NETWORK_COLLECTOR_ONEPASSWORD_BINARY")
 	}
 	if config.Vault == "" {
 		return nil, fmt.Errorf("onepassword.vault or OP_VAULT is required")
 	}
-	return &OnePasswordProvider{Config: config, Timeout: timeout}, nil
+	binary, err := secureProviderExecutable(os.Getenv("NETWORK_COLLECTOR_ONEPASSWORD_BINARY"), "NETWORK_COLLECTOR_ONEPASSWORD_BINARY")
+	if err != nil {
+		return nil, err
+	}
+	return &OnePasswordProvider{Config: config, Timeout: timeout, Binary: binary}, nil
 }
 
 func (provider *OnePasswordProvider) Resolve(ctx context.Context, target Target) (Credentials, error) {
@@ -125,13 +131,9 @@ func (provider *OnePasswordProvider) Resolve(ctx context.Context, target Target)
 	ctx, cancel := context.WithTimeout(ctx, provider.Timeout)
 	defer cancel()
 	item := provider.Config.ItemPrefix + selector
-	opBinary, err := exec.LookPath("op")
-	if err != nil {
-		return Credentials{}, fmt.Errorf("approved 1Password CLI was not found in PATH: %w", err)
-	}
 	read := func(field string) (string, error) {
 		reference := fmt.Sprintf("op://%s/%s/%s", provider.Config.Vault, item, field)
-		command := exec.CommandContext(ctx, opBinary, "read", reference)
+		command := exec.CommandContext(ctx, provider.Binary, "read", reference)
 		command.Env = minimalEnvironment(
 			[]string{"PATH", "HOME", "LANG", "LC_ALL", "OP_SERVICE_ACCOUNT_TOKEN", "OP_CONNECT_HOST", "OP_CONNECT_TOKEN"},
 			map[string]string{"OP_ACCOUNT": provider.Config.Account},
@@ -215,14 +217,8 @@ func newCyberArkProvider(config CyberArkConfig, timeout time.Duration) (*CyberAr
 				Proxy:           http.ProxyFromEnvironment,
 				TLSClientConfig: tlsConfig,
 			},
-			CheckRedirect: func(request *http.Request, previous []*http.Request) error {
-				if request.URL.Scheme != "https" {
-					return fmt.Errorf("CyberArk CCP refused non-HTTPS redirect")
-				}
-				if len(previous) >= 10 {
-					return fmt.Errorf("CyberArk CCP stopped after 10 redirects")
-				}
-				return nil
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
 			},
 		},
 	}, nil

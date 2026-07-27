@@ -66,6 +66,12 @@ func TestConnectExecuteCloseAgainstLocalServer(t *testing.T) {
 	if !strings.Contains(subscriptionOutput, "UP") || !strings.Contains(subscriptionOutput, "sync-response") {
 		t.Fatalf("unexpected subscription output: %s", subscriptionOutput)
 	}
+	if _, err := client.Subscribe(context.Background(), Subscription{
+		Paths: []string{"/interfaces/interface[name=Loopback0]/state/oper-status"},
+		Mode:  "once", MaxResponseBytes: 1,
+	}); err == nil || !strings.Contains(err.Error(), "aggregate response limit") {
+		t.Fatalf("aggregate response budget was not enforced: %v", err)
+	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +93,16 @@ func TestValidationErrors(t *testing.T) {
 		Paths: []string{"/interfaces"}, Mode: "once", SampleInterval: -time.Second,
 	}); err == nil {
 		t.Fatal("negative sample interval accepted")
+	}
+	for _, config := range []Subscription{
+		{Paths: []string{"/interfaces"}, Mode: "stream", Duration: MaxSubscriptionDuration + time.Second},
+		{Paths: []string{"/interfaces"}, Mode: "stream", MaxUpdates: MaxSubscriptionUpdates + 1},
+		{Paths: []string{"/interfaces"}, Mode: "once", MaxResponseBytes: MaxSubscriptionResponseBytes + 1},
+		{Paths: []string{"/interfaces"}, Mode: "once", MaxResponseCount: MaxSubscriptionResponses + 1},
+	} {
+		if _, err := client.Subscribe(context.Background(), config); err == nil {
+			t.Fatalf("oversized subscription budget accepted: %+v", config)
+		}
 	}
 }
 

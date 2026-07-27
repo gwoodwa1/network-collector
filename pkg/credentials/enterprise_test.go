@@ -17,8 +17,26 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return function(request)
 }
 
+func secureTestExecutable(t *testing.T, name, script string) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "admin-bin")
+	if err := os.Mkdir(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(directory, 0755)
+	})
+	return path
+}
+
 func TestHashicorpProviderUsesProfileAndKVV2Response(t *testing.T) {
-	helper := filepath.Join(t.TempDir(), "vault")
 	script := `#!/bin/sh
 set -eu
 case "$*" in
@@ -28,10 +46,8 @@ case "$*" in
   *) exit 2 ;;
 esac
 `
-	if err := os.WriteFile(helper, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(helper)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	helper := secureTestExecutable(t, "vault", script)
+	t.Setenv("NETWORK_COLLECTOR_VAULT_BINARY", helper)
 	provider, err := NewProvider(ProviderConfig{
 		Type: "hashicorp",
 		Hashicorp: HashicorpConfig{
@@ -50,7 +66,6 @@ esac
 }
 
 func TestOnePasswordProviderUsesProfileItem(t *testing.T) {
-	helper := filepath.Join(t.TempDir(), "op")
 	script := `#!/bin/sh
 set -eu
 case "$2" in
@@ -59,10 +74,8 @@ case "$2" in
   *) exit 2 ;;
 esac
 `
-	if err := os.WriteFile(helper, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(helper)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	helper := secureTestExecutable(t, "op", script)
+	t.Setenv("NETWORK_COLLECTOR_ONEPASSWORD_BINARY", helper)
 	provider, err := NewProvider(ProviderConfig{
 		Type: "1password",
 		OnePassword: OnePasswordConfig{
@@ -87,14 +100,14 @@ func TestEnterpriseProvidersRejectWorkbookBinarySelection(t *testing.T) {
 			Mount: "network", PathPrefix: "devices", RemovedBinary: "/bin/sh",
 		},
 	}, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+	if err == nil || !strings.Contains(err.Error(), "administrator-controlled") {
 		t.Fatalf("HashiCorp binary selection was not rejected: %v", err)
 	}
 	_, err = NewProvider(ProviderConfig{
 		Type:        "1password",
 		OnePassword: OnePasswordConfig{Vault: "Network Automation", RemovedBinary: "/bin/sh"},
 	}, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+	if err == nil || !strings.Contains(err.Error(), "administrator-controlled") {
 		t.Fatalf("1Password binary selection was not rejected: %v", err)
 	}
 }
@@ -132,6 +145,8 @@ func TestCyberArkProviderBuildsExactCCPQuery(t *testing.T) {
 }
 
 func TestEnterpriseProviderEnvironmentFallbackAndYAMLPrecedence(t *testing.T) {
+	t.Setenv("NETWORK_COLLECTOR_VAULT_BINARY", secureTestExecutable(t, "vault", "#!/bin/sh\nexit 0\n"))
+	t.Setenv("NETWORK_COLLECTOR_ONEPASSWORD_BINARY", secureTestExecutable(t, "op", "#!/bin/sh\nexit 0\n"))
 	t.Setenv("VAULT_ADDR", "https://environment-vault.example:8200")
 	t.Setenv("VAULT_KV_MOUNT", "environment-mount")
 	t.Setenv("VAULT_KV_PREFIX", "environment-prefix")
@@ -149,6 +164,36 @@ func TestEnterpriseProviderEnvironmentFallbackAndYAMLPrecedence(t *testing.T) {
 	onePassword, err := newOnePasswordProvider(OnePasswordConfig{}, 5*time.Second)
 	if err != nil || onePassword.Config.Vault != "Environment Vault" {
 		t.Fatalf("1Password environment fallback failed: provider=%#v error=%v", onePassword, err)
+	}
+}
+
+func TestEnterpriseProvidersRequireSecureAbsoluteRuntimeBinaries(t *testing.T) {
+	t.Setenv("NETWORK_COLLECTOR_VAULT_BINARY", "vault")
+	_, err := newHashicorpProvider(HashicorpConfig{Mount: "network", PathPrefix: "devices"}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("relative Vault executable accepted: %v", err)
+	}
+
+	directory := t.TempDir()
+	insecure := filepath.Join(directory, "vault")
+	if err := os.WriteFile(insecure, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NETWORK_COLLECTOR_VAULT_BINARY", insecure)
+	_, err = newHashicorpProvider(HashicorpConfig{Mount: "network", PathPrefix: "devices"}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "parent directory is writable") {
+		t.Fatalf("collector-writable executable directory accepted: %v", err)
+	}
+
+	target := secureTestExecutable(t, "vault-real", "#!/bin/sh\nexit 0\n")
+	link := filepath.Join(t.TempDir(), "vault-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NETWORK_COLLECTOR_VAULT_BINARY", link)
+	_, err = newHashicorpProvider(HashicorpConfig{Mount: "network", PathPrefix: "devices"}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("symlink Vault executable accepted: %v", err)
 	}
 }
 
@@ -189,6 +234,31 @@ func TestCyberArkProviderRequiresHTTPSAndCertificatePair(t *testing.T) {
 	base.Safe = "safe;Object=other"
 	if _, err := newCyberArkProvider(base, time.Second); err == nil || !strings.Contains(err.Error(), "unsafe") {
 		t.Fatalf("expected exact-query safety error, got %v", err)
+	}
+}
+
+func TestCyberArkProviderRefusesAllRedirects(t *testing.T) {
+	provider, err := newCyberArkProvider(CyberArkConfig{
+		URL:   "https://ccp.example/AIMWebService/api/Accounts",
+		AppID: "app", Safe: "safe",
+	}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{
+		"https://ccp.example/other",
+		"https://other.example/credential",
+		"http://ccp.example/insecure",
+		"https://127.0.0.1/credential",
+		"https://169.254.169.254/credential",
+	} {
+		request, requestErr := http.NewRequest(http.MethodGet, destination, nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		if redirectErr := provider.Client.CheckRedirect(request, nil); redirectErr != http.ErrUseLastResponse {
+			t.Fatalf("redirect to %s was not refused: %v", destination, redirectErr)
+		}
 	}
 }
 

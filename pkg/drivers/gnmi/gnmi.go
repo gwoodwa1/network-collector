@@ -19,13 +19,24 @@ import (
 )
 
 type Subscription struct {
-	Paths          []string
-	Mode           string
-	StreamMode     string
-	SampleInterval time.Duration
-	Duration       time.Duration
-	MaxUpdates     int
+	Paths            []string
+	Mode             string
+	StreamMode       string
+	SampleInterval   time.Duration
+	Duration         time.Duration
+	MaxUpdates       int
+	MaxResponseBytes int
+	MaxResponseCount int
 }
+
+const (
+	MaxSubscriptionDuration      = time.Hour
+	MaxSubscriptionUpdates       = 100_000
+	MaxSubscriptionResponseBytes = 10 * 1024 * 1024
+	MaxSingleResponseBytes       = 1024 * 1024
+	MaxSubscriptionResponses     = 100_000
+	DefaultSubscriptionResponses = 10_000
+)
 
 type Event struct {
 	Type      string      `json:"type"`
@@ -205,6 +216,26 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 	if mode == "stream" && config.Duration <= 0 && config.MaxUpdates <= 0 {
 		return "", errors.New("stream subscriptions require duration or max_updates")
 	}
+	if config.Duration < 0 || config.Duration > MaxSubscriptionDuration {
+		return "", fmt.Errorf("subscription duration must be between 1s and %s", MaxSubscriptionDuration)
+	}
+	if config.MaxUpdates < 0 || config.MaxUpdates > MaxSubscriptionUpdates {
+		return "", fmt.Errorf("subscription max_updates must be between 1 and %d", MaxSubscriptionUpdates)
+	}
+	maxResponseBytes := config.MaxResponseBytes
+	if maxResponseBytes == 0 {
+		maxResponseBytes = MaxSubscriptionResponseBytes
+	}
+	if maxResponseBytes < 0 || maxResponseBytes > MaxSubscriptionResponseBytes {
+		return "", fmt.Errorf("subscription max_response_bytes must be between 1 and %d", MaxSubscriptionResponseBytes)
+	}
+	maxResponseCount := config.MaxResponseCount
+	if maxResponseCount == 0 {
+		maxResponseCount = DefaultSubscriptionResponses
+	}
+	if maxResponseCount < 0 || maxResponseCount > MaxSubscriptionResponses {
+		return "", fmt.Errorf("subscription max_response_count must be between 1 and %d", MaxSubscriptionResponses)
+	}
 	streamMode := strings.ToLower(strings.TrimSpace(config.StreamMode))
 	if streamMode == "" {
 		streamMode = "target_defined"
@@ -260,6 +291,7 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 		responses, failures = g.target.SubscribeStreamChan(ctx, request, "network-collector")
 	}
 	encoded := make([]json.RawMessage, 0)
+	responseBytes := 0
 	updates := 0
 	options := &formatters.MarshalOptions{Multiline: false}
 	synced := false
@@ -276,7 +308,17 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 			if err != nil {
 				return "", fmt.Errorf("failed to marshal gNMI subscription response: %w", err)
 			}
+			if len(body) > MaxSingleResponseBytes {
+				return "", fmt.Errorf("gNMI subscription response exceeds the %d-byte per-response limit", MaxSingleResponseBytes)
+			}
+			if len(encoded) >= maxResponseCount {
+				return "", fmt.Errorf("gNMI subscription exceeded the %d-response limit", maxResponseCount)
+			}
+			if len(body) > maxResponseBytes-responseBytes {
+				return "", fmt.Errorf("gNMI subscription exceeded the %d-byte aggregate response limit", maxResponseBytes)
+			}
 			encoded = append(encoded, json.RawMessage(body))
+			responseBytes += len(body)
 			if notification := response.GetUpdate(); notification != nil {
 				updates++
 				if handler != nil {

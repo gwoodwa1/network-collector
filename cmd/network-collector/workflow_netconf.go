@@ -9,6 +9,7 @@ import (
 )
 
 type netconfStepExecutor interface {
+	Execute(string) (string, error)
 	ExecuteNETCONF(NETCONFStepConfig) (string, error)
 }
 

@@ -1338,6 +1338,10 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 }
 
 func executeGNMISubscribe(ctx *stepExecutionContext, sshClient **ssh.Client, config GNMISubscribeConfig, depth int) (string, error) {
+	maxTriggerFires, triggerCooldown, err := validateGNMIExecutionBudget(config)
+	if err != nil {
+		return "", err
+	}
 	port := config.Port
 	if port <= 0 && ctx.gnmi != nil {
 		port = ctx.gnmi.Port
@@ -1381,10 +1385,13 @@ func executeGNMISubscribe(ctx *stepExecutionContext, sshClient **ssh.Client, con
 	defer client.Close()
 	subscription := gnmidriver.Subscription{
 		Paths: config.Paths, Mode: config.Mode, StreamMode: config.StreamMode,
-		SampleInterval: time.Duration(config.SampleIntervalSeconds) * time.Second,
-		Duration:       time.Duration(config.DurationSeconds) * time.Second, MaxUpdates: config.MaxUpdates,
+		SampleInterval:   time.Duration(config.SampleIntervalSeconds) * time.Second,
+		Duration:         time.Duration(config.DurationSeconds) * time.Second,
+		MaxUpdates:       config.MaxUpdates,
+		MaxResponseBytes: config.MaxResponseBytes,
+		MaxResponseCount: config.MaxResponseCount,
 	}
-	handler, err := gnmiTriggerHandler(ctx, sshClient, config.Triggers, depth)
+	handler, err := gnmiTriggerHandlerWithBudget(ctx, sshClient, config.Triggers, depth, maxTriggerFires, triggerCooldown)
 	if err != nil {
 		return "", err
 	}
@@ -1392,6 +1399,54 @@ func executeGNMISubscribe(ctx *stepExecutionContext, sshClient **ssh.Client, con
 }
 
 func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, triggers []GNMITriggerConfig, depth int) (gnmidriver.EventHandler, error) {
+	return gnmiTriggerHandlerWithBudget(ctx, sshClient, triggers, depth, defaultGNMITriggerFires, 0)
+}
+
+const (
+	defaultGNMITriggerFires    = 5
+	maxGNMITriggerFires        = 100
+	defaultGNMITriggerCooldown = 30 * time.Second
+	minGNMITriggerCooldown     = time.Second
+	maxGNMITriggerCooldown     = time.Hour
+)
+
+func validateGNMIExecutionBudget(config GNMISubscribeConfig) (int, time.Duration, error) {
+	duration := time.Duration(config.DurationSeconds) * time.Second
+	if config.DurationSeconds < 0 || duration > gnmidriver.MaxSubscriptionDuration {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.duration_seconds must be between 1 and %d", int(gnmidriver.MaxSubscriptionDuration/time.Second))
+	}
+	if config.MaxUpdates < 0 || config.MaxUpdates > gnmidriver.MaxSubscriptionUpdates {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.max_updates must be between 1 and %d", gnmidriver.MaxSubscriptionUpdates)
+	}
+	if config.MaxResponseBytes < 0 || config.MaxResponseBytes > gnmidriver.MaxSubscriptionResponseBytes {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.max_response_bytes must be between 1 and %d", gnmidriver.MaxSubscriptionResponseBytes)
+	}
+	if config.MaxResponseCount < 0 || config.MaxResponseCount > gnmidriver.MaxSubscriptionResponses {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.max_response_count must be between 1 and %d", gnmidriver.MaxSubscriptionResponses)
+	}
+	maxFires := config.MaxTriggerFires
+	if maxFires == 0 {
+		maxFires = defaultGNMITriggerFires
+	}
+	if maxFires < 1 || maxFires > maxGNMITriggerFires {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.max_trigger_fires must be between 1 and %d", maxGNMITriggerFires)
+	}
+	cooldown := time.Duration(config.TriggerCooldownSeconds) * time.Second
+	if config.TriggerCooldownSeconds == 0 {
+		cooldown = defaultGNMITriggerCooldown
+	}
+	if cooldown < minGNMITriggerCooldown || cooldown > maxGNMITriggerCooldown {
+		return 0, 0, fmt.Errorf("gnmi_subscribe.trigger_cooldown_seconds must be between %d and %d", int(minGNMITriggerCooldown/time.Second), int(maxGNMITriggerCooldown/time.Second))
+	}
+	for _, trigger := range config.Triggers {
+		if trigger.Once && trigger.Repeat {
+			return 0, 0, fmt.Errorf("gNMI trigger %q cannot combine once and repeat", trigger.Name)
+		}
+	}
+	return maxFires, cooldown, nil
+}
+
+func gnmiTriggerHandlerWithBudget(ctx *stepExecutionContext, sshClient **ssh.Client, triggers []GNMITriggerConfig, depth, maxFires int, cooldown time.Duration) (gnmidriver.EventHandler, error) {
 	if len(triggers) == 0 {
 		return nil, nil
 	}
@@ -1444,6 +1499,9 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 		if trigger.CounterRate && eventType == "delete" {
 			return nil, fmt.Errorf("gNMI trigger %q counter_rate requires update events", trigger.Name)
 		}
+		if trigger.Once && trigger.Repeat {
+			return nil, fmt.Errorf("gNMI trigger %q cannot combine once and repeat", trigger.Name)
+		}
 		var err error
 		if pattern := strings.TrimSpace(trigger.PathRegex); pattern != "" {
 			pathPatterns[index], err = regexp.Compile(pattern)
@@ -1463,9 +1521,12 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 	for index := range fired {
 		fired[index] = map[string]bool{}
 	}
+	fireCounts := make([]int, len(triggers))
+	lastFired := make([]time.Time, len(triggers))
 	return func(event gnmidriver.Event) error {
 		for index, trigger := range triggers {
-			if trigger.Once && fired[index][event.Path] {
+			effectiveOnce := trigger.Once || !trigger.Repeat
+			if effectiveOnce && fired[index][event.Path] {
 				continue
 			}
 			if event.Initial && !trigger.IncludeInitial {
@@ -1506,8 +1567,17 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 			if !ready {
 				continue
 			}
+			if fireCounts[index] >= maxFires {
+				return fmt.Errorf("gNMI trigger %q exceeded its %d-fire execution budget", trigger.Name, maxFires)
+			}
+			now := time.Now()
+			if trigger.Repeat && !lastFired[index].IsZero() && now.Sub(lastFired[index]) < cooldown {
+				continue
+			}
 
 			fired[index][event.Path] = true
+			fireCounts[index]++
+			lastFired[index] = now
 			eventJSON, err := json.Marshal(event)
 			if err != nil {
 				return err
