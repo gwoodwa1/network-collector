@@ -4,6 +4,8 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+## [1.2.1] - 2026-07-27
+
 - Added event-driven gNMI `Subscribe` triggers for update and delete notifications, with post-sync filtering, exact or regular-expression matching, event variables, lifecycle events, and immediate nested SSH, NETCONF, local, or reusable workflow actions.
 - Added inventory-level gNMI connection profiles for plaintext lab connections, verified TLS, TLS without verification, and mutual TLS, with certificate paths resolved relative to the inventory file.
 - Added numeric gNMI trigger thresholds and counter-rate baselines, including percentage-drop alarms, diagnostic variables, optional run failure, and path-turn-up, traffic, CPU, and combined change-window examples.
@@ -11,6 +13,12 @@ All notable changes to Network Collector are documented here.
 - Added per-path numeric trigger state and absolute-drop baselines for logarithmic telemetry, with an all-interface RX/TX optical-level guard example.
 - Added a standalone combined change-health monitor for use beside another collector run, failing on optical degradation or any new packet discard or interface error across wildcard-selected paths.
 - Extended the combined monitor with parallel on-change IS-IS, LDP, and BGP neighbor health, including inverse healthy-state matching, initial-state checks, neighbor deletion detection, and protocol diagnostics.
+- Added declarative SSH desired-state adapters for interfaces, VRFs, and IPv4 static routes across IOS XR, IOS XE, NX-OS, EOS, Junos, and SR OS where supported, including preconditions, check-mode plans, verification, and automatic rollback.
+- Added guarded SSH and NETCONF change examples covering lock, edit, validate, commit, discard, unlock, verification-failure behavior, and optional automatic rollback.
+- Added CyberArk, HashiCorp Vault, and 1Password credential-provider examples, with inventory references and environment-based provider inputs that keep retrieved secrets out of YAML.
+- Added host-specific inventory variables, deterministic precedence, and a full preflight that rejects referenced variables which are undefined or empty before any device step executes.
+- Added a standalone professional HTML change reporter and first-class workbook `report:` integration, with structured outcome, validation, rollback, drift, gNMI event, timeline, evidence, and embedded PNG branding sections.
+- Migrated the IOS XR routing monitor's end-of-run traffic report to the shared professional, browser-free HTML renderer while retaining interface charts and default-route transition markers.
 - Updated direct and transitive Go dependencies to their latest compatible releases.
 
 ## [1.2.0] - 2026-07-25
@@ -83,3 +91,4 @@ First stable release.
 [1.0.2]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.0.2
 [1.1.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.1.0
 [1.2.0]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.2.0
+[1.2.1]: https://github.com/gwoodwa1/network-collector/releases/tag/v1.2.1
