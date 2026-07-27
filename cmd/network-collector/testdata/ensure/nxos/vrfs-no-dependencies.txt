@@ -1,0 +1,6 @@
+vrf context CUSTOMER-A
+  rd 65000:100
+  address-family ipv4 unicast
+    route-target import 65000:100
+    route-target import 65000:101
+    route-target export 65000:100

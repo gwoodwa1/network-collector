@@ -549,7 +549,8 @@ statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
 and
 [`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
-IOS XR, Arista EOS, and Cisco IOS-XE also support declarative SSH VRFs:
+IOS XR, Arista EOS, Cisco IOS-XE, and Cisco NX-OS also support declarative
+SSH VRFs:
 
 ```yaml
 ensure:
@@ -568,7 +569,10 @@ RD and IPv4-unicast import/export route targets are compared explicitly.
 Changes produce ordered forward and inverse plans while leaving other address
 families and policies untouched. EOS keeps `vrf instance` separate from its
 `router bgp` VRF and discovers the existing local BGP ASN rather than asking
-the workbook to duplicate it. `state: absent` first scans the running
+the workbook to duplicate it. NX-OS manages RD and IPv4-unicast route targets
+under `vrf context`, understands both directional and `route-target both`
+forms, and persists with `copy running-config startup-config`. `state: absent`
+first scans the running
 configuration and refuses deletion if an interface, static route, BGP
 neighbor/policy, or other configuration hierarchy references the VRF.
 `cascade: true` is intentionally rejected until dependency removal can be
@@ -577,7 +581,9 @@ planned without broad deletion. See
 and
 [`49-arista-eos-declarative-vrf.yaml`](examples/workflow-operations/arista/49-arista-eos-declarative-vrf.yaml)
 and
-[`50-cisco-iosxe-declarative-vrf.yaml`](examples/workflow-operations/iosxe/50-cisco-iosxe-declarative-vrf.yaml).
+[`50-cisco-iosxe-declarative-vrf.yaml`](examples/workflow-operations/iosxe/50-cisco-iosxe-declarative-vrf.yaml)
+and
+[`57-cisco-nxos-declarative-vrf.yaml`](examples/workflow-operations/nxos/57-cisco-nxos-declarative-vrf.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,

@@ -16,6 +16,7 @@ type sshVRFState struct {
 	RouteDistinguisher string   `json:"route_distinguisher,omitempty"`
 	ImportRouteTargets []string `json:"import_route_targets"`
 	ExportRouteTargets []string `json:"export_route_targets"`
+	BothRouteTargets   []string `json:"both_route_targets,omitempty"`
 	Dependencies       []string `json:"dependencies,omitempty"`
 }
 
@@ -137,9 +138,11 @@ func sshVRFAdapter(platform string) (sshVRFPlatformAdapter, error) {
 		return sshVRFPlatformAdapter{parse: parseEOSVRFState, commands: eosVRFCommands}, nil
 	case "cisco_iosxe":
 		return sshVRFPlatformAdapter{parse: parseIOSXEVRFState, commands: iosXEVRFCommands}, nil
+	case "cisco_nxos":
+		return sshVRFPlatformAdapter{parse: parseNXOSVRFState, commands: nxOSVRFCommands}, nil
 	default:
 		return sshVRFPlatformAdapter{}, fmt.Errorf(
-			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe",
+			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos",
 			platform,
 		)
 	}
@@ -380,6 +383,81 @@ func parseIOSXEVRFState(output, name string) sshVRFState {
 	return state
 }
 
+func parseNXOSVRFState(output, name string) sshVRFState {
+	state := sshVRFState{ImportRouteTargets: []string{}, ExportRouteTargets: []string{}}
+	inVRF := false
+	vrfIndent := -1
+	inIPv4AF := false
+	afIndent := -1
+	topLevel := ""
+	dependencies := map[string]struct{}{}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		indent := leadingSpaces(raw)
+		if indent == 0 && trimmed != "!" {
+			topLevel = trimmed
+		}
+		if !inVRF && indent == 0 && trimmed == "vrf context "+name {
+			inVRF = true
+			vrfIndent = indent
+			inIPv4AF = false
+			state.Exists = true
+			continue
+		}
+		if inVRF {
+			if indent <= vrfIndent {
+				inVRF = false
+				inIPv4AF = false
+				if trimmed != "!" {
+					topLevel = trimmed
+				}
+			} else {
+				if inIPv4AF && indent <= afIndent {
+					inIPv4AF = false
+				}
+				fields := strings.Fields(trimmed)
+				switch {
+				case len(fields) == 2 && fields[0] == "rd":
+					state.RouteDistinguisher = fields[1]
+				case trimmed == "address-family ipv4 unicast":
+					inIPv4AF = true
+					afIndent = indent
+				case inIPv4AF && len(fields) == 3 && fields[0] == "route-target" && fields[1] == "import":
+					state.ImportRouteTargets = append(state.ImportRouteTargets, fields[2])
+				case inIPv4AF && len(fields) == 3 && fields[0] == "route-target" && fields[1] == "export":
+					state.ExportRouteTargets = append(state.ExportRouteTargets, fields[2])
+				case inIPv4AF && len(fields) == 3 && fields[0] == "route-target" && fields[1] == "both":
+					state.BothRouteTargets = append(state.BothRouteTargets, fields[2])
+					state.ImportRouteTargets = append(state.ImportRouteTargets, fields[2])
+					state.ExportRouteTargets = append(state.ExportRouteTargets, fields[2])
+				case strings.HasPrefix(trimmed, "ip route "):
+					dependencies["vrf context "+name+" ip route"] = struct{}{}
+				case trimmed != "!" && trimmed != "address-family ipv4 unicast":
+					dependencies["vrf context "+name+" "+trimmed] = struct{}{}
+				}
+				continue
+			}
+		}
+		if indent > 0 && trimmed == "vrf member "+name && strings.HasPrefix(topLevel, "interface ") {
+			dependencies[topLevel] = struct{}{}
+		}
+		if indent > 0 && trimmed == "vrf "+name && strings.HasPrefix(topLevel, "router bgp ") {
+			dependencies[topLevel+" vrf "+name] = struct{}{}
+		}
+	}
+	state.ImportRouteTargets = normalizedRouteTargets(state.ImportRouteTargets)
+	state.ExportRouteTargets = normalizedRouteTargets(state.ExportRouteTargets)
+	state.BothRouteTargets = normalizedRouteTargets(state.BothRouteTargets)
+	for dependency := range dependencies {
+		state.Dependencies = append(state.Dependencies, dependency)
+	}
+	sort.Strings(state.Dependencies)
+	return state
+}
+
 func sshVRFMatches(current, desired sshVRFState) bool {
 	if current.Exists != desired.Exists {
 		return false
@@ -540,6 +618,70 @@ func iosXERouteTargetChanges(direction string, current, desired []string) []stri
 		}
 	}
 	return changes
+}
+
+func nxOSVRFCommands(name string, current, desired sshVRFState) []string {
+	if current.Exists && !desired.Exists {
+		return []string{"configure terminal", "no vrf context " + name, "end", "copy running-config startup-config"}
+	}
+	if !desired.Exists {
+		return nil
+	}
+	commands := []string{"configure terminal", "vrf context " + name}
+	if current.RouteDistinguisher != desired.RouteDistinguisher {
+		if desired.RouteDistinguisher == "" {
+			commands = append(commands, " no rd")
+		} else {
+			commands = append(commands, " rd "+desired.RouteDistinguisher)
+		}
+	}
+	targetChanges := nxOSRouteTargetChanges(current, desired)
+	if len(targetChanges) > 0 {
+		commands = append(commands, " address-family ipv4 unicast")
+		for _, change := range targetChanges {
+			commands = append(commands, "  "+change)
+		}
+	}
+	return append(commands, "end", "copy running-config startup-config")
+}
+
+func nxOSRouteTargetChanges(current, desired sshVRFState) []string {
+	changes := []string{}
+	for _, target := range current.BothRouteTargets {
+		if !containsString(desired.BothRouteTargets, target) &&
+			!(containsString(desired.ImportRouteTargets, target) && containsString(desired.ExportRouteTargets, target)) {
+			changes = append(changes, "no route-target both "+target)
+		}
+	}
+	for _, target := range desired.BothRouteTargets {
+		if !containsString(current.BothRouteTargets, target) {
+			changes = append(changes, "route-target both "+target)
+		}
+	}
+
+	currentImport := withoutStrings(current.ImportRouteTargets, current.BothRouteTargets)
+	currentExport := withoutStrings(current.ExportRouteTargets, current.BothRouteTargets)
+	desiredImport := withoutStrings(desired.ImportRouteTargets, desired.BothRouteTargets)
+	desiredExport := withoutStrings(desired.ExportRouteTargets, desired.BothRouteTargets)
+	for _, target := range current.BothRouteTargets {
+		if containsString(desired.ImportRouteTargets, target) && containsString(desired.ExportRouteTargets, target) {
+			desiredImport = withoutStrings(desiredImport, []string{target})
+			desiredExport = withoutStrings(desiredExport, []string{target})
+		}
+	}
+	changes = append(changes, iosXERouteTargetChanges("import", currentImport, desiredImport)...)
+	changes = append(changes, iosXERouteTargetChanges("export", currentExport, desiredExport)...)
+	return changes
+}
+
+func withoutStrings(values, removed []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if !containsString(removed, value) {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func iosXRRouteTargetChanges(current, desired []string) []string {

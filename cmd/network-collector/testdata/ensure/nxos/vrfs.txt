@@ -1,0 +1,14 @@
+vrf context CUSTOMER-A
+  rd 65000:100
+  address-family ipv4 unicast
+    route-target import 65000:100
+    route-target export 65000:100
+    route-target import 65000:100 evpn
+  ip route 203.0.113.0/24 192.0.2.10
+interface Ethernet1/3
+  description Customer A handoff
+  vrf member CUSTOMER-A
+router bgp 65000
+  vrf CUSTOMER-A
+    address-family ipv4 unicast
+      neighbor 192.0.2.20 remote-as 65100

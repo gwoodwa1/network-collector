@@ -1954,8 +1954,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 56 {
-		t.Fatalf("expected fifty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 57 {
+		t.Fatalf("expected fifty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1974,8 +1974,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 56 {
-		t.Fatalf("expected fifty-six loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 57 {
+		t.Fatalf("expected fifty-seven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -2142,6 +2142,16 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		len(iosxeVRFState[1].Ensure.Attributes.ExportRouteTargets) != 1 ||
 		!iosxeVRFState[1].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative IOS-XE VRF example is incomplete: %+v", iosxeVRFState)
+	}
+	nxosVRFState := loaded["57-cisco-nxos-declarative-vrf.yaml"].SSH[0].Steps
+	if len(nxosVRFState) != 2 || nxosVRFState[0].Approval == nil ||
+		nxosVRFState[1].Ensure == nil || nxosVRFState[1].Ensure.Resource != "vrf" ||
+		nxosVRFState[1].Ensure.Transport != "ssh" ||
+		nxosVRFState[1].Ensure.Attributes.RouteDistinguisher == "" ||
+		len(nxosVRFState[1].Ensure.Attributes.ImportRouteTargets) != 1 ||
+		len(nxosVRFState[1].Ensure.Attributes.ExportRouteTargets) != 1 ||
+		!nxosVRFState[1].Ensure.RollbackOnFailure {
+		t.Fatalf("declarative NX-OS VRF example is incomplete: %+v", nxosVRFState)
 	}
 	for _, example := range []string{
 		"51-iosxr-inventory-vars-vrf.yaml",

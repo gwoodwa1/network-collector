@@ -1192,6 +1192,173 @@ func TestIOSXEVRFParsingReplacementAndDependencyRefusal(t *testing.T) {
 	}
 }
 
+func TestNXOSVRFParsingFindsAttributesAndDependencies(t *testing.T) {
+	state := parseNXOSVRFState(readPlatformEnsureFixture(t, "nxos", "vrfs.txt"), "CUSTOMER-A")
+	if !state.Exists || state.RouteDistinguisher != "65000:100" ||
+		len(state.ImportRouteTargets) != 1 || state.ImportRouteTargets[0] != "65000:100" ||
+		len(state.ExportRouteTargets) != 1 || state.ExportRouteTargets[0] != "65000:100" ||
+		len(state.Dependencies) != 4 ||
+		state.Dependencies[0] != "interface Ethernet1/3" ||
+		state.Dependencies[1] != "router bgp 65000 vrf CUSTOMER-A" ||
+		state.Dependencies[2] != "vrf context CUSTOMER-A ip route" ||
+		state.Dependencies[3] != "vrf context CUSTOMER-A route-target import 65000:100 evpn" {
+		t.Fatalf("unexpected NX-OS VRF state: %+v", state)
+	}
+}
+
+func TestNXOSVRFCheckModePlansReplacementAndInverse(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:100", "65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `"action": "would-change"`) ||
+		!strings.Contains(output, `" rd 65000:110"`) ||
+		!strings.Contains(output, `"  no route-target import 65000:101"`) ||
+		!strings.Contains(output, `"  no route-target export 65000:100"`) ||
+		!strings.Contains(output, `" rd 65000:100"`) ||
+		!strings.Contains(output, `"  route-target import 65000:101"`) ||
+		!strings.Contains(output, `"copy running-config startup-config"`) {
+		t.Fatalf("NX-OS replacement or inverse plan is incomplete: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestNXOSVRFRouteTargetBothIsSemanticallyIdempotentAndReversible(t *testing.T) {
+	current := parseNXOSVRFState(`vrf context CUSTOMER-A
+  rd 65000:100
+  address-family ipv4 unicast
+    route-target both 65000:100
+`, "CUSTOMER-A")
+	desired := sshVRFState{
+		Exists: true, RouteDistinguisher: "65000:100",
+		ImportRouteTargets: []string{"65000:100"}, ExportRouteTargets: []string{"65000:100"},
+	}
+	if !sshVRFMatches(current, desired) {
+		t.Fatalf("route-target both should satisfy matching import/export state: %+v", current)
+	}
+	if changes := nxOSRouteTargetChanges(current, desired); len(changes) != 0 {
+		t.Fatalf("semantically identical route-target both produced changes: %+v", changes)
+	}
+
+	separate := sshVRFState{
+		Exists: true, ImportRouteTargets: []string{"65000:100"}, ExportRouteTargets: []string{"65000:100"},
+	}
+	changes := nxOSRouteTargetChanges(separate, current)
+	joined := strings.Join(changes, "\n")
+	if !strings.Contains(joined, "route-target both 65000:100") ||
+		!strings.Contains(joined, "no route-target import 65000:100") ||
+		!strings.Contains(joined, "no route-target export 65000:100") {
+		t.Fatalf("directional-to-both inverse was incomplete: %+v", changes)
+	}
+}
+
+func TestNXOSVRFIsIdempotentAndDeletionRefusesDependencies(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:100",
+			ImportRouteTargets: []string{"65000:100", "65000:101"},
+			ExportRouteTargets: []string{"65000:100"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 || !strings.Contains(output, `"changed": false`) {
+		t.Fatalf("in-sync NX-OS VRF sent a mutation: commands=%+v output=%s", executor.commands, output)
+	}
+
+	dependent := &sequenceSSHEnsureExecutor{outputs: []string{readPlatformEnsureFixture(t, "nxos", "vrfs.txt")}}
+	_, _, err = executeSSHEnsureStep(ctx, dependent, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interface Ethernet1/3") ||
+		!strings.Contains(err.Error(), "router bgp 65000 vrf CUSTOMER-A") ||
+		!strings.Contains(err.Error(), "vrf context CUSTOMER-A ip route") {
+		t.Fatalf("dependent NX-OS VRF deletion was not refused clearly: %v", err)
+	}
+	if len(dependent.commands) != 1 {
+		t.Fatalf("NX-OS VRF dependency refusal sent a mutation: %+v", dependent.commands)
+	}
+}
+
+func TestNXOSVRFAppliesAndVerifies(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "vrfs-no-dependencies.txt")
+	verified := fixture + `
+vrf context CUSTOMER-C
+  rd 65000:300
+  address-family ipv4 unicast
+    route-target import 65000:300
+    route-target export 65000:300
+`
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Copy complete.", verified}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-C", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:300",
+			ImportRouteTargets: []string{"65000:300"},
+			ExportRouteTargets: []string{"65000:300"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "vrf context CUSTOMER-C") ||
+		!strings.Contains(executor.commands[1], "address-family ipv4 unicast") ||
+		!strings.Contains(executor.commands[1], "copy running-config startup-config") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("NX-OS VRF did not apply and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestNXOSVRFVerificationFailureRollsBack(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{
+		outputs: []string{fixture, "Copy complete.", fixture, "Copy complete."},
+	}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "automatic rollback completed") {
+		t.Fatalf("NX-OS verification failure did not remain failed after rollback: %v", err)
+	}
+	if len(executor.commands) != 4 ||
+		!strings.Contains(executor.commands[3], " rd 65000:100") ||
+		!strings.Contains(executor.commands[3], "  route-target import 65000:101") ||
+		!strings.Contains(output, `"rollback_status": "succeeded"`) {
+		t.Fatalf("NX-OS inverse rollback was incomplete: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
