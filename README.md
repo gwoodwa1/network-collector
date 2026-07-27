@@ -480,8 +480,9 @@ device is already compliant. With `--check`, the discovery still runs but the
 edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
-IOS XR, Arista EOS, and Cisco IOS-XE support state-aware SSH `ensure` adapters
-for interfaces and exact static routes:
+IOS XR, Arista EOS, Cisco IOS-XE, and Cisco NX-OS support state-aware SSH
+`ensure` adapters for interfaces. IOS XR, EOS, and IOS-XE also support exact
+static routes:
 
 ```yaml
 ssh:
@@ -514,10 +515,12 @@ precondition whenever a mutation is required: selecting an active port with
 different desired configuration fails before any write. An already compliant
 interface remains idempotent and sends no configuration. IOS XR uses commit
 semantics; EOS and IOS-XE exit configuration mode and save with `write
-memory`. See
+memory`; NX-OS uses `copy running-config startup-config`. See
 [`38-arista-eos-declarative-interface.yaml`](examples/workflow-operations/arista/38-arista-eos-declarative-interface.yaml)
 and
 [`40-cisco-iosxe-declarative-interface.yaml`](examples/workflow-operations/iosxe/40-cisco-iosxe-declarative-interface.yaml)
+and
+[`42-cisco-nxos-declarative-interface.yaml`](examples/workflow-operations/nxos/42-cisco-nxos-declarative-interface.yaml)
 for those platform forms.
 
 The static-route adapters discover native configuration (`router static` on

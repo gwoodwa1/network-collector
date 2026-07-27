@@ -1,0 +1,4 @@
+Ethernet1/3 is administratively down, line protocol is down (Administratively down)
+  Hardware: Ethernet, address: 5254.0012.3456 (bia 5254.0012.3456)
+  Description: Example customer handoff
+  MTU 1500 bytes, BW 1000000 Kbit, DLY 10 usec

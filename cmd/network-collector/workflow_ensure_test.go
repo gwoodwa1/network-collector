@@ -478,6 +478,47 @@ func TestIOSXEInterfaceFixturesAndEnsure(t *testing.T) {
 	}
 }
 
+func TestNXOSInterfaceFixturesAndEnsure(t *testing.T) {
+	disabled := readPlatformEnsureFixture(t, "nxos", "interface-administratively-down.txt")
+	state, err := parseNXOSInterfaceState(disabled, "Ethernet1/3")
+	if err != nil || state.Enabled == nil || *state.Enabled || state.Description == nil ||
+		*state.Description != "Example customer handoff" {
+		t.Fatalf("unexpected NX-OS disabled state: state=%+v error=%v", state, err)
+	}
+	enabledFixture := strings.Replace(
+		disabled,
+		"is administratively down, line protocol is down (Administratively down)",
+		"is up, line protocol is up (connected)",
+		1,
+	)
+	enabledFixture = strings.Replace(enabledFixture, "Example customer handoff", "new customer handoff", 1)
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{disabled, "Copy complete.", enabledFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	description := "new customer handoff"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "Ethernet1/3", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "copy running-config startup-config") ||
+		strings.Contains(executor.commands[1], "write memory") ||
+		strings.Contains(executor.commands[1], "commit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("NX-OS ensure did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+	upNoDescription, err := parseNXOSInterfaceState(
+		readPlatformEnsureFixture(t, "nxos", "interface-up-no-description.txt"),
+		"Ethernet1/3",
+	)
+	if err != nil || upNoDescription.Enabled == nil || !*upNoDescription.Enabled || upNoDescription.Description != nil {
+		t.Fatalf("unexpected NX-OS enabled state: state=%+v error=%v", upNoDescription, err)
+	}
+}
+
 func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
 	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
@@ -703,10 +744,10 @@ func TestIOSXEStaticRouteAbsentPlanIsExact(t *testing.T) {
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
-	ctx.deviceType = "cisco_nxos"
+	ctx.deviceType = "unsupported_os"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
 		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
-	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe") {
+	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos") {
 		t.Fatalf("unsupported platform was accepted: %v", err)
 	}
 	ctx.deviceType = "cisco_iosxr"

@@ -85,8 +85,10 @@ func normalizeSSHEnsurePlatform(platform string) (string, error) {
 		return "arista_eos", nil
 	case "cisco_iosxe", "iosxe", "ios-xe":
 		return "cisco_iosxe", nil
+	case "cisco_nxos", "nxos", "nx-os":
+		return "cisco_nxos", nil
 	default:
-		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe", platform)
+		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos", platform)
 	}
 }
 
@@ -204,6 +206,8 @@ func sshInterfaceAdapter(platform string) (sshInterfacePlatformAdapter, error) {
 		return sshInterfacePlatformAdapter{parse: parseEOSInterfaceState, commands: eosInterfaceCommands}, nil
 	case "cisco_iosxe":
 		return sshInterfacePlatformAdapter{parse: parseIOSXEInterfaceState, commands: iosXEInterfaceCommands}, nil
+	case "cisco_nxos":
+		return sshInterfacePlatformAdapter{parse: parseNXOSInterfaceState, commands: nxOSInterfaceCommands}, nil
 	default:
 		return sshInterfacePlatformAdapter{}, fmt.Errorf("SSH interface ensure is not supported for platform %q", platform)
 	}
@@ -219,6 +223,10 @@ func parseEOSInterfaceState(output, name string) (sshInterfaceState, error) {
 
 func parseIOSXEInterfaceState(output, name string) (sshInterfaceState, error) {
 	return parseCLIInterfaceState(output, name, "IOS-XE")
+}
+
+func parseNXOSInterfaceState(output, name string) (sshInterfaceState, error) {
+	return parseCLIInterfaceState(output, name, "NX-OS")
 }
 
 func parseCLIInterfaceState(output, name, platform string) (sshInterfaceState, error) {
@@ -294,6 +302,24 @@ func iosXEInterfaceCommands(name string, enabled bool, description *string) []st
 	}
 	return append(commands, "end", "write memory")
 }
+
+func nxOSInterfaceCommands(name string, enabled bool, description *string) []string {
+	commands := []string{"configure terminal", "interface " + name}
+	if description != nil {
+		if *description == "" {
+			commands = append(commands, " no description")
+		} else {
+			commands = append(commands, " description "+*description)
+		}
+	}
+	if enabled {
+		commands = append(commands, " no shutdown")
+	} else {
+		commands = append(commands, " shutdown")
+	}
+	return append(commands, "end", "copy running-config startup-config")
+}
+
 func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {
 	adapter, err := sshStaticRouteAdapter(platform)
 	if err != nil {
