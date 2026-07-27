@@ -121,7 +121,7 @@ func ensureDirNoFollow(path string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	for index, part := range parts {
 		if part == "" || part == "." {
 			continue
