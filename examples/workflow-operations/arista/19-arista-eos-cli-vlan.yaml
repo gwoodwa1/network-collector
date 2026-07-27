@@ -56,6 +56,9 @@ ssh:
                 pattern: '(?m)^{{vlan_id}}\s+({{vlan_name}})\s+'
                 condition: eq
                 expected: '{{vlan_name}}'
+              on_fail:
+                action: fail
+                message: VLAN verification failed; removing the SSH CLI change
 
             - name: verify-eos-interface
               cmd: show interfaces {{interface}} status
@@ -68,6 +71,9 @@ ssh:
                   pattern: '(?m)\s({{vlan_id}})\s+'
                   condition: eq
                   expected: '{{vlan_id}}'
+              on_fail:
+                action: fail
+                message: Interface verification failed; removing the SSH CLI change
 
           rollback:
             - name: remove-eos-access-service

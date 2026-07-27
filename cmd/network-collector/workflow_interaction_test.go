@@ -137,6 +137,41 @@ func TestInteractionRollbackRecoversValidationAndAlwaysRuns(t *testing.T) {
 	}
 }
 
+func TestInteractionHardValidationGateSkipsLaterStepAndRunsRollback(t *testing.T) {
+	ctx, failed := interactionContext(t, map[string]string{})
+	var log bytes.Buffer
+	ctx.sessionLog = &log
+	step := StepConfig{Name: "ssh-change", Block: &BlockConfig{
+		Steps: []StepConfig{
+			{
+				Name:       "verify",
+				Local:      &LocalCommandConfig{Command: "printf", Args: []string{"down"}},
+				Validation: &ValidationConfig{Extractor: "regex", Pattern: `(.*)`, Condition: "eq", Expected: "up"},
+				OnFail:     &ValidationActionConfig{Action: "fail", Message: "verification gate failed"},
+			},
+			{Name: "must-not-run", Message: "unsafe later change"},
+		},
+		Rollback: []StepConfig{{Name: "rollback", Message: "state restored"}},
+		Always:   []StepConfig{{Name: "evidence", Message: "final evidence collected"}},
+	}}
+	if !executeSteps(ctx, nil, []StepConfig{step}) {
+		t.Fatal("hard validation gate should stop later device steps")
+	}
+	if *failed {
+		t.Fatal("successful rollback should recover the failed validation")
+	}
+	if len(*ctx.aggregated) != 1 || !(*ctx.aggregated)[0].Recovered {
+		t.Fatalf("failed validation not marked recovered: %+v", *ctx.aggregated)
+	}
+	output := log.String()
+	if strings.Contains(output, "unsafe later change") {
+		t.Fatalf("hard gate allowed a later step to run: %s", output)
+	}
+	if !strings.Contains(output, "state restored") || !strings.Contains(output, "final evidence collected") {
+		t.Fatalf("rollback/always log incomplete: %s", output)
+	}
+}
+
 func TestInteractionParallelScopedVariablesMergeRegisteredValues(t *testing.T) {
 	ctx, failed := interactionContext(t, map[string]string{"site": "lon"})
 	step := StepConfig{Name: "parallel", Parallel: &ParallelConfig{Steps: []StepConfig{

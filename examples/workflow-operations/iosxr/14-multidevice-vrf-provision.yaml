@@ -100,6 +100,9 @@ workflows:
                   pattern: '({{route_target}})'
                   condition: eq
                   expected: '{{route_target}}'
+              on_fail:
+                action: fail
+                message: VRF route-target verification failed; removing the new service
 
             - name: verify-endpoint-rd
               cmd: show running-config router bgp {{provider_as}} vrf {{vrf_name}}
@@ -112,6 +115,9 @@ workflows:
                   pattern: '(redistribute connected route-policy {{route_policy}})'
                   condition: eq
                   expected: 'redistribute connected route-policy {{route_policy}}'
+              on_fail:
+                action: fail
+                message: BGP VRF verification failed; removing the new service
 
             - name: verify-route-policy
               cmd: show running-config route-policy {{route_policy}}
@@ -124,6 +130,9 @@ workflows:
                   pattern: '(destination in {{prefix_set}})'
                   condition: eq
                   expected: 'destination in {{prefix_set}}'
+              on_fail:
+                action: fail
+                message: Route-policy verification failed; removing the new service
 
             - name: verify-vrf-access-interface
               cmd: show interfaces {{access_interface}}
@@ -136,6 +145,9 @@ workflows:
                 pattern: '(?m)^{{access_interface}} is (up), line protocol is (up)$'
                 condition: eq
                 expected: up
+              on_fail:
+                action: fail
+                message: Access-interface verification failed; removing the new service
 
           # LAB TEMPLATE: this assumes the subinterface, VRF, policy, and
           # prefix-set are dedicated to this service. Review ownership before

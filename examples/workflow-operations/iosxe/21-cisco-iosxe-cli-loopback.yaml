@@ -49,6 +49,9 @@ ssh:
                 pattern: '(?m)^Loopback{{loopback_id}} is (up), line protocol is (up)'
                 condition: eq
                 expected: up
+              on_fail:
+                action: fail
+                message: Loopback verification failed; removing the SSH CLI change
 
             - name: verify-iosxe-static-route
               cmd: show ip route {{route_prefix}} {{route_mask}}
@@ -57,6 +60,9 @@ ssh:
                 pattern: '(?m)^S\s+{{route_prefix}}/24.*(Loopback{{loopback_id}})'
                 condition: eq
                 expected: Loopback{{loopback_id}}
+              on_fail:
+                action: fail
+                message: Static-route verification failed; removing the SSH CLI change
 
           rollback:
             - name: remove-iosxe-loopback-and-route

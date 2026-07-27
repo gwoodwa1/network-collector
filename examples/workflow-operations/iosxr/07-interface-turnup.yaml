@@ -59,6 +59,9 @@ ssh:
                 pattern: '(?m)^{{interface}} is (up), line protocol is (up)$'
                 condition: eq
                 expected: up
+              on_fail:
+                action: fail
+                message: Interface state verification failed; returning the interface to shutdown
 
             - name: collect-light-levels
               cmd: show controllers optics {{interface}}
@@ -80,6 +83,9 @@ ssh:
                   condition: eq
                   expected: 0
                   expected_type: length
+              on_fail:
+                action: fail
+                message: Optical verification failed; returning the interface to shutdown
 
             - name: verify-zero-interface-errors
               cmd: show interfaces {{interface}}
@@ -96,6 +102,9 @@ ssh:
                 condition: eq
                 expected: false
                 expected_type: bool
+              on_fail:
+                action: fail
+                message: Interface error verification failed; returning the interface to shutdown
 
           rollback:
             - name: return-interface-to-shutdown

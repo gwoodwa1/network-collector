@@ -44,6 +44,9 @@ ssh:
                   pattern: '({{port_description}})'
                   condition: eq
                   expected: '{{port_description}}'
+              on_fail:
+                action: fail
+                message: Port verification failed; disabling the SSH CLI change
 
           rollback:
             - name: disable-sros-port

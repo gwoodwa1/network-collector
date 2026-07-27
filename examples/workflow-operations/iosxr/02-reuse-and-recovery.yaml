@@ -13,6 +13,11 @@ workflows:
           pattern: 'line protocol is (\S+)'
           condition: contains
           expected: '{{expected_state}}'
+        # Fail-only gate: this pre-check is outside a block with rollback, so
+        # failure stops the device without issuing any recovery command.
+        on_fail:
+          action: fail
+          message: Interface pre-check failed; stopping without rollback
 
   collect-change-evidence:
     parameters: [label]
@@ -64,6 +69,9 @@ ssh:
                 pattern: '(description workflow-example)'
                 condition: eq
                 expected: description workflow-example
+              on_fail:
+                action: fail
+                message: SSH verification failed; entering rollback
           rollback:
             - name: rollback-last-commit
               cmd: rollback configuration last 1

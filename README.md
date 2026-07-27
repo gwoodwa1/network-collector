@@ -487,6 +487,49 @@ demonstrates filtered running/candidate reads, candidate locking, edit,
 validation, confirmed commit, immediate cancellation or automatic timed
 rollback, discard recovery, and guaranteed unlock.
 
+The rollback policy is declarative at the block and verification step:
+
+```yaml
+- name: guarded-change
+  block:
+    steps:
+      - name: apply-change
+        netconf:
+          operation: edit-config
+          target: candidate
+          payload_file: payloads/change.xml
+
+      - name: verify-change
+        netconf:
+          operation: rpc
+          payload: <get-system-information/>
+        validation:
+          extractor: regex
+          pattern: '<status>(up)</status>'
+          condition: eq
+          expected: up
+        on_fail:
+          action: fail
+
+    rollback:                 # Include this for automatic rollback.
+      - netconf:
+          operation: discard-changes
+
+    always:
+      - netconf:
+          operation: unlock
+          target: candidate
+```
+
+`on_fail: {action: fail}` makes the verification a gate: later change steps
+are not executed. If the enclosing block contains `rollback`, any command,
+parser, or validation failure runs those recovery steps automatically. Omit
+`rollback` to stop and report the failure without changing the configuration
+again. `always` runs in both cases, so cleanup such as `unlock` belongs there.
+A successful rollback marks the failed block as recovered; if rollback itself
+fails, the workbook remains failed and `--fail-on-fail` returns a non-zero
+exit status.
+
 ### Configuration-management scope
 
 Network Collector provides useful configuration orchestration: templated
@@ -1110,7 +1153,9 @@ ssh:
 
 Workflow definitions can live in imported YAML files. Recursive calls are stopped after 20 nested control levels.
 
-Use `block`, `rescue`, and `always` for structured recovery:
+Use `block`, `rollback`, and `always` for an automatically reverted SSH
+change. The verification must use `on_fail.action: fail` so it is a hard gate
+and no later change step can run:
 
 ```yaml
 - name: guarded-change
@@ -1120,18 +1165,46 @@ Use `block`, `rescue`, and `always` for structured recovery:
         cmd: configure replace disk0:/candidate.cfg
       - name: verify
         cmd: show configuration commit changes last 1
-        validation: {}
-    rescue:
-      - name: rollback
+        validation:
+          extractor: regex
+          pattern: '(change-id 123)'
+          condition: eq
+          expected: change-id 123
+        on_fail:
+          action: fail
+          message: SSH verification failed; restoring the previous configuration
+    rollback:
+      - name: restore-previous-configuration
         cmd: rollback configuration last 1
     always:
       - name: collect-final-state
         cmd: show configuration commit list 1
 ```
 
-`rescue` runs only when a step in `steps` fails. A successful rescue recovers that block for the overall run; a failed rescue keeps it failed. `always` runs after either path and can itself fail the run. Explicit stop actions still propagate after recovery, and the failure log retains the original event for auditability.
+This is the same policy used by NETCONF blocks: `rollback` is the automatic
+rollback knob. Omit the entire `rollback` list for fail-only behavior:
 
-Use `rollback` instead of `rescue` when recovery explicitly reverts a change. They are mutually exclusive; rollback runs automatically after a command, parser, output, or validation failure, and successful rollback marks failed validations as recovered.
+```yaml
+- name: verify-without-rollback
+  cmd: show interfaces HundredGigE0/0/0/0
+  validation:
+    extractor: regex
+    pattern: 'line protocol is (up)'
+    condition: eq
+    expected: up
+  on_fail:
+    action: fail
+```
+
+`rollback` runs automatically after a command, parser, output, or validation
+failure. A successful rollback marks failed validations as recovered; a
+failed rollback keeps the workbook failed. `always` runs after either path and
+can itself fail the run. Explicit stop actions still propagate after recovery,
+and the failure log retains the original event for auditability.
+
+Use `rescue` instead of `rollback` for non-reverting recovery such as recording
+that an optional command is unsupported. They are mutually exclusive. A
+successful rescue also recovers the block for the overall run.
 
 Manual approval gates fail closed for non-interactive stdin, denial, EOF, or timeout. Use `--approve-all` only for an explicitly authorized unattended run:
 

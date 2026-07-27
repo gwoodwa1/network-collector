@@ -49,6 +49,9 @@ ssh:
                 pattern: '(?m)^{{vlan_id}}\s+({{vlan_name}})\s+'
                 condition: eq
                 expected: '{{vlan_name}}'
+              on_fail:
+                action: fail
+                message: VLAN verification failed; removing the SSH CLI change
 
             - name: verify-nxos-trunk
               cmd: show interface {{interface}} trunk
@@ -57,6 +60,9 @@ ssh:
                 pattern: '(?m)(?:^|,)\s*({{vlan_id}})\s*(?:,|$)'
                 condition: eq
                 expected: '{{vlan_id}}'
+              on_fail:
+                action: fail
+                message: Trunk verification failed; removing the SSH CLI change
 
           rollback:
             - name: remove-nxos-vlan-from-trunk

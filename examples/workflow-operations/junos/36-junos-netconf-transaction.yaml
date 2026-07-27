@@ -90,6 +90,12 @@ netconf:
                   pattern: '<admin-status[^>]*>\s*(up)\s*</admin-status>'
                   condition: eq
                   expected: up
+              # Stop this block before confirm-commit. Because the block has a
+              # rollback section below, this failure enters rollback instead
+              # of merely recording the failed validation and continuing.
+              on_fail:
+                action: fail
+                message: Interface verification failed; cancelling the confirmed commit.
 
             # A normal commit confirms the pending confirmed commit.
             - name: confirm-commit

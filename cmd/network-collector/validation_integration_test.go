@@ -1850,6 +1850,9 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
+	hardGate := func(step StepConfig) bool {
+		return step.OnFail != nil && step.OnFail.Action == "fail"
+	}
 	for _, path := range paths {
 		config, _, err := loadConfig(path)
 		if err != nil {
@@ -1883,7 +1886,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	guardedProvision := loaded["32-gnmi-guarded-new-path-provision.yaml"]
 	guardedParallel := guardedProvision.SSH[0].Steps[1].Parallel
-	if guardedParallel == nil || len(guardedParallel.Steps) != 2 || guardedParallel.Steps[0].GNMISubscribe == nil || len(guardedParallel.Steps[0].GNMISubscribe.Triggers) != 4 || guardedParallel.Steps[1].Block == nil || guardedParallel.Steps[1].Block.Steps[0].WaitSeconds != 40 || len(guardedProvision.Workflows["emergency-new-path-rollback"].Steps) != 2 {
+	if guardedParallel == nil || len(guardedParallel.Steps) != 2 || guardedParallel.Steps[0].GNMISubscribe == nil || len(guardedParallel.Steps[0].GNMISubscribe.Triggers) != 4 || guardedParallel.Steps[1].Block == nil || guardedParallel.Steps[1].Block.Steps[0].WaitSeconds != 40 ||
+		!hardGate(guardedParallel.Steps[1].Block.Steps[3]) || len(guardedProvision.Workflows["emergency-new-path-rollback"].Steps) != 2 {
 		t.Fatalf("guarded new-path provisioning example is incomplete: %+v", guardedProvision)
 	}
 	opticsGuard := loaded["33-gnmi-all-interface-light-level-guard.yaml"].SSH[0].Steps[0].GNMISubscribe
@@ -1911,13 +1915,14 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		transaction.Steps[0].NETCONF.Operation != "lock" ||
 		transaction.Steps[2].NETCONF.Operation != "validate" ||
 		transaction.Steps[4].NETCONF.Operation != "commit" || !transaction.Steps[4].NETCONF.Confirmed ||
+		transaction.Steps[5].OnFail == nil || transaction.Steps[5].OnFail.Action != "fail" ||
 		transaction.Rollback[0].NETCONF.Operation != "cancel-commit" ||
 		transaction.Rollback[1].NETCONF.Operation != "rollback" ||
 		transaction.Always[0].NETCONF.Operation != "unlock" {
 		t.Fatalf("transactional NETCONF example is incomplete: %+v", transaction)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
-	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {
+	if len(recovery.Workflows) != 2 || !hardGate(recovery.Workflows["inspect-interface"].Steps[0]) || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 || !hardGate(recovery.SSH[0].Steps[2].Block.Steps[2]) {
 		t.Fatalf("recovery example is incomplete: %+v", recovery)
 	}
 	approval := loaded["03-approval-and-parallel.yaml"].SSH[0].Steps
@@ -1939,7 +1944,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	turnup := loaded["07-interface-turnup.yaml"]
 	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, loadedPaths["07-interface-turnup.yaml"])
-	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 {
+	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 ||
+		!hardGate(turnup.SSH[0].Steps[2].Block.Steps[2]) || !hardGate(turnup.SSH[0].Steps[2].Block.Steps[3]) || !hardGate(turnup.SSH[0].Steps[2].Block.Steps[4]) {
 		t.Fatalf("interface turn-up example is incomplete: parsers=%+v config=%+v error=%v", turnupParsers, turnup, err)
 	}
 	security := loaded["08-ssh-security-profiles.yaml"]
@@ -1972,12 +1978,16 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	vrfExample := loaded["14-multidevice-vrf-provision.yaml"]
 	vrfWorkflow := vrfExample.Workflows["provision-customer-vrf"]
-	if len(vrfExample.SSH) != 2 || len(vrfWorkflow.Parameters) != 9 || len(vrfWorkflow.Steps) != 3 || vrfWorkflow.Steps[1].Approval == nil || vrfWorkflow.Steps[2].Block == nil || len(vrfWorkflow.Steps[2].Block.Rollback) != 1 || vrfExample.SSH[0].Steps[0].With["rd"] == vrfExample.SSH[1].Steps[0].With["rd"] {
+	if len(vrfExample.SSH) != 2 || len(vrfWorkflow.Parameters) != 9 || len(vrfWorkflow.Steps) != 3 || vrfWorkflow.Steps[1].Approval == nil || vrfWorkflow.Steps[2].Block == nil || len(vrfWorkflow.Steps[2].Block.Rollback) != 1 ||
+		!hardGate(vrfWorkflow.Steps[2].Block.Steps[1]) || !hardGate(vrfWorkflow.Steps[2].Block.Steps[2]) || !hardGate(vrfWorkflow.Steps[2].Block.Steps[3]) || !hardGate(vrfWorkflow.Steps[2].Block.Steps[4]) ||
+		vrfExample.SSH[0].Steps[0].With["rd"] == vrfExample.SSH[1].Steps[0].With["rd"] {
 		t.Fatalf("multi-device VRF example is incomplete: %+v", vrfExample)
 	}
 	l2vpnExample := loaded["15-layer2-mpls-service.yaml"]
 	l2vpnWorkflow := l2vpnExample.Workflows["provision-eline-endpoint"]
-	if len(l2vpnExample.SSH) != 2 || len(l2vpnWorkflow.Parameters) != 5 || len(l2vpnWorkflow.Steps) != 3 || l2vpnWorkflow.Steps[1].Approval == nil || l2vpnWorkflow.Steps[2].Block == nil || len(l2vpnWorkflow.Steps[2].Block.Rollback) != 1 || l2vpnExample.SSH[0].Steps[0].With["remote_pe"] == l2vpnExample.SSH[1].Steps[0].With["remote_pe"] {
+	if len(l2vpnExample.SSH) != 2 || len(l2vpnWorkflow.Parameters) != 5 || len(l2vpnWorkflow.Steps) != 3 || l2vpnWorkflow.Steps[1].Approval == nil || l2vpnWorkflow.Steps[2].Block == nil || len(l2vpnWorkflow.Steps[2].Block.Rollback) != 1 ||
+		!hardGate(l2vpnWorkflow.Steps[2].Block.Steps[2]) || !hardGate(l2vpnWorkflow.Steps[2].Block.Steps[3]) ||
+		l2vpnExample.SSH[0].Steps[0].With["remote_pe"] == l2vpnExample.SSH[1].Steps[0].With["remote_pe"] {
 		t.Fatalf("Layer 2 MPLS example is incomplete: %+v", l2vpnExample)
 	}
 	junosVRF := loaded["16-junos-netconf-l3-vrf.yaml"]
@@ -2027,7 +2037,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("multi-vendor operations inventory is incomplete: inventory=%+v error=%v", operationsInventory, err)
 	}
 	eosCLI := loaded["19-arista-eos-cli-vlan.yaml"]
-	if len(eosCLI.SSH) != 1 || eosCLI.SSH[0].Steps[1].Approval == nil || eosCLI.SSH[0].Steps[2].Block == nil || len(eosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+	if len(eosCLI.SSH) != 1 || eosCLI.SSH[0].Steps[1].Approval == nil || eosCLI.SSH[0].Steps[2].Block == nil || len(eosCLI.SSH[0].Steps[2].Block.Rollback) != 1 ||
+		!hardGate(eosCLI.SSH[0].Steps[2].Block.Steps[1]) || !hardGate(eosCLI.SSH[0].Steps[2].Block.Steps[2]) {
 		t.Fatalf("EOS CLI example is incomplete: %+v", eosCLI)
 	}
 	eosNETCONF := loaded["20-arista-eos-netconf-interface.yaml"]
@@ -2035,7 +2046,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("EOS NETCONF example is incomplete: %+v", eosNETCONF)
 	}
 	iosxeCLI := loaded["21-cisco-iosxe-cli-loopback.yaml"]
-	if len(iosxeCLI.SSH) != 1 || iosxeCLI.SSH[0].Steps[2].Block == nil || len(iosxeCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+	if len(iosxeCLI.SSH) != 1 || iosxeCLI.SSH[0].Steps[2].Block == nil || len(iosxeCLI.SSH[0].Steps[2].Block.Rollback) != 1 ||
+		!hardGate(iosxeCLI.SSH[0].Steps[2].Block.Steps[1]) || !hardGate(iosxeCLI.SSH[0].Steps[2].Block.Steps[2]) {
 		t.Fatalf("IOS-XE CLI example is incomplete: %+v", iosxeCLI)
 	}
 	iosxeNETCONF := loaded["22-cisco-iosxe-netconf-loopback.yaml"]
@@ -2043,7 +2055,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("IOS-XE NETCONF example is incomplete: %+v", iosxeNETCONF)
 	}
 	nxosCLI := loaded["23-cisco-nxos-cli-trunk.yaml"]
-	if len(nxosCLI.SSH) != 1 || nxosCLI.SSH[0].Steps[2].Block == nil || len(nxosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+	if len(nxosCLI.SSH) != 1 || nxosCLI.SSH[0].Steps[2].Block == nil || len(nxosCLI.SSH[0].Steps[2].Block.Rollback) != 1 ||
+		!hardGate(nxosCLI.SSH[0].Steps[2].Block.Steps[1]) || !hardGate(nxosCLI.SSH[0].Steps[2].Block.Steps[2]) {
 		t.Fatalf("NX-OS CLI example is incomplete: %+v", nxosCLI)
 	}
 	nxosNETCONF := loaded["24-cisco-nxos-netconf-interface.yaml"]
@@ -2051,7 +2064,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("NX-OS NETCONF example is incomplete: %+v", nxosNETCONF)
 	}
 	srosCLI := loaded["25-nokia-sros-cli-port.yaml"]
-	if len(srosCLI.SSH) != 1 || srosCLI.SSH[0].Steps[2].Block == nil || len(srosCLI.SSH[0].Steps[2].Block.Rollback) != 1 {
+	if len(srosCLI.SSH) != 1 || srosCLI.SSH[0].Steps[2].Block == nil || len(srosCLI.SSH[0].Steps[2].Block.Rollback) != 1 ||
+		!hardGate(srosCLI.SSH[0].Steps[2].Block.Steps[1]) {
 		t.Fatalf("SR OS CLI example is incomplete: %+v", srosCLI)
 	}
 	srosNETCONF := loaded["26-nokia-sros-netconf-port.yaml"]

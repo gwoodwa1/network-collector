@@ -126,6 +126,9 @@ ssh:
                       pattern: '203\.0\.113\.0/24'
                       condition: contains
                       expected: 203.0.113.0/24
+                    on_fail:
+                      action: fail
+                      message: New-path SSH verification failed; disabling the new interface
 
                 rollback:
                   - name: disable-new-interface-after-provisioning-failure

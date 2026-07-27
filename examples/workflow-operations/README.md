@@ -15,37 +15,37 @@ easier to read.
 | Playbook | Operations demonstrated |
 | --- | --- |
 | `iosxr/01-conditions-and-loops.yaml` | registration, `when`, literal and registered-list `foreach`, bounded `repeat` |
-| `iosxr/02-reuse-and-recovery.yaml` | parameterized `workflows`, `use`/`with`, `block`, `rescue`, explicit `rollback`, `always` |
+| `iosxr/02-reuse-and-recovery.yaml` | parameterized `workflows`, `use`/`with`, fail-only and rollback verification gates, `rescue`, `always` |
 | `iosxr/03-approval-and-parallel.yaml` | manual `approval`, `--approve-all`, independent `parallel` branches |
 | `iosxr/04-recurring-schedule.yaml` | finite `schedule`, device concurrency, retries, validation actions |
 | `iosxr/05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
 | `iosxr/06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
-| `iosxr/07-interface-turnup.yaml` | approval, interface configuration, light levels, error counters, rollback |
+| `iosxr/07-interface-turnup.yaml` | approval, SSH configuration, hard-gated state/optics/error checks, automatic rollback |
 | `iosxr/08-ssh-security-profiles.yaml` | global `auto` negotiation, inventory-level `legacy` override, host-key migration |
 | `iosxr/09-openconfig-facts.yaml` | vendor-neutral OpenConfig facts, native facts, per-subset transport fallback |
 | `iosxr/10-targeting-canary-and-replay.yaml` | inventory labels, Boolean selectors, exclusions, canaries, failure thresholds, JSONL events, failed-device replay |
 | `iosxr/11-reload-and-reconnect.yaml` | approval, expected disconnect, SSH probing, post-boot delay, reconnect, nested validation actions |
 | `multivendor/12-multivendor-facts.yaml` | EOS and Junos system, platform, interface, LLDP, and BGP facts with NETCONF-first fallback |
 | `iosxr/13-structured-drift.yaml` | approved JSON baselines, rolling previous-state baselines, ignored paths, drift artifacts, optional enforcement |
-| `iosxr/14-multidevice-vrf-provision.yaml` | reusable L3VPN provisioning across two PEs, endpoint-specific RDs and route policies, verification, rollback |
-| `iosxr/15-layer2-mpls-service.yaml` | two-ended IOS XR VPWS service, VLAN attachment circuits, MPLS/LDP pseudowire, retry, verification, rollback |
+| `iosxr/14-multidevice-vrf-provision.yaml` | reusable L3VPN provisioning across two PEs, hard-gated verification, automatic SSH rollback |
+| `iosxr/15-layer2-mpls-service.yaml` | two-ended IOS XR VPWS service, retry, hard-gated verification, automatic SSH rollback |
 | `junos/16-junos-netconf-l3-vrf.yaml` | two-PE Junos L3 VRF provisioning, per-PE RDs and access addressing, static route, routing-table RPC verification |
 | `junos/17-junos-netconf-l2vpn.yaml` | two-site BGP-signalled Junos L2VPN, per-site identifiers and RDs, operational RPC retry, rollback |
 | `junos/18-junos-netconf-port-turnup.yaml` | native Junos XML port enablement, candidate commit, interface-state RPC verification, rollback to disabled |
-| `arista/19-arista-eos-cli-vlan.yaml` | EOS CLI VLAN and access-port provisioning, approval, verification, rollback |
+| `arista/19-arista-eos-cli-vlan.yaml` | EOS CLI VLAN and access-port provisioning, hard-gated verification, automatic rollback |
 | `arista/20-arista-eos-netconf-interface.yaml` | EOS OpenConfig NETCONF interface configuration against running, state query, rollback |
-| `iosxe/21-cisco-iosxe-cli-loopback.yaml` | IOS-XE CLI loopback and static route, verification, rollback |
+| `iosxe/21-cisco-iosxe-cli-loopback.yaml` | IOS-XE CLI loopback and static route, hard-gated verification, automatic rollback |
 | `iosxe/22-cisco-iosxe-netconf-loopback.yaml` | IOS-XE native YANG loopback creation against running, filtered verification, rollback |
-| `nxos/23-cisco-nxos-cli-trunk.yaml` | NX-OS CLI VLAN and trunk update, verification, rollback |
+| `nxos/23-cisco-nxos-cli-trunk.yaml` | NX-OS CLI VLAN and trunk update, hard-gated verification, automatic rollback |
 | `nxos/24-cisco-nxos-netconf-interface.yaml` | NX-OS OpenConfig NETCONF interface configuration, state query, rollback |
-| `sros/25-nokia-sros-cli-port.yaml` | SR OS model-driven CLI port turn-up, commit, verification, rollback |
+| `sros/25-nokia-sros-cli-port.yaml` | SR OS model-driven CLI port turn-up, hard-gated verification, automatic rollback |
 | `sros/26-nokia-sros-netconf-port.yaml` | SR OS native YANG candidate edit, commit, verification, rollback |
 | `multivendor/27-gnmi-event-actions.yaml` | gNMI on-change update/delete triggers with immediate nested SSH and NETCONF actions |
 | `multivendor/28-gnmi-new-path-turnup.yaml` | new-interface and route turn-up events with SSH and NETCONF verification |
 | `multivendor/29-gnmi-interface-traffic-guard.yaml` | sampled interface counters converted to rates with a three-sample baseline and 10% drop guard |
 | `multivendor/30-gnmi-cpu-monitor.yaml` | sampled CPU telemetry with a numeric alarm threshold and SSH diagnostics |
 | `multivendor/31-gnmi-combined-change-monitor.yaml` | one bounded change-window monitor for link state, traffic-rate degradation, and CPU |
-| `multivendor/32-gnmi-guarded-new-path-provision.yaml` | parallel new-path provisioning while two different production interfaces are baselined and protected, with immediate rollback |
+| `multivendor/32-gnmi-guarded-new-path-provision.yaml` | parallel gNMI guarding with hard-gated SSH route verification and immediate rollback |
 | `multivendor/33-gnmi-all-interface-light-level-guard.yaml` | per-interface and per-channel RX/TX optical baselines with an absolute 1 dB drop guard |
 | `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process monitor combining optics, discards, errors, and IS-IS/LDP/BGP neighbor state |
 | `multivendor/35-declarative-interface-ensure.yaml` | idempotent OpenConfig interface state with NETCONF discovery, diff, apply, verification, and `--check` preview |

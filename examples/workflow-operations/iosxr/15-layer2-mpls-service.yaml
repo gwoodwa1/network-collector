@@ -93,6 +93,9 @@ workflows:
                   pattern: '(neighbor {{remote_pe}})'
                   condition: eq
                   expected: 'neighbor {{remote_pe}}'
+              on_fail:
+                action: fail
+                message: Pseudowire verification failed; removing the new endpoint
 
             - name: verify-access-circuit-up
               cmd: show l2vpn xconnect interface {{access_interface}} detail
@@ -101,6 +104,9 @@ workflows:
                 pattern: '(AC: {{access_interface}}, state is up)'
                 condition: eq
                 expected: 'AC: {{access_interface}}, state is up'
+              on_fail:
+                action: fail
+                message: Access-circuit verification failed; removing the new endpoint
 
           # LAB TEMPLATE: the subinterface and xconnect must be dedicated to
           # this service. Confirm the generated removal commands on the target
