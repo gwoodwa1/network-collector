@@ -36,17 +36,20 @@ func effectiveSSHSecurity(global SSHSecurityConfig, device *SSHSecurityConfig) S
 func validateSSHSecurity(config SSHSecurityConfig) error {
 	profile := strings.ToLower(strings.TrimSpace(config.Profile))
 	if profile == "" {
-		profile = "compatibility"
+		profile = "modern"
 	}
 	if profile != "compatibility" && profile != "auto" && profile != "modern" && profile != "legacy" {
 		return fmt.Errorf("ssh_security.profile must be compatibility, auto, modern, or legacy")
 	}
 	policy := strings.ToLower(strings.TrimSpace(config.HostKeyPolicy))
 	if policy == "" {
-		policy = "insecure"
+		policy = "known_hosts"
 	}
-	if policy != "insecure" && policy != "known_hosts" {
-		return fmt.Errorf("ssh_security.host_key_policy must be insecure or known_hosts")
+	if policy != "insecure" && policy != "known_hosts" && policy != "pinned" {
+		return fmt.Errorf("ssh_security.host_key_policy must be insecure, known_hosts, or pinned")
+	}
+	if policy == "pinned" && strings.TrimSpace(config.KnownHostsFile) == "" {
+		return fmt.Errorf("ssh_security.known_hosts_file is required for pinned host-key policy")
 	}
 	return nil
 }
@@ -66,7 +69,7 @@ func summarizeSSHSecurity(global SSHSecurityConfig, devices []DeviceConfig) sshS
 		security := effectiveSSHSecurity(global, device.SSHSecurity)
 		profile := strings.ToLower(strings.TrimSpace(security.Profile))
 		if profile == "" {
-			profile = "compatibility"
+			profile = "modern"
 		}
 		switch profile {
 		case "auto":
@@ -79,7 +82,7 @@ func summarizeSSHSecurity(global SSHSecurityConfig, devices []DeviceConfig) sshS
 			summary.Compatibility++
 		}
 		policy := strings.ToLower(strings.TrimSpace(security.HostKeyPolicy))
-		if policy == "known_hosts" {
+		if policy == "known_hosts" || policy == "pinned" {
 			summary.Verified++
 		} else {
 			summary.Insecure++

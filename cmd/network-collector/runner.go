@@ -106,6 +106,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	}
 	netconfExecutor := &lazyNETCONFExecutor{
 		host: ip, username: username, password: password, timeout: netconfTimeout,
+		hostKeyPolicy: effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).HostKeyPolicy,
+		knownHostsFile: effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).KnownHostsFile,
 	}
 	ctx := stepExecutionContext{
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,

@@ -5,10 +5,12 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/drivers"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/hostkey"
 	"github.com/scrapli/scrapligo/driver/netconf"
 	"github.com/scrapli/scrapligo/driver/opoptions"
 	scraplioptions "github.com/scrapli/scrapligo/driver/options"
@@ -23,6 +25,8 @@ type ScrapligoNETCONF struct {
 	network       *netconf.Driver
 	socketTimeout time.Duration
 	opsTimeout    time.Duration
+	hostKeyPolicy hostkey.Policy
+	hostKeyError  error
 }
 
 func WithNetconfTimeouts(socketTimeout, opsTimeout time.Duration) Option {
@@ -38,6 +42,16 @@ func WithNetconfTimeouts(socketTimeout, opsTimeout time.Duration) Option {
 				device.opsTimeout = opsTimeout
 			}
 		}
+	}
+}
+
+func WithHostKeyPolicy(policy, knownHostsFile string) Option {
+	return func(d interface{}) {
+		device, ok := d.(*ScrapligoNETCONF)
+		if !ok || device == nil {
+			return
+		}
+		device.hostKeyPolicy, device.hostKeyError = hostkey.New(policy, knownHostsFile)
 	}
 }
 
@@ -63,12 +77,27 @@ func (n *ScrapligoNETCONF) Connect(host, username, password string, opts ...Opti
 		}
 		opt(n)
 	}
+	if n.hostKeyError != nil {
+		return n.hostKeyError
+	}
+	if n.hostKeyPolicy == nil {
+		n.hostKeyPolicy, n.hostKeyError = hostkey.New("", "")
+		if n.hostKeyError != nil {
+			return n.hostKeyError
+		}
+	}
+	if n.hostKeyPolicy.Name() == "insecure" {
+		slog.Warn("NETCONF SSH host-key verification is disabled; use only for explicitly approved lab devices", "host", n.host)
+	}
 
 	options := []util.Option{
-		scraplioptions.WithAuthNoStrictKey(),
 		scraplioptions.WithAuthUsername(username),
 		scraplioptions.WithAuthPassword(password),
 		scraplioptions.WithPort(830),
+	}
+	options, err := n.hostKeyPolicy.Apply(options)
+	if err != nil {
+		return err
 	}
 	if n.socketTimeout > 0 {
 		options = append(options, scraplioptions.WithTimeoutSocket(n.socketTimeout))

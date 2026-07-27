@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/pkg/drivers/hostkey"
 	"github.com/scrapli/scrapligo/driver/network"
 	"github.com/scrapli/scrapligo/driver/options"
 	"github.com/scrapli/scrapligo/platform"
@@ -40,8 +41,8 @@ func NewClient(opts ...Option) *Client {
 		channelLog:      os.Stdout,
 		socketTimeout:   45 * time.Second,
 		opsTimeout:      90 * time.Second,
-		securityProfile: "compatibility",
-		hostKeyPolicy:   "insecure",
+		securityProfile: "modern",
+		hostKeyPolicy:   "known_hosts",
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -72,7 +73,7 @@ func WithHostKeyPolicy(policy, knownHostsFile string) Option {
 func normalizeSecurityProfile(profile string) (string, error) {
 	profile = strings.ToLower(strings.TrimSpace(profile))
 	if profile == "" {
-		return "compatibility", nil
+		return "modern", nil
 	}
 	switch profile {
 	case "compatibility", "auto", "modern", "legacy":
@@ -84,10 +85,10 @@ func normalizeSecurityProfile(profile string) (string, error) {
 func normalizeHostKeyPolicy(policy string) (string, error) {
 	policy = strings.ToLower(strings.TrimSpace(policy))
 	if policy == "" {
-		return "insecure", nil
+		return "known_hosts", nil
 	}
 	switch policy {
-	case "insecure", "known_hosts":
+	case "insecure", "known_hosts", "pinned":
 		return policy, nil
 	}
 	return "", fmt.Errorf("unsupported SSH host key policy %q", policy)
@@ -196,6 +197,9 @@ func (c *Client) Connect(host, username, password, driverName string) error {
 	if err != nil {
 		return err
 	}
+	if policy == "insecure" {
+		slog.Warn("SSH host-key verification is disabled; use only for explicitly approved lab devices", "host", trimmedHost)
+	}
 
 	if profile == "auto" {
 		connect := c.connectWithProfile
@@ -253,12 +257,13 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 	if c.passwordPattern != nil {
 		platformOptions = append(platformOptions, options.WithPasswordPattern(c.passwordPattern))
 	}
-	if hostKeyPolicy == "insecure" {
-		platformOptions = append(platformOptions, options.WithAuthNoStrictKey())
-	} else if c.knownHostsFile != "" {
-		platformOptions = append(platformOptions, options.WithSSHKnownHostsFile(c.knownHostsFile))
-	} else {
-		platformOptions = append(platformOptions, options.WithSSHKnownHostsFileSystem())
+	hostPolicy, err := hostkey.New(hostKeyPolicy, c.knownHostsFile)
+	if err != nil {
+		return err
+	}
+	platformOptions, err = hostPolicy.Apply(platformOptions)
+	if err != nil {
+		return err
 	}
 	if profile == "compatibility" || profile == "legacy" {
 		platformOptions = append(platformOptions,
