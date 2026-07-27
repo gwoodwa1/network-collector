@@ -23,13 +23,5 @@ func OpenFile(path string, flags int) (*os.File, error) {
 
 // WriteFile replaces a private artifact's content.
 func WriteFile(path string, content []byte) error {
-	file, err := OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(content); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
+	return writeFileAtomicNoFollow(path, content)
 }

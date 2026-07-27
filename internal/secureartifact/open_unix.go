@@ -3,6 +3,8 @@
 package secureartifact
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,6 +162,68 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
+}
+
+func writeFileAtomicNoFollow(path string, content []byte) error {
+	parent, name, err := walkParentNoFollow(path)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parent)
+
+	var existing unix.Stat_t
+	if err := unix.Fstatat(parent, name, &existing, unix.AT_SYMLINK_NOFOLLOW); err == nil {
+		if existing.Mode&unix.S_IFMT != unix.S_IFREG {
+			return fmt.Errorf("artifact path %q must be a regular, non-symlink file", path)
+		}
+	} else if err != unix.ENOENT {
+		return err
+	}
+
+	random := make([]byte, 12)
+	if _, err := rand.Read(random); err != nil {
+		return err
+	}
+	tempName := "." + name + "." + hex.EncodeToString(random) + ".tmp"
+	fd, err := unix.Openat(
+		parent,
+		tempName,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		uint32(FileMode),
+	)
+	if err != nil {
+		return err
+	}
+	// #nosec G115 -- unix.Openat returned a valid non-negative file descriptor.
+	file := os.NewFile(uintptr(fd), tempName)
+	if file == nil {
+		_ = unix.Close(fd)
+		return fmt.Errorf("create private temporary artifact for %q: invalid file descriptor", path)
+	}
+	renamed := false
+	defer func() {
+		_ = file.Close()
+		if !renamed {
+			_ = unix.Unlinkat(parent, tempName, 0)
+		}
+	}()
+	if err := file.Chmod(FileMode); err != nil {
+		return err
+	}
+	if _, err := file.Write(content); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := unix.Renameat(parent, tempName, parent, name); err != nil {
+		return err
+	}
+	renamed = true
+	return nil
 }
 
 func ensureDirNoFollow(path string) error {

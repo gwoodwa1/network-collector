@@ -61,6 +61,16 @@ func TestOpenFileRejectsSymlink(t *testing.T) {
 	if _, err := OpenFile(link, os.O_WRONLY); err == nil {
 		t.Fatal("symlink artifact was accepted")
 	}
+	if err := WriteFile(link, []byte("replacement")); err == nil {
+		t.Fatal("symlink artifact was accepted for atomic replacement")
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "target" {
+		t.Fatalf("symlink target was modified: %q", content)
+	}
 }
 
 func TestRejectsSymlinkDirectoryComponent(t *testing.T) {
