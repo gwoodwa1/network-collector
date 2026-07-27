@@ -62,7 +62,14 @@ func newNetworkEventSink(config EventSinkConfig) (eventSink, error) {
 				return nil, fmt.Errorf("webhook HMAC secret environment variable %q is empty", name)
 			}
 		}
-		sink, err = orchestrator.NewWebhookSink(config.URL, config.Headers, secret, timeout)
+		allowedHosts := splitAllowedHosts(os.Getenv("NETWORK_COLLECTOR_WEBHOOK_ALLOWED_HOSTS"))
+		if len(allowedHosts) == 0 {
+			return nil, fmt.Errorf("webhook sinks require deployment environment NETWORK_COLLECTOR_WEBHOOK_ALLOWED_HOSTS")
+		}
+		sink, err = orchestrator.NewWebhookSinkWithPolicy(
+			config.URL, config.Headers, secret, timeout,
+			orchestrator.WebhookPolicy{AllowedHosts: allowedHosts},
+		)
 	case "syslog":
 		sink, err = orchestrator.NewSyslogSink(config.Network, config.Address, config.AppName, timeout)
 	default:
@@ -74,4 +81,14 @@ func newNetworkEventSink(config EventSinkConfig) (eventSink, error) {
 	return orchestrator.NewAsyncSink(sink, config.QueueSize, func(err error) {
 		slog.Warn("asynchronous lifecycle event delivery failed", "type", config.Type, "error", err)
 	})
+}
+
+func splitAllowedHosts(value string) []string {
+	var hosts []string
+	for _, host := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if trimmed := strings.TrimSpace(host); trimmed != "" {
+			hosts = append(hosts, trimmed)
+		}
+	}
+	return hosts
 }

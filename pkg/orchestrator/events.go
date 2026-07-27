@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,14 +101,98 @@ type WebhookSink struct {
 	client     *http.Client
 }
 
+type WebhookPolicy struct {
+	AllowedHosts         []string
+	AllowPrivateNetworks bool
+}
+
 func NewWebhookSink(url string, headers map[string]string, hmacSecret string, timeout time.Duration) (*WebhookSink, error) {
-	if strings.TrimSpace(url) == "" {
-		return nil, errors.New("webhook URL is required")
+	parsed, err := urlpkgParse(url)
+	if err != nil {
+		return nil, err
+	}
+	return NewWebhookSinkWithPolicy(url, headers, hmacSecret, timeout, WebhookPolicy{AllowedHosts: []string{parsed.Hostname()}})
+}
+
+func NewWebhookSinkWithPolicy(rawURL string, headers map[string]string, hmacSecret string, timeout time.Duration, policy WebhookPolicy) (*WebhookSink, error) {
+	parsed, err := urlpkgParse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if !hostAllowed(parsed.Hostname(), policy.AllowedHosts) {
+		return nil, fmt.Errorf("webhook host %q is not in the deployment allowlist", parsed.Hostname())
+	}
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil && !policy.AllowPrivateNetworks && isPrivateDestination(ip) {
+		return nil, fmt.Errorf("webhook destination %q is a private or local address", parsed.Hostname())
+	}
+	if len(policy.AllowedHosts) == 0 {
+		return nil, errors.New("webhook destination allowlist is required")
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	return &WebhookSink{url: url, headers: headers, hmacSecret: []byte(hmacSecret), client: &http.Client{Timeout: timeout}}, nil
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+		DialContext: secureWebhookDialer(policy.AllowPrivateNetworks),
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("webhook redirects are disabled")
+		},
+	}
+	return &WebhookSink{url: rawURL, headers: headers, hmacSecret: []byte(hmacSecret), client: client}, nil
+}
+
+func urlpkgParse(rawURL string) (*url.URL, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return nil, errors.New("webhook URL is required")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return nil, errors.New("webhook URL must be an absolute HTTPS URL without user information")
+	}
+	return parsed, nil
+}
+
+func hostAllowed(host string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if strings.EqualFold(strings.TrimSpace(candidate), host) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrivateDestination(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+func secureWebhookDialer(allowPrivate bool) func(context.Context, string, string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		for _, resolved := range addresses {
+			if !allowPrivate && isPrivateDestination(resolved.IP) {
+				return nil, fmt.Errorf("webhook host %q resolved to private or local address %s", host, resolved.IP)
+			}
+		}
+		if len(addresses) == 0 {
+			return nil, fmt.Errorf("webhook host %q resolved to no addresses", host)
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(addresses[0].IP.String(), port))
+	}
 }
 
 func (s *WebhookSink) Handle(ctx context.Context, event Event) error {
@@ -132,7 +218,7 @@ func (s *WebhookSink) Handle(ctx context.Context, event Event) error {
 		return err
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
+	_, _ = io.CopyN(io.Discard, response.Body, 4096)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("webhook returned %s", response.Status)
 	}
@@ -151,8 +237,8 @@ func NewSyslogSink(network, address, appName string, timeout time.Duration) (*Sy
 	if network == "" {
 		network = "udp"
 	}
-	if network != "udp" && network != "tcp" {
-		return nil, fmt.Errorf("syslog network must be udp or tcp")
+	if network != "udp" && network != "tcp" && network != "tls" {
+		return nil, fmt.Errorf("syslog network must be udp, tcp, or tls")
 	}
 	if strings.TrimSpace(address) == "" {
 		return nil, errors.New("syslog address is required")
@@ -171,14 +257,27 @@ func (s *SyslogSink) Handle(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
-	conn, err := (&net.Dialer{Timeout: s.timeout}).DialContext(ctx, s.network, s.address)
+	dialer := &net.Dialer{Timeout: s.timeout}
+	var conn net.Conn
+	if s.network == "tls" {
+		host, _, splitErr := net.SplitHostPort(s.address)
+		if splitErr != nil {
+			return splitErr
+		}
+		conn, err = (&tls.Dialer{
+			NetDialer: dialer,
+			Config:    &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host},
+		}).DialContext(ctx, "tcp", s.address)
+	} else {
+		conn, err = dialer.DialContext(ctx, s.network, s.address)
+	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(s.timeout))
 	message := fmt.Sprintf("<14>1 %s - %s - - - %s", time.Now().UTC().Format(time.RFC3339), s.appName, body)
-	if s.network == "tcp" {
+	if s.network == "tcp" || s.network == "tls" {
 		message = fmt.Sprintf("%d %s", len(message), message)
 	} else {
 		message += "\n"
