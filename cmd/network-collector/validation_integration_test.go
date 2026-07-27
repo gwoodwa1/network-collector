@@ -249,6 +249,26 @@ func TestRegisterParserOutputSkipsEmptyRegister(t *testing.T) {
 	}
 }
 
+func TestStepOutputBudgetRejectsBeforeRegistration(t *testing.T) {
+	failed := false
+	validations := []deviceValidation{}
+	ctx := &stepExecutionContext{
+		hostname: "router-01", ip: "192.0.2.10", sessionLog: io.Discard,
+		variables: map[string]string{}, runFailed: &failed, aggregated: &validations,
+		sshCommand: echoCommandExecutor{},
+	}
+	executeSteps(ctx, nil, []StepConfig{{
+		Name: "bounded", Command: "oversized-device-response",
+		Register: "device_value", MaxOutputBytes: 4,
+	}})
+	if !failed {
+		t.Fatal("oversized device response did not fail the step")
+	}
+	if _, exists := ctx.variables["device_value"]; exists {
+		t.Fatal("oversized device response was registered")
+	}
+}
+
 func TestParsedAlarmBaselineCanRenderFinalComparison(t *testing.T) {
 	vars := map[string]string{}
 	baseline := `{"descriptions":["Power Group redundancy lost."],"groups":["Environ"],"locations":["0"],"set_times":["02/26/2026 15:05:05 GMT"],"severities":["Major"]}`

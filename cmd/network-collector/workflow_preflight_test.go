@@ -55,6 +55,24 @@ func TestPreflightRejectsRegisteredDeviceOutputInCommands(t *testing.T) {
 	}
 }
 
+func TestPreflightRejectsRegisteredDeviceOutputInNETCONFPayload(t *testing.T) {
+	device := DeviceConfig{
+		Hostname: "edge-01",
+		Steps: []StepConfig{
+			{Name: "discover", Command: "show interface", Register: "interface_name"},
+			{Name: "use-result", NETCONF: &NETCONFStepConfig{
+				Operation: "edit-config",
+				Payload:   "<interface><name>{{interface_name}}</name></interface>",
+			}},
+		},
+	}
+
+	err := preflightDeviceVariables(device, nil, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), `cannot interpolate tainted device output variable "interface_name"`) {
+		t.Fatalf("expected adversarial registered output to be rejected before NETCONF rendering, got %v", err)
+	}
+}
+
 func TestPreflightAllowsRegisteredDeviceOutputInMessages(t *testing.T) {
 	device := DeviceConfig{
 		Hostname: "edge-01",
