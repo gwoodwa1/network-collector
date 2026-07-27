@@ -121,18 +121,11 @@ When `credential_profile` is absent, each provider falls back to the inventory
 hostname. A provider failure stops the run before network changes are
 attempted.
 
-## Generic command adapters
+## Executable boundary
 
-[`vault.sh`](vault.sh), [`onepassword.sh`](onepassword.sh), and
-[`cyberark.sh`](cyberark.sh) remain as examples for sites that need custom
-broker logic. Configure them with `provider: command`. The collector supplies
-`NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE`; the
-adapter must write exactly one JSON object to stdout:
-
-```json
-{"username":"automation","password":"secret"}
-```
-
-Diagnostics belong on stderr. Never enable shell tracing because it can expose
-retrieved passwords. These adapter examples require `jq`; Vault and 1Password
-also require their supported CLIs, while CyberArk uses `curl`.
+The generic `command`/`exec` credential provider is intentionally unsupported.
+HashiCorp and 1Password use only the approved executable names `vault` and
+`op`, with collector-owned arguments; YAML cannot select a binary or supply
+arguments. CyberArk uses the built-in HTTPS client and does not launch `curl`.
+Add other secret systems as reviewed Go providers rather than workbook
+commands.

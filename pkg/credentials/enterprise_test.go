@@ -31,12 +31,13 @@ esac
 	if err := os.WriteFile(helper, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PATH", filepath.Dir(helper)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	provider, err := NewProvider(ProviderConfig{
 		Type: "hashicorp",
 		Hashicorp: HashicorpConfig{
 			Address: "https://vault.example:8200",
 			Mount:   "network", PathPrefix: "devices", UsernameField: "login",
-			PasswordField: "secret", Binary: helper,
+			PasswordField: "secret",
 		},
 	}, nil, nil)
 	if err != nil {
@@ -61,11 +62,12 @@ esac
 	if err := os.WriteFile(helper, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PATH", filepath.Dir(helper)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	provider, err := NewProvider(ProviderConfig{
 		Type: "1password",
 		OnePassword: OnePasswordConfig{
 			Vault: "Network Automation", ItemPrefix: "collector-",
-			UsernameField: "login", PasswordField: "secret", Binary: helper,
+			UsernameField: "login", PasswordField: "secret",
 		},
 		TimeoutSeconds: 5,
 	}, nil, nil)
@@ -75,6 +77,25 @@ esac
 	got, err := provider.Resolve(context.Background(), Target{Hostname: "core-01", Profile: "datacenter"})
 	if err != nil || got.Username != "op-user" || got.Password != "op-pass" {
 		t.Fatalf("unexpected credentials=%#v error=%v", got, err)
+	}
+}
+
+func TestEnterpriseProvidersRejectWorkbookBinarySelection(t *testing.T) {
+	_, err := NewProvider(ProviderConfig{
+		Type: "hashicorp",
+		Hashicorp: HashicorpConfig{
+			Mount: "network", PathPrefix: "devices", RemovedBinary: "/bin/sh",
+		},
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+		t.Fatalf("HashiCorp binary selection was not rejected: %v", err)
+	}
+	_, err = NewProvider(ProviderConfig{
+		Type:        "1password",
+		OnePassword: OnePasswordConfig{Vault: "Network Automation", RemovedBinary: "/bin/sh"},
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+		t.Fatalf("1Password binary selection was not rejected: %v", err)
 	}
 }
 

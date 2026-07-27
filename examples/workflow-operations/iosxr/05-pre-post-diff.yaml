@@ -58,28 +58,28 @@ ssh:
               cmd: show platform
               parser: xr_show_platform
               register: post_platform
-              validation: &stable-platform {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_platform}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_platform}}'}
             - name: post-routes
               cmd: show route summary
               parser: xr_show_route_summary
               register: post_routes
-              validation: &stable-routes {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_routes}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_routes}}'}
             - name: post-interfaces
               cmd: show interfaces summary
               register: post_interfaces
-              validation: &stable-interfaces {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_interfaces}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_interfaces}}'}
             - name: post-alarms
               cmd: show alarms brief system active
               register: post_alarms
-              validation: &stable-alarms {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_alarms}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_alarms}}'}
             - name: post-ntp
               cmd: show ntp status
               register: post_ntp
-              validation: &stable-ntp {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_ntp}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_ntp}}'}
             - name: post-redundancy
               cmd: show redundancy summary
               register: post_redundancy
-              validation: &stable-redundancy {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_redundancy}}'}
+              validation: {extractor: regex, pattern: '(?s)^(.*)$', condition: eq, expected: '{{pre_redundancy}}'}
 
       - name: change-window-complete
         message: post-check collection and Go-native stable-state comparisons completed

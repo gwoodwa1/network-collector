@@ -94,21 +94,8 @@ profiles:
   edge: {username: junos-automation, password: replace-me}
 ```
 
-Assign a profile to an inventory host with `credential_profile: datacenter`. The `command` provider executes an argument array and expects one JSON object on stdout containing `username` and `password`; it receives `NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE` environment variables:
-
-```yaml
-credentials:
-  provider: command
-  command: [/usr/local/bin/read-network-secret, --format, json]
-  timeout_seconds: 30
-```
-
-This command contract can wrap Vault, AWS Secrets Manager, an OS keyring, or another organization-specific secret broker without storing secrets in playbooks. Provider commands time out after 30 seconds. Never commit populated credential files or print secrets from provider commands.
-
-`timeout_seconds` can be set from 1 to 300 seconds. The helper receives
-`NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE`; only its
-stdout is decoded, so diagnostics should go to stderr. First-class provider
-configurations and optional command adapters are included for
+Assign a profile to an inventory host with `credential_profile: datacenter`.
+First-class provider configurations are included for
 [HashiCorp Vault](examples/credential-providers/vault.yaml),
 [1Password](examples/credential-providers/onepassword.yaml), and
 [CyberArk CCP](examples/credential-providers/cyberark.yaml). See the
@@ -121,7 +108,9 @@ Native provider names are `hashicorp` (aliases `vault` and
 lookup paths, field names, and certificate paths in their nested YAML block;
 the corresponding vendor environment variables are fallbacks. Vault and
 1Password authentication tokens are intentionally not accepted as YAML
-fields.
+fields. Their approved CLI names are fixed to `vault` and `op`; workbooks
+cannot select another executable. CyberArk uses the built-in HTTPS client.
+The generic `command`/`exec` credential provider has been removed.
 
 ### Docker
 

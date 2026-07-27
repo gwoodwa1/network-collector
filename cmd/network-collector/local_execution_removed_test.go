@@ -37,6 +37,11 @@ ssh:
                 - local:
                     command: curl
 `,
+		"credential-command": `
+credentials:
+  provider: command
+  command: [/bin/sh, -c, id]
+`,
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -45,10 +50,9 @@ ssh:
 				t.Fatal(err)
 			}
 			_, _, err := loadConfig(path)
-			if err == nil || !strings.Contains(err.Error(), "arbitrary local execution has been removed") {
+			if err == nil || !strings.Contains(err.Error(), "execution has been removed") {
 				t.Fatalf("removed local execution was not rejected: %v", err)
 			}
 		})
 	}
 }
-
