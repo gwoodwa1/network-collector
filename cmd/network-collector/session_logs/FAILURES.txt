@@ -1,0 +1,8 @@
+==============================================================================
+Time:     2026-07-27T21:13:06+01:00
+Hostname: router-01
+IP:       192.0.2.10
+Step:     bounded
+Status:   error
+Message:  command error: device response exceeds the 4-byte step output limit
+
