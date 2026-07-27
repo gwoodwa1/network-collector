@@ -77,23 +77,27 @@ func TestEnrichJSONEnforcesOutputLimit(t *testing.T) {
 	}
 }
 
-func TestRunPlaybookLocalStepsEnrichesBeforeValidation(t *testing.T) {
-	result := runPlaybookLocalSteps([]StepConfig{{
-		Name: "enrich-local-json",
-		Local: &LocalCommandConfig{
-			Command: os.Args[0],
-			Args:    []string{"-test.run=TestLocalCommandHelper", "--", "{{input_file}}"},
-			Inputs:  map[string]string{"input_file": `{"crc_errors":4}`},
-		},
+func TestCommandStepEnrichesBeforeValidation(t *testing.T) {
+	failed := false
+	aggregated := []deviceValidation{}
+	artifacts := []outputArtifact{}
+	ctx := &stepExecutionContext{
+		hostname: "router-01", sessionLog: io.Discard, variables: map[string]string{},
+		runFailed: &failed, aggregated: &aggregated, artifacts: &artifacts,
+		sshCommand: echoCommandExecutor{},
+	}
+	executeSteps(ctx, nil, []StepConfig{{
+		Name:    "enrich-device-json",
+		Command: `{"crc_errors":4}`,
 		Enrich: &EnrichmentConfig{Expression: `. + {"_summary": {"has_issues": (.crc_errors > 0)}}`},
 		Validation: &ValidationConfig{
 			Extractor: "gjson", JSONPath: "_summary.has_issues", Condition: "eq", Expected: true, ExpectedType: "bool",
 		},
-	}}, Config{}, true, nil, "", 0, nil)
-	if result.failed {
-		t.Fatal("runPlaybookLocalSteps() unexpectedly failed")
+	}})
+	if failed {
+		t.Fatal("enriched command step unexpectedly failed")
 	}
-	if len(result.aggregated) != 1 || !result.aggregated[0].Result.Pass {
-		t.Fatalf("runPlaybookLocalSteps() validations = %#v", result.aggregated)
+	if len(aggregated) != 1 || !aggregated[0].Result.Pass {
+		t.Fatalf("command-step validations = %#v", aggregated)
 	}
 }

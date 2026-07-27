@@ -24,6 +24,12 @@ func (r *trackedApprovalReader) Read(p []byte) (int, error) {
 	return r.data.Read(p)
 }
 
+type echoCommandExecutor struct{}
+
+func (echoCommandExecutor) Execute(command string) (string, error) {
+	return command, nil
+}
+
 func interactionContext(t *testing.T, variables map[string]string) (*stepExecutionContext, *bool) {
 	t.Helper()
 	failed := false
@@ -34,6 +40,7 @@ func interactionContext(t *testing.T, variables map[string]string) (*stepExecuti
 		sessionLog: io.Discard, failureLog: filepath.Join(t.TempDir(), "failures.txt"),
 		variables: variables, aggregated: &validations, artifacts: &artifacts,
 		runFailed: &failed, workflows: map[string]WorkflowConfig{},
+		sshCommand: echoCommandExecutor{},
 	}, &failed
 }
 
@@ -120,7 +127,7 @@ func TestInteractionRollbackRecoversValidationAndAlwaysRuns(t *testing.T) {
 	ctx.sessionLog = &log
 	step := StepConfig{Name: "change", Block: &BlockConfig{
 		Steps: []StepConfig{{
-			Name: "verify", Local: &LocalCommandConfig{Command: "printf", Args: []string{"down"}},
+			Name: "verify", Command: "down",
 			Validation: &ValidationConfig{Extractor: "regex", Pattern: `(.*)`, Condition: "eq", Expected: "up"},
 		}},
 		Rollback: []StepConfig{{Name: "rollback", Message: "state restored"}},
@@ -145,7 +152,7 @@ func TestInteractionHardValidationGateSkipsLaterStepAndRunsRollback(t *testing.T
 		Steps: []StepConfig{
 			{
 				Name:       "verify",
-				Local:      &LocalCommandConfig{Command: "printf", Args: []string{"down"}},
+				Command:    "down",
 				Validation: &ValidationConfig{Extractor: "regex", Pattern: `(.*)`, Condition: "eq", Expected: "up"},
 				OnFail:     &ValidationActionConfig{Action: "fail", Message: "verification gate failed"},
 			},
@@ -175,8 +182,8 @@ func TestInteractionHardValidationGateSkipsLaterStepAndRunsRollback(t *testing.T
 func TestInteractionParallelScopedVariablesMergeRegisteredValues(t *testing.T) {
 	ctx, failed := interactionContext(t, map[string]string{"site": "lon"})
 	step := StepConfig{Name: "parallel", Parallel: &ParallelConfig{Steps: []StepConfig{
-		{Name: "left", Local: &LocalCommandConfig{Command: "printf", Args: []string{"{{site}}-left"}}, Register: "left"},
-		{Name: "right", Local: &LocalCommandConfig{Command: "printf", Args: []string{"{{site}}-right"}}, Register: "right"},
+		{Name: "left", Command: "{{site}}-left", Register: "left"},
+		{Name: "right", Command: "{{site}}-right", Register: "right"},
 	}}}
 	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
 		t.Fatalf("parallel merge failed: %v", *failed)

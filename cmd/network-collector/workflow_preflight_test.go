@@ -224,9 +224,6 @@ func TestWorkflowOperationExamplesPassVariablePreflight(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := preflightLocalVariables(config.LocalSteps, config.Workflows, defaults); err != nil {
-				t.Fatal(err)
-			}
 		})
 	}
 }

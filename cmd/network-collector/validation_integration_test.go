@@ -1478,7 +1478,7 @@ func TestBlockMarksRescuedValidationRecovered(t *testing.T) {
 	ctx, failed := newControlTestContext(t, &log, map[string]string{})
 	step := StepConfig{Name: "guarded-check", Block: &BlockConfig{
 		Steps: []StepConfig{{
-			Name: "failing-check", Local: &LocalCommandConfig{Command: "printf", Args: []string{"down"}},
+			Name: "failing-check", Command: "down",
 			Validation: &ValidationConfig{Extractor: "regex", Pattern: `(.*)`, Condition: "eq", Expected: "up"},
 		}},
 		Rescue: []StepConfig{{Message: "failure accepted"}},
@@ -1571,8 +1571,8 @@ func TestParallelBranchesMergeVariablesDeterministically(t *testing.T) {
 	var log bytes.Buffer
 	ctx, failed := newControlTestContext(t, &log, map[string]string{"existing": "kept"})
 	step := StepConfig{Name: "collect", Parallel: &ParallelConfig{MaxParallel: 2, Steps: []StepConfig{
-		{Name: "left", Local: &LocalCommandConfig{Command: "printf", Args: []string{"alpha"}}, Register: "left_value"},
-		{Name: "right", Local: &LocalCommandConfig{Command: "printf", Args: []string{"beta"}}, Register: "right_value"},
+		{Name: "left", Command: "alpha", Register: "left_value"},
+		{Name: "right", Command: "beta", Register: "right_value"},
 	}}}
 	if executeSteps(ctx, nil, []StepConfig{step}) || *failed {
 		t.Fatalf("parallel block stopped or failed: %v", *failed)
@@ -1586,8 +1586,8 @@ func TestParallelVariableConflictFails(t *testing.T) {
 	var log bytes.Buffer
 	ctx, failed := newControlTestContext(t, &log, map[string]string{})
 	step := StepConfig{Name: "collect", Parallel: &ParallelConfig{Steps: []StepConfig{
-		{Name: "left", Local: &LocalCommandConfig{Command: "printf", Args: []string{"alpha"}}, Register: "value"},
-		{Name: "right", Local: &LocalCommandConfig{Command: "printf", Args: []string{"beta"}}, Register: "value"},
+		{Name: "left", Command: "alpha", Register: "value"},
+		{Name: "right", Command: "beta", Register: "value"},
 	}}}
 	executeSteps(ctx, nil, []StepConfig{step})
 	if !*failed || ctx.variables["value"] != "alpha" {

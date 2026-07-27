@@ -19,6 +19,7 @@ func TestGNMITriggerMatchesPostSyncUpdateAndRunsNestedStep(t *testing.T) {
 	ctx := &stepExecutionContext{
 		hostname: "router-1", ip: "192.0.2.1", sessionLog: &log,
 		variables: map[string]string{}, runFailed: &failed, aggregated: &validations,
+		sshCommand: echoCommandExecutor{},
 	}
 	var client *ssh.Client
 	handler, err := gnmiTriggerHandler(ctx, &client, []GNMITriggerConfig{{
@@ -26,8 +27,8 @@ func TestGNMITriggerMatchesPostSyncUpdateAndRunsNestedStep(t *testing.T) {
 		PathRegex: `^/interfaces/interface\[name=.*\]/state/oper-status$`,
 		Value:     "UP",
 		Steps: []StepConfig{{
-			Name:  "record-event",
-			Local: &LocalCommandConfig{Command: "printf", Args: []string{"handled:%s", "{{gnmi_event_value}}"}},
+			Name:    "record-event",
+			Command: "handled:{{gnmi_event_value}}",
 		}},
 	}}, 0)
 	if err != nil {
