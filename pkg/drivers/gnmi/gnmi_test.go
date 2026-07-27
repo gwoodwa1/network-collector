@@ -19,6 +19,33 @@ type testGNMIServer struct {
 	responseValue string
 }
 
+type oversizedSubscriptionServer struct {
+	gnmipb.UnimplementedGNMIServer
+	canceled chan struct{}
+}
+
+func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	response := &gnmipb.SubscribeResponse{
+		Response: &gnmipb.SubscribeResponse_Update{
+			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
+				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{
+					StringVal: strings.Repeat("x", MaxSubscriptionResponseBytes+1),
+				}},
+			}}},
+		},
+	}
+	if err := stream.Send(response); err != nil {
+		close(s.canceled)
+		return err
+	}
+	<-stream.Context().Done()
+	close(s.canceled)
+	return stream.Context().Err()
+}
+
 func (s *testGNMIServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
 	request, err := stream.Recv()
 	if err != nil {
@@ -131,6 +158,33 @@ func TestGetRejectsResponseAtGRPCReceiveBoundary(t *testing.T) {
 	defer client.Close()
 	if _, err := client.Execute("/interfaces"); err == nil || !strings.Contains(err.Error(), "larger than max") {
 		t.Fatalf("oversized gRPC response was not rejected at receive boundary: %v", err)
+	}
+}
+
+func TestOversizedSubscriptionCancelsGRPCStream(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled := make(chan struct{})
+	server := grpc.NewServer()
+	gnmipb.RegisterGNMIServer(server, &oversizedSubscriptionServer{canceled: canceled})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := &GNMIClient{}
+	if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, err = client.Subscribe(context.Background(), Subscription{Paths: []string{"/interfaces"}, Mode: "once"})
+	if err == nil || !strings.Contains(err.Error(), "larger than max") {
+		t.Fatalf("oversized subscription response was not rejected at receive boundary: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("oversized subscription did not cancel the gRPC stream")
 	}
 }
 
