@@ -17,8 +17,8 @@ func validateProviderExecutablePermissions(fileInfo, parentInfo os.FileInfo) err
 	if !ok {
 		return fmt.Errorf("cannot inspect parent ownership")
 	}
-	euid := uint32(os.Geteuid())
-	if fileStat.Uid != 0 && fileStat.Uid != euid {
+	euid := os.Geteuid()
+	if fileStat.Uid != 0 && int64(fileStat.Uid) != int64(euid) {
 		return fmt.Errorf("executable must be owned by root or the collector account")
 	}
 	if fileInfo.Mode().Perm()&0022 != 0 {
@@ -28,16 +28,16 @@ func validateProviderExecutablePermissions(fileInfo, parentInfo os.FileInfo) err
 	if err != nil {
 		return fmt.Errorf("inspect collector groups: %w", err)
 	}
-	inParentGroup := parentStat.Gid == uint32(os.Getegid())
+	inParentGroup := int64(parentStat.Gid) == int64(os.Getegid())
 	for _, group := range groups {
-		if parentStat.Gid == uint32(group) {
+		if int64(parentStat.Gid) == int64(group) {
 			inParentGroup = true
 			break
 		}
 	}
 	mode := parentInfo.Mode().Perm()
 	switch {
-	case parentStat.Uid == euid && mode&0200 != 0:
+	case int64(parentStat.Uid) == int64(euid) && mode&0200 != 0:
 		return fmt.Errorf("parent directory is writable by the collector account")
 	case inParentGroup && mode&0020 != 0:
 		return fmt.Errorf("parent directory is group-writable by the collector account")

@@ -15,6 +15,9 @@ func secureProviderExecutable(configuredPath, setting string) (string, error) {
 	if !filepath.IsAbs(configuredPath) {
 		return "", fmt.Errorf("%s must be an absolute path", setting)
 	}
+	configuredPath = filepath.Clean(configuredPath)
+	// #nosec G703 -- this path is intentionally administrator-configurable; it is
+	// required to be absolute and is validated for type, ownership, and permissions.
 	info, err := os.Lstat(configuredPath)
 	if err != nil {
 		return "", fmt.Errorf("inspect %s executable: %w", setting, err)
@@ -29,6 +32,8 @@ func secureProviderExecutable(configuredPath, setting string) (string, error) {
 		return "", fmt.Errorf("%s is not executable", setting)
 	}
 	parent := filepath.Dir(configuredPath)
+	// #nosec G703 -- parent is derived from the cleaned absolute path above and is
+	// inspected here before its ownership and permissions are trusted.
 	parentInfo, err := os.Lstat(parent)
 	if err != nil {
 		return "", fmt.Errorf("inspect %s parent directory: %w", setting, err)
@@ -39,5 +44,5 @@ func secureProviderExecutable(configuredPath, setting string) (string, error) {
 	if err := validateProviderExecutablePermissions(info, parentInfo); err != nil {
 		return "", fmt.Errorf("%s is not administrator-controlled: %w", setting, err)
 	}
-	return filepath.Clean(configuredPath), nil
+	return configuredPath, nil
 }
