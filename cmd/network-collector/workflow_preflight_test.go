@@ -40,7 +40,7 @@ func TestPreflightRejectsEmptyReferencedVariable(t *testing.T) {
 	}
 }
 
-func TestPreflightAllowsEarlierRegisterAndChecksLaterReferences(t *testing.T) {
+func TestPreflightRejectsRegisteredDeviceOutputInCommands(t *testing.T) {
 	device := DeviceConfig{
 		Hostname: "edge-01",
 		Steps: []StepConfig{
@@ -49,8 +49,23 @@ func TestPreflightAllowsEarlierRegisterAndChecksLaterReferences(t *testing.T) {
 		},
 	}
 
+	err := preflightDeviceVariables(device, nil, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), `cannot interpolate tainted device output variable "interface_state"`) {
+		t.Fatalf("expected tainted command interpolation to fail, got %v", err)
+	}
+}
+
+func TestPreflightAllowsRegisteredDeviceOutputInMessages(t *testing.T) {
+	device := DeviceConfig{
+		Hostname: "edge-01",
+		Steps: []StepConfig{
+			{Name: "discover", Command: "show interface", Register: "interface_state"},
+			{Name: "describe-result", Message: "observed {{interface_state}}"},
+		},
+	}
+
 	if err := preflightDeviceVariables(device, nil, map[string]string{}); err != nil {
-		t.Fatalf("expected an earlier register to satisfy the reference: %v", err)
+		t.Fatalf("expected tainted output to remain usable as non-executable data: %v", err)
 	}
 }
 
