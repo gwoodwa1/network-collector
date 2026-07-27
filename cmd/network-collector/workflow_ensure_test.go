@@ -519,6 +519,45 @@ func TestNXOSInterfaceFixturesAndEnsure(t *testing.T) {
 	}
 }
 
+func TestJunosInterfaceFixturesAndEnsure(t *testing.T) {
+	disabled := readPlatformEnsureFixture(t, "junos", "interface-administratively-down.txt")
+	state, err := parseJunosInterfaceState(disabled, "ge-0/0/3")
+	if err != nil || state.Enabled == nil || *state.Enabled || state.Description == nil ||
+		*state.Description != "Example customer handoff" {
+		t.Fatalf("unexpected Junos disabled state: state=%+v error=%v", state, err)
+	}
+	enabledFixture := strings.Replace(disabled, "down  down", "up    up", 1)
+	enabledFixture = strings.Replace(enabledFixture, `"Example customer handoff"`, `"new customer handoff"`, 1)
+	enabledFixture = strings.Replace(enabledFixture, "set interfaces ge-0/0/3 disable\n", "", 1)
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{disabled, "commit complete", enabledFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	description := "new customer handoff"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "ge-0/0/3", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != "show interfaces ge-0/0/3 terse\nshow configuration interfaces ge-0/0/3 | display set" ||
+		!strings.Contains(executor.commands[1], `set interfaces ge-0/0/3 description "new customer handoff"`) ||
+		!strings.Contains(executor.commands[1], "delete interfaces ge-0/0/3 disable") ||
+		!strings.Contains(executor.commands[1], "commit and-quit") ||
+		strings.Contains(executor.commands[1], "write memory") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("Junos ensure did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+	upNoDescription, err := parseJunosInterfaceState(
+		readPlatformEnsureFixture(t, "junos", "interface-up-no-description.txt"),
+		"ge-0/0/3",
+	)
+	if err != nil || upNoDescription.Enabled == nil || !*upNoDescription.Enabled || upNoDescription.Description != nil {
+		t.Fatalf("unexpected Junos enabled state: state=%+v error=%v", upNoDescription, err)
+	}
+}
+
 func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
 	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
@@ -809,7 +848,7 @@ func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	ctx.deviceType = "unsupported_os"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
 		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
-	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos") {
+	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos") {
 		t.Fatalf("unsupported platform was accepted: %v", err)
 	}
 	ctx.deviceType = "cisco_iosxr"

@@ -57,6 +57,7 @@ easier to read.
 | `iosxe/41-cisco-iosxe-declarative-static-route.yaml` | Cisco IOS-XE exact VRF/prefix/next-hop desired state with CIDR/netmask normalization, ECMP preservation, and `--check` |
 | `nxos/42-cisco-nxos-declarative-interface.yaml` | Cisco NX-OS SSH interface desired state with admin-down precondition, rollback-on-failure, verification, and `--check` |
 | `nxos/43-cisco-nxos-declarative-static-route.yaml` | Cisco NX-OS exact VRF/prefix/next-hop desired state with ECMP preservation, rollback-on-failure, verification, and `--check` |
+| `junos/44-junos-declarative-interface.yaml` | Junos SSH interface desired state with separate admin/link discovery, admin-down precondition, rollback-on-failure, verification, and `--check` |
 
 Run one example from the repository root:
 

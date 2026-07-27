@@ -1,0 +1,4 @@
+Interface               Admin Link Proto    Local                 Remote
+ge-0/0/3                down  down
+set interfaces ge-0/0/3 description "Example customer handoff"
+set interfaces ge-0/0/3 disable

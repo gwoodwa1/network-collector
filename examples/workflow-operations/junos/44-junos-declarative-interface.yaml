@@ -1,0 +1,31 @@
+name_playbook: Declarative Junos SSH interface
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+vars:
+  interface: ge-0/0/3
+  interface_description: Example declarative customer handoff
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: junos-pe-01
+    steps:
+      - name: authorize-junos-interface
+        approval:
+          message: Enable {{interface}} with description "{{interface_description}}"?
+          timeout_seconds: 300
+
+      - name: ensure-junos-interface
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          require_state: disabled
+          description: "{{interface_description}}"
+          transport: ssh
+          rollback_on_failure: true
+        register: interface_plan

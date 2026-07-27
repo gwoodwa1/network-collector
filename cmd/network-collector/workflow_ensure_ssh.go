@@ -6,6 +6,7 @@ import (
 	"net"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -39,8 +40,9 @@ type sshStaticRouteState struct {
 }
 
 type sshInterfacePlatformAdapter struct {
-	parse    func(string, string) (sshInterfaceState, error)
-	commands func(string, bool, *string) []string
+	discovery func(string) string
+	parse     func(string, string) (sshInterfaceState, error)
+	commands  func(string, bool, *string) []string
 }
 
 type sshStaticRoutePlatformAdapter struct {
@@ -87,8 +89,10 @@ func normalizeSSHEnsurePlatform(platform string) (string, error) {
 		return "cisco_iosxe", nil
 	case "cisco_nxos", "nxos", "nx-os":
 		return "cisco_nxos", nil
+	case "juniper_junos", "junos", "juniper":
+		return "juniper_junos", nil
 	default:
-		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos", platform)
+		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos", platform)
 	}
 }
 
@@ -114,7 +118,7 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 		}
 	}
 
-	discoveryCommand := "show interfaces " + name
+	discoveryCommand := adapter.discovery(name)
 	output, err := executor.Execute(discoveryCommand)
 	if err != nil {
 		return output, "ensure interface " + name, fmt.Errorf("discover interface %q over SSH: %w", name, err)
@@ -201,16 +205,26 @@ func desiredInterfaceEnabled(state string) (bool, error) {
 func sshInterfaceAdapter(platform string) (sshInterfacePlatformAdapter, error) {
 	switch platform {
 	case "cisco_iosxr":
-		return sshInterfacePlatformAdapter{parse: parseIOSXRInterfaceState, commands: iosXRInterfaceCommands}, nil
+		return sshInterfacePlatformAdapter{discovery: standardInterfaceDiscovery, parse: parseIOSXRInterfaceState, commands: iosXRInterfaceCommands}, nil
 	case "arista_eos":
-		return sshInterfacePlatformAdapter{parse: parseEOSInterfaceState, commands: eosInterfaceCommands}, nil
+		return sshInterfacePlatformAdapter{discovery: standardInterfaceDiscovery, parse: parseEOSInterfaceState, commands: eosInterfaceCommands}, nil
 	case "cisco_iosxe":
-		return sshInterfacePlatformAdapter{parse: parseIOSXEInterfaceState, commands: iosXEInterfaceCommands}, nil
+		return sshInterfacePlatformAdapter{discovery: standardInterfaceDiscovery, parse: parseIOSXEInterfaceState, commands: iosXEInterfaceCommands}, nil
 	case "cisco_nxos":
-		return sshInterfacePlatformAdapter{parse: parseNXOSInterfaceState, commands: nxOSInterfaceCommands}, nil
+		return sshInterfacePlatformAdapter{discovery: standardInterfaceDiscovery, parse: parseNXOSInterfaceState, commands: nxOSInterfaceCommands}, nil
+	case "juniper_junos":
+		return sshInterfacePlatformAdapter{discovery: junosInterfaceDiscovery, parse: parseJunosInterfaceState, commands: junosInterfaceCommands}, nil
 	default:
 		return sshInterfacePlatformAdapter{}, fmt.Errorf("SSH interface ensure is not supported for platform %q", platform)
 	}
+}
+
+func standardInterfaceDiscovery(name string) string {
+	return "show interfaces " + name
+}
+
+func junosInterfaceDiscovery(name string) string {
+	return "show interfaces " + name + " terse\nshow configuration interfaces " + name + " | display set"
 }
 
 func parseIOSXRInterfaceState(output, name string) (sshInterfaceState, error) {
@@ -227,6 +241,36 @@ func parseIOSXEInterfaceState(output, name string) (sshInterfaceState, error) {
 
 func parseNXOSInterfaceState(output, name string) (sshInterfaceState, error) {
 	return parseCLIInterfaceState(output, name, "NX-OS")
+}
+
+func parseJunosInterfaceState(output, name string) (sshInterfaceState, error) {
+	state := sshInterfaceState{}
+	descriptionPrefix := "set interfaces " + name + " description "
+	disableLine := "set interfaces " + name + " disable"
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 3 && fields[0] == name && (fields[1] == "up" || fields[1] == "down") {
+			enabled := fields[1] == "up"
+			state.Exists = true
+			state.Enabled = &enabled
+		}
+		if trimmed == disableLine {
+			enabled := false
+			state.Enabled = &enabled
+		}
+		if strings.HasPrefix(trimmed, descriptionPrefix) {
+			description := strings.TrimSpace(strings.TrimPrefix(trimmed, descriptionPrefix))
+			if unquoted, err := strconv.Unquote(description); err == nil {
+				description = unquoted
+			}
+			state.Description = &description
+		}
+	}
+	if !state.Exists || state.Enabled == nil {
+		return sshInterfaceState{}, fmt.Errorf("interface %q was not found in Junos show output", name)
+	}
+	return state, nil
 }
 
 func parseCLIInterfaceState(output, name, platform string) (sshInterfaceState, error) {
@@ -318,6 +362,23 @@ func nxOSInterfaceCommands(name string, enabled bool, description *string) []str
 		commands = append(commands, " shutdown")
 	}
 	return append(commands, "end", "copy running-config startup-config")
+}
+
+func junosInterfaceCommands(name string, enabled bool, description *string) []string {
+	commands := []string{"configure"}
+	if description != nil {
+		if *description == "" {
+			commands = append(commands, "delete interfaces "+name+" description")
+		} else {
+			commands = append(commands, "set interfaces "+name+" description "+strconv.Quote(*description))
+		}
+	}
+	if enabled {
+		commands = append(commands, "delete interfaces "+name+" disable")
+	} else {
+		commands = append(commands, "set interfaces "+name+" disable")
+	}
+	return append(commands, "commit and-quit")
 }
 
 func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {
