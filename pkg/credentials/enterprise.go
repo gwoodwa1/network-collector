@@ -70,11 +70,11 @@ func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (
 	command.Env = minimalEnvironment(
 		[]string{"PATH", "HOME", "LANG", "LC_ALL", "VAULT_TOKEN", "VAULT_AGENT_ADDR"},
 		map[string]string{
-		"VAULT_ADDR":        provider.Config.Address,
-		"VAULT_NAMESPACE":   provider.Config.Namespace,
-		"VAULT_CACERT":      provider.Config.CAFile,
-		"VAULT_CLIENT_CERT": provider.Config.CertFile,
-		"VAULT_CLIENT_KEY":  provider.Config.KeyFile,
+			"VAULT_ADDR":        provider.Config.Address,
+			"VAULT_NAMESPACE":   provider.Config.Namespace,
+			"VAULT_CACERT":      provider.Config.CAFile,
+			"VAULT_CLIENT_CERT": provider.Config.CertFile,
+			"VAULT_CLIENT_KEY":  provider.Config.KeyFile,
 		},
 	)
 	output, err := command.Output()

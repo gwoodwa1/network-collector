@@ -16,7 +16,7 @@ import (
 
 func TestWebhookSink(t *testing.T) {
 	var received string
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		received = string(body)
 		mac := hmac.New(sha256.New, []byte("secret"))
@@ -31,15 +31,37 @@ func TestWebhookSink(t *testing.T) {
 		writer.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
-	sink, err := NewWebhookSink(server.URL, map[string]string{"X-Test": "yes"}, "secret", time.Second)
+	sink, err := NewWebhookSinkWithPolicy(
+		server.URL, map[string]string{"X-Test": "yes"}, "secret", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"127.0.0.1"}, AllowPrivateNetworks: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sink.client = server.Client()
 	if err := sink.Handle(context.Background(), Event{Type: "run.started"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(received, `"type":"run.started"`) {
 		t.Fatalf("unexpected body: %s", received)
+	}
+}
+
+func TestWebhookSinkRequiresHTTPSAndAllowlistedPublicDestination(t *testing.T) {
+	if _, err := NewWebhookSink("http://events.example.test/hook", nil, "", time.Second); err == nil {
+		t.Fatal("accepted plaintext webhook URL")
+	}
+	if _, err := NewWebhookSinkWithPolicy(
+		"https://127.0.0.1/hook", nil, "", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"127.0.0.1"}},
+	); err == nil {
+		t.Fatal("accepted private destination without explicit policy")
+	}
+	if _, err := NewWebhookSinkWithPolicy(
+		"https://events.example.test/hook", nil, "", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"other.example.test"}},
+	); err == nil {
+		t.Fatal("accepted destination outside allowlist")
 	}
 }
 

@@ -255,6 +255,10 @@ func main() {
 	}
 
 	runStarted := time.Now()
+	if err := pruneSessionLogs(config.Output.RetentionDays, runStarted); err != nil {
+		slog.Error("error pruning expired session logs", "error", err)
+		os.Exit(1)
+	}
 	runID := "run-" + runStarted.Format("20060102T150405.000000000")
 	runDir := ""
 	if outputEnabled(config, devices) {

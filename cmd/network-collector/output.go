@@ -61,6 +61,9 @@ func prepareRunOutput(config OutputConfig, runID string) (string, error) {
 	if directory == "" {
 		directory = "artifacts"
 	}
+	if config.RetentionDays < 0 {
+		return "", fmt.Errorf("output.retention_days must be greater than or equal to 0")
+	}
 	runDir, err := resolveWriteWithin(".", filepath.Join(directory, runID))
 	if err != nil {
 		return "", fmt.Errorf("resolve output directory: %w", err)
@@ -71,7 +74,60 @@ func prepareRunOutput(config OutputConfig, runID string) (string, error) {
 	if err := os.Chmod(runDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to secure output directory: %w", err)
 	}
+	if config.RetentionDays > 0 {
+		if err := pruneManagedOutputs(filepath.Dir(runDir), "run-", config.RetentionDays, time.Now()); err != nil {
+			return "", fmt.Errorf("prune expired run outputs: %w", err)
+		}
+	}
 	return runDir, nil
+}
+
+func pruneManagedOutputs(directory, prefix string, retentionDays int, now time.Time) error {
+	if retentionDays <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pruneSessionLogs(retentionDays int, now time.Time) error {
+	if retentionDays <= 0 {
+		return nil
+	}
+	checkPath, err := resolveWriteWithin(".", filepath.Join("session_logs", ".retention-check"))
+	if err != nil {
+		return fmt.Errorf("resolve session log directory: %w", err)
+	}
+	return pruneManagedOutputs(filepath.Dir(checkPath), "", retentionDays, now)
 }
 
 func stepOutputEnabled(global bool, override *bool) bool {
@@ -209,6 +265,9 @@ func centerASCII(value string, width int) string {
 }
 
 func openSessionLog(hostname, playbookName string, started time.Time) (*os.File, string, error) {
+	if _, err := resolveWriteWithin(".", filepath.Join("session_logs", ".permission-check")); err != nil {
+		return nil, "", fmt.Errorf("resolve session log directory: %w", err)
+	}
 	if err := os.MkdirAll("session_logs", 0700); err != nil {
 		return nil, "", fmt.Errorf("failed to create session log directory: %w", err)
 	}

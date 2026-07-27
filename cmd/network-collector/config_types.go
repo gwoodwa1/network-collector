@@ -309,6 +309,7 @@ type OutputConfig struct {
 	SaveParsed        bool              `mapstructure:"save_parsed" yaml:"save_parsed"`
 	SessionTranscript bool              `mapstructure:"session_transcript" yaml:"session_transcript"`
 	ConsoleOutput     bool              `mapstructure:"console_output" yaml:"console_output"`
+	RetentionDays     int               `mapstructure:"retention_days" yaml:"retention_days"`
 	SummaryFile       string            `mapstructure:"summary_file" yaml:"summary_file"`
 	EventsFile        string            `mapstructure:"events_file" yaml:"events_file"`
 	EventSinks        []EventSinkConfig `mapstructure:"event_sinks" yaml:"event_sinks"`

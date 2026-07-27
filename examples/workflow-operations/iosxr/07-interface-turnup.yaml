@@ -99,7 +99,7 @@ ssh:
               parser: xr_interface_error_counters
               enrich:
                 engine: gojq
-                expression_file: ../enrich/interface-errors.jq
+                expression_file: enrich/interface-errors.jq
                 variables:
                   error_threshold: 0
               register: interface_counters

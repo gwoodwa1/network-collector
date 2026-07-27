@@ -16,8 +16,8 @@ func TestApplyDriftCheckDetectsChange(t *testing.T) {
 	failed := false
 	validations := []deviceValidation{}
 	artifacts := []outputArtifact{}
-	ctx := &stepExecutionContext{hostname: "router-1", ip: "192.0.2.1", sessionLog: io.Discard, runFailed: &failed, aggregated: &validations, runDir: dir, output: OutputConfig{}, artifacts: &artifacts}
-	step := StepConfig{Drift: &DriftConfig{Baseline: baseline, Ignore: []string{"counter"}, FailOnChange: true}}
+	ctx := &stepExecutionContext{hostname: "router-1", ip: "192.0.2.1", sessionLog: io.Discard, runFailed: &failed, aggregated: &validations, runDir: dir, configBaseDir: dir, output: OutputConfig{}, artifacts: &artifacts}
+	step := StepConfig{Drift: &DriftConfig{Baseline: filepath.Base(baseline), Ignore: []string{"counter"}, FailOnChange: true}}
 	if err := applyDriftCheck(ctx, step, "state", `{"state":"down","counter":2}`); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestApplyDriftCheckCreatesRollingBaseline(t *testing.T) {
 	dir := t.TempDir()
 	failed := false
 	validations := []deviceValidation{}
-	ctx := &stepExecutionContext{hostname: "router-1", sessionLog: io.Discard, runFailed: &failed, aggregated: &validations, output: OutputConfig{Directory: dir}}
+	ctx := &stepExecutionContext{hostname: "router-1", sessionLog: io.Discard, runFailed: &failed, aggregated: &validations, configBaseDir: dir, output: OutputConfig{Directory: "artifacts"}}
 	if err := applyDriftCheck(ctx, StepConfig{Drift: &DriftConfig{Baseline: "previous", FailOnChange: true}}, "platform", `{"state":"up"}`); err != nil {
 		t.Fatal(err)
 	}
