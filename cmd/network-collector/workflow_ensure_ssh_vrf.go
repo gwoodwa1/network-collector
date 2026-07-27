@@ -135,9 +135,11 @@ func sshVRFAdapter(platform string) (sshVRFPlatformAdapter, error) {
 		return sshVRFPlatformAdapter{parse: parseIOSXRVRFState, commands: iosXRVRFCommands}, nil
 	case "arista_eos":
 		return sshVRFPlatformAdapter{parse: parseEOSVRFState, commands: eosVRFCommands}, nil
+	case "cisco_iosxe":
+		return sshVRFPlatformAdapter{parse: parseIOSXEVRFState, commands: iosXEVRFCommands}, nil
 	default:
 		return sshVRFPlatformAdapter{}, fmt.Errorf(
-			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos",
+			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe",
 			platform,
 		)
 	}
@@ -321,6 +323,63 @@ func parseEOSVRFState(output, name string) sshVRFState {
 	return state
 }
 
+func parseIOSXEVRFState(output, name string) sshVRFState {
+	state := sshVRFState{ImportRouteTargets: []string{}, ExportRouteTargets: []string{}}
+	inVRF := false
+	topLevel := ""
+	dependencies := map[string]struct{}{}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		indent := leadingSpaces(raw)
+		if indent == 0 && trimmed != "!" {
+			topLevel = trimmed
+		}
+		if !inVRF && indent == 0 && trimmed == "vrf definition "+name {
+			inVRF = true
+			state.Exists = true
+			continue
+		}
+		if inVRF {
+			if indent == 0 {
+				inVRF = false
+				if trimmed != "!" {
+					topLevel = trimmed
+				}
+			} else {
+				fields := strings.Fields(trimmed)
+				switch {
+				case len(fields) == 2 && fields[0] == "rd":
+					state.RouteDistinguisher = fields[1]
+				case len(fields) == 3 && fields[0] == "route-target" && fields[1] == "import":
+					state.ImportRouteTargets = append(state.ImportRouteTargets, fields[2])
+				case len(fields) == 3 && fields[0] == "route-target" && fields[1] == "export":
+					state.ExportRouteTargets = append(state.ExportRouteTargets, fields[2])
+				}
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, "ip route vrf "+name+" ") {
+			dependencies["ip route vrf "+name] = struct{}{}
+		}
+		if indent > 0 && (trimmed == "vrf forwarding "+name || trimmed == "ip vrf forwarding "+name) {
+			dependencies[topLevel] = struct{}{}
+		}
+		if indent > 0 && trimmed == "address-family ipv4 vrf "+name {
+			dependencies[topLevel+" address-family ipv4 vrf "+name] = struct{}{}
+		}
+	}
+	state.ImportRouteTargets = normalizedRouteTargets(state.ImportRouteTargets)
+	state.ExportRouteTargets = normalizedRouteTargets(state.ExportRouteTargets)
+	for dependency := range dependencies {
+		state.Dependencies = append(state.Dependencies, dependency)
+	}
+	sort.Strings(state.Dependencies)
+	return state
+}
+
 func sshVRFMatches(current, desired sshVRFState) bool {
 	if current.Exists != desired.Exists {
 		return false
@@ -433,6 +492,51 @@ func eosRouteTargetChanges(direction string, current, desired []string) []string
 	for _, target := range desired {
 		if !containsString(current, target) {
 			changes = append(changes, "route-target "+direction+" vpn-ipv4 "+target)
+		}
+	}
+	return changes
+}
+
+func iosXEVRFCommands(name string, current, desired sshVRFState) []string {
+	if current.Exists && !desired.Exists {
+		return []string{"configure terminal", "no vrf definition " + name, "end", "write memory"}
+	}
+	if !desired.Exists {
+		return nil
+	}
+	commands := []string{"configure terminal", "vrf definition " + name}
+	if current.RouteDistinguisher != desired.RouteDistinguisher {
+		if desired.RouteDistinguisher == "" {
+			commands = append(commands, " no rd")
+		} else {
+			commands = append(commands, " rd "+desired.RouteDistinguisher)
+		}
+	}
+	importChanges := iosXERouteTargetChanges("import", current.ImportRouteTargets, desired.ImportRouteTargets)
+	exportChanges := iosXERouteTargetChanges("export", current.ExportRouteTargets, desired.ExportRouteTargets)
+	if len(importChanges) > 0 || len(exportChanges) > 0 {
+		commands = append(commands, " address-family ipv4")
+		for _, change := range importChanges {
+			commands = append(commands, "  "+change)
+		}
+		for _, change := range exportChanges {
+			commands = append(commands, "  "+change)
+		}
+		commands = append(commands, " exit-address-family")
+	}
+	return append(commands, "end", "write memory")
+}
+
+func iosXERouteTargetChanges(direction string, current, desired []string) []string {
+	changes := []string{}
+	for _, target := range current {
+		if !containsString(desired, target) {
+			changes = append(changes, "no route-target "+direction+" "+target)
+		}
+	}
+	for _, target := range desired {
+		if !containsString(current, target) {
+			changes = append(changes, "route-target "+direction+" "+target)
 		}
 	}
 	return changes

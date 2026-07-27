@@ -549,7 +549,7 @@ statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
 and
 [`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
-IOS XR and Arista EOS also support declarative SSH VRFs:
+IOS XR, Arista EOS, and Cisco IOS-XE also support declarative SSH VRFs:
 
 ```yaml
 ensure:
@@ -575,7 +575,9 @@ neighbor/policy, or other configuration hierarchy references the VRF.
 planned without broad deletion. See
 [`48-declarative-ssh-vrf.yaml`](examples/workflow-operations/iosxr/48-declarative-ssh-vrf.yaml)
 and
-[`49-arista-eos-declarative-vrf.yaml`](examples/workflow-operations/arista/49-arista-eos-declarative-vrf.yaml).
+[`49-arista-eos-declarative-vrf.yaml`](examples/workflow-operations/arista/49-arista-eos-declarative-vrf.yaml)
+and
+[`50-cisco-iosxe-declarative-vrf.yaml`](examples/workflow-operations/iosxe/50-cisco-iosxe-declarative-vrf.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,

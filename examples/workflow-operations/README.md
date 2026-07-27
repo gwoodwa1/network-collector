@@ -63,6 +63,7 @@ easier to read.
 | `sros/47-nokia-sros-declarative-static-route.yaml` | Nokia SR OS MD-CLI Base/VPRN exact static-route desired state with ECMP-safe removal, rollback-on-failure, verification, and `--check` |
 | `iosxr/48-declarative-ssh-vrf.yaml` | IOS XR VRF desired state with RD/route-target replacement plans, dependency-aware deletion refusal, inverse rollback, verification, and `--check` |
 | `arista/49-arista-eos-declarative-vrf.yaml` | Arista EOS VRF/BGP-VRF desired state with RD/VPN-IPv4 target replacement, dependency refusal, inverse rollback, verification, and `--check` |
+| `iosxe/50-cisco-iosxe-declarative-vrf.yaml` | Cisco IOS-XE `vrf definition` desired state with RD/IPv4 target replacement, dependency refusal, inverse rollback, verification, and `--check` |
 
 Run one example from the repository root:
 

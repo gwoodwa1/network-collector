@@ -1151,6 +1151,47 @@ func TestEOSVRFDeletionRefusesDependencies(t *testing.T) {
 	}
 }
 
+func TestIOSXEVRFParsingReplacementAndDependencyRefusal(t *testing.T) {
+	state := parseIOSXEVRFState(readPlatformEnsureFixture(t, "iosxe", "vrfs.txt"), "CUSTOMER-A")
+	if !state.Exists || state.RouteDistinguisher != "65000:100" ||
+		len(state.ImportRouteTargets) != 1 || len(state.ExportRouteTargets) != 1 ||
+		len(state.Dependencies) != 3 {
+		t.Fatalf("unexpected IOS-XE VRF state: %+v", state)
+	}
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{readPlatformEnsureFixture(t, "iosxe", "vrfs-no-dependencies.txt")}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxe"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:100", "65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, `" rd 65000:110"`) ||
+		!strings.Contains(output, `"  no route-target import 65000:101"`) ||
+		!strings.Contains(output, `"  no route-target export 65000:100"`) ||
+		!strings.Contains(output, `" rd 65000:100"`) {
+		t.Fatalf("IOS-XE replacement or inverse plan is incomplete: %s", output)
+	}
+
+	dependent := &sequenceSSHEnsureExecutor{outputs: []string{readPlatformEnsureFixture(t, "iosxe", "vrfs.txt")}}
+	_, _, err = executeSSHEnsureStep(ctx, dependent, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interface GigabitEthernet1") ||
+		!strings.Contains(err.Error(), "ip route vrf CUSTOMER-A") ||
+		!strings.Contains(err.Error(), "router bgp 65000 address-family ipv4 vrf CUSTOMER-A") {
+		t.Fatalf("dependent IOS-XE VRF deletion was not refused clearly: %v", err)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

@@ -1,0 +1,9 @@
+vrf definition CUSTOMER-A
+ rd 65000:100
+ !
+ address-family ipv4
+  route-target export 65000:100
+  route-target import 65000:100
+  route-target import 65000:101
+ exit-address-family
+!

@@ -1,0 +1,18 @@
+vrf definition CUSTOMER-A
+ rd 65000:100
+ !
+ address-family ipv4
+  route-target export 65000:100
+  route-target import 65000:100
+ exit-address-family
+!
+interface GigabitEthernet1
+ description Customer A handoff
+ vrf forwarding CUSTOMER-A
+!
+ip route vrf CUSTOMER-A 203.0.113.0 255.255.255.0 192.0.2.10
+router bgp 65000
+ address-family ipv4 vrf CUSTOMER-A
+  neighbor 192.0.2.20 remote-as 65100
+ exit-address-family
+!
