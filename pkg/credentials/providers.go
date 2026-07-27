@@ -27,23 +27,23 @@ type ProviderConfig struct {
 	CyberArk       CyberArkConfig
 }
 type HashicorpConfig struct {
-	Address       string `mapstructure:"address" yaml:"address"`
-	Namespace     string `mapstructure:"namespace" yaml:"namespace"`
-	Mount         string `mapstructure:"mount" yaml:"mount"`
-	PathPrefix    string `mapstructure:"path_prefix" yaml:"path_prefix"`
-	UsernameField string `mapstructure:"username_field" yaml:"username_field"`
-	PasswordField string `mapstructure:"password_field" yaml:"password_field"`
-	CAFile        string `mapstructure:"ca_file" yaml:"ca_file"`
-	CertFile      string `mapstructure:"cert_file" yaml:"cert_file"`
-	KeyFile       string `mapstructure:"key_file" yaml:"key_file"`
+	Address       string      `mapstructure:"address" yaml:"address"`
+	Namespace     string      `mapstructure:"namespace" yaml:"namespace"`
+	Mount         string      `mapstructure:"mount" yaml:"mount"`
+	PathPrefix    string      `mapstructure:"path_prefix" yaml:"path_prefix"`
+	UsernameField string      `mapstructure:"username_field" yaml:"username_field"`
+	PasswordField string      `mapstructure:"password_field" yaml:"password_field"`
+	CAFile        string      `mapstructure:"ca_file" yaml:"ca_file"`
+	CertFile      string      `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile       string      `mapstructure:"key_file" yaml:"key_file"`
 	RemovedBinary interface{} `mapstructure:"binary" yaml:"binary"`
 }
 type OnePasswordConfig struct {
-	Account       string `mapstructure:"account" yaml:"account"`
-	Vault         string `mapstructure:"vault" yaml:"vault"`
-	ItemPrefix    string `mapstructure:"item_prefix" yaml:"item_prefix"`
-	UsernameField string `mapstructure:"username_field" yaml:"username_field"`
-	PasswordField string `mapstructure:"password_field" yaml:"password_field"`
+	Account       string      `mapstructure:"account" yaml:"account"`
+	Vault         string      `mapstructure:"vault" yaml:"vault"`
+	ItemPrefix    string      `mapstructure:"item_prefix" yaml:"item_prefix"`
+	UsernameField string      `mapstructure:"username_field" yaml:"username_field"`
+	PasswordField string      `mapstructure:"password_field" yaml:"password_field"`
 	RemovedBinary interface{} `mapstructure:"binary" yaml:"binary"`
 }
 type CyberArkConfig struct {

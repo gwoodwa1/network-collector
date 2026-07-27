@@ -90,7 +90,7 @@ func TestCommandStepEnrichesBeforeValidation(t *testing.T) {
 	executeSteps(ctx, nil, []StepConfig{{
 		Name:    "enrich-device-json",
 		Command: `{"crc_errors":4}`,
-		Enrich: &EnrichmentConfig{Expression: `. + {"_summary": {"has_issues": (.crc_errors > 0)}}`},
+		Enrich:  &EnrichmentConfig{Expression: `. + {"_summary": {"has_issues": (.crc_errors > 0)}}`},
 		Validation: &ValidationConfig{
 			Extractor: "gjson", JSONPath: "_summary.has_issues", Condition: "eq", Expected: true, ExpectedType: "bool",
 		},

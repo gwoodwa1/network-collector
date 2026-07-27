@@ -56,3 +56,31 @@ credentials:
 		})
 	}
 }
+
+func TestLoadConfigRejectsCredentialBinarySelection(t *testing.T) {
+	for name, content := range map[string]string{
+		"vault": `
+credentials:
+  provider: hashicorp
+  hashicorp:
+    binary: /bin/sh
+`,
+		"onepassword": `
+credentials:
+  provider: 1password
+  onepassword:
+    binary: /bin/sh
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "workbook.yaml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := loadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+				t.Fatalf("credential binary selection was not rejected: %v", err)
+			}
+		})
+	}
+}

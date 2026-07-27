@@ -249,24 +249,24 @@ type ValidationConfig struct {
 }
 
 type Config struct {
-	Imports       []string                  `mapstructure:"imports" yaml:"imports"`
-	NamePlaybook  string                    `mapstructure:"name_playbook" yaml:"name_playbook"`
-	InventoryFile string                    `mapstructure:"inventory_file" yaml:"inventory_file"`
-	ParsersFile   string                    `mapstructure:"parsers_file" yaml:"parsers_file"`
-	Execution     ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
-	Output        OutputConfig              `mapstructure:"output" yaml:"output"`
-	Report        ReportConfig              `mapstructure:"report" yaml:"report"`
-	SSH           []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
-	NETCONF       []DeviceConfig            `mapstructure:"netconf" yaml:"netconf"`
-	RemovedLocalSteps interface{}            `mapstructure:"local_steps" yaml:"local_steps"`
-	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
-	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
-	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
-	SSHSecurity   SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
-	Facts         FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
-	Credentials   CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
-	baseDir       string
-	checkMode     bool
+	Imports           []string                  `mapstructure:"imports" yaml:"imports"`
+	NamePlaybook      string                    `mapstructure:"name_playbook" yaml:"name_playbook"`
+	InventoryFile     string                    `mapstructure:"inventory_file" yaml:"inventory_file"`
+	ParsersFile       string                    `mapstructure:"parsers_file" yaml:"parsers_file"`
+	Execution         ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
+	Output            OutputConfig              `mapstructure:"output" yaml:"output"`
+	Report            ReportConfig              `mapstructure:"report" yaml:"report"`
+	SSH               []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
+	NETCONF           []DeviceConfig            `mapstructure:"netconf" yaml:"netconf"`
+	RemovedLocalSteps interface{}               `mapstructure:"local_steps" yaml:"local_steps"`
+	Workflows         map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
+	Schedule          ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
+	Vars              map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
+	SSHSecurity       SSHSecurityConfig         `mapstructure:"ssh_security" yaml:"ssh_security"`
+	Facts             FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
+	Credentials       CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
+	baseDir           string
+	checkMode         bool
 }
 
 type ReportConfig struct {
