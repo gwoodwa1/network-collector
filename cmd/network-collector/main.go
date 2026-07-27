@@ -254,7 +254,8 @@ func main() {
 		key := variableScopeKey(device.Hostname, device.IP)
 		state, exists := variableStates[key]
 		if !exists {
-			state = &deviceVariableState{variables: cloneVariables(initialVariables)}
+			deviceVariables, _ := mergeInventoryVariables(initialVariables, device.InventoryVars)
+			state = &deviceVariableState{variables: deviceVariables}
 			state.cond = sync.NewCond(&state.mu)
 			variableStates[key] = state
 		}

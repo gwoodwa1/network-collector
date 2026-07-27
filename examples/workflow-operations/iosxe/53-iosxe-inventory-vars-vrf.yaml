@@ -1,0 +1,23 @@
+name_playbook: Cisco IOS-XE VRF from host inventory variables
+inventory_file: ../inventory/per-host-vars.yaml
+fail_on_fail: true
+
+ssh:
+  - host: iosxe-vars-01
+    steps:
+      - name: authorize-inventory-vrf
+        approval:
+          message: Ensure inventory-defined VRF {{vrf_name}} on iosxe-vars-01?
+          timeout_seconds: 300
+
+      - name: ensure-inventory-vrf
+        ensure:
+          resource: vrf
+          name: "{{vrf_name}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+          attributes:
+            route_distinguisher: "{{route_distinguisher}}"
+            import_route_targets: ["{{route_targets}}"]
+            export_route_targets: ["{{route_targets}}"]

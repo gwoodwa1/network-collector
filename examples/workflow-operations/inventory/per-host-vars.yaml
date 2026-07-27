@@ -1,0 +1,58 @@
+hosts:
+  - name: xr-vars-01
+    ip: 192.0.2.60
+    type: cisco_iosxr
+    vars:
+      vrf_name: CUSTOMER-XR
+      route_distinguisher: "65000:601"
+      route_targets: ["65000:601", "65000:1601"]
+
+  - name: eos-vars-01
+    ip: 192.0.2.61
+    type: arista_eos
+    vars:
+      vrf_name: CUSTOMER-EOS
+      route_distinguisher: "65000:602"
+      route_targets: ["65000:602"]
+
+  - name: iosxe-vars-01
+    ip: 192.0.2.62
+    type: cisco_iosxe
+    vars:
+      vrf_name: CUSTOMER-IOSXE
+      route_distinguisher: "65000:603"
+      route_targets: ["65000:603", "65000:1603"]
+
+  - name: nxos-vars-01
+    ip: 192.0.2.63
+    type: cisco_nxos
+    vars:
+      route_prefix: 203.0.113.64/28
+      route_next_hop: 192.0.2.10
+      route_vrf: CUSTOMER-NXOS
+
+  - name: junos-vars-01
+    ip: 192.0.2.64
+    type: juniper_junos
+    vars:
+      route_prefix: 203.0.113.80/28
+      route_next_hop: 192.0.2.11
+      route_vrf: CUSTOMER-JUNOS
+
+  - name: sros-vars-01
+    ip: 192.0.2.65
+    type: nokia_sros
+    vars:
+      route_prefix: 203.0.113.96/28
+      route_next_hop: 192.0.2.12
+      route_vrf: CUSTOMER-SROS
+
+groups:
+  inventory-vars-cli:
+    hosts:
+      - xr-vars-01
+      - eos-vars-01
+      - iosxe-vars-01
+      - nxos-vars-01
+      - junos-vars-01
+      - sros-vars-01

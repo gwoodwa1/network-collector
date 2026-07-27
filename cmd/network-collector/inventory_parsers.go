@@ -69,11 +69,20 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 	if strings.TrimSpace(resolved.CredentialProfile) == "" {
 		resolved.CredentialProfile = strings.TrimSpace(host.CredentialProfile)
 	}
+	resolved.InventoryVars = cloneInterfaceMap(host.Vars)
 	resolved.Labels = cloneLabels(host.Labels)
 	for key, value := range device.Labels {
 		resolved.Labels[key] = value
 	}
 	return resolved
+}
+
+func cloneInterfaceMap(values map[string]interface{}) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneLabels(labels map[string]string) map[string]string {
@@ -422,6 +431,9 @@ func inventoryIndex(inventory *InventoryConfig) (map[string]InventoryHostConfig,
 		}
 		if _, exists := index[key]; exists {
 			return nil, fmt.Errorf("duplicate inventory host %q", key)
+		}
+		if _, err := configVariables(host.Vars); err != nil {
+			return nil, fmt.Errorf("inventory host %q vars: %w", key, err)
 		}
 		index[key] = host
 	}

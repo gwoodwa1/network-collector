@@ -137,12 +137,30 @@ func renderEnsureConfig(config EnsureConfig, vars map[string]string) (EnsureConf
 		"import_route_targets": &config.Attributes.ImportRouteTargets,
 		"export_route_targets": &config.Attributes.ExportRouteTargets,
 	} {
+		renderedTargets := []string{}
 		for index := range *targets {
-			(*targets)[index], err = renderTemplate(strings.TrimSpace((*targets)[index]), vars)
+			rendered, renderErr := renderTemplate(strings.TrimSpace((*targets)[index]), vars)
+			err = renderErr
 			if err != nil {
 				return EnsureConfig{}, fmt.Errorf("render ensure.attributes.%s[%d]: %w", label, index, err)
 			}
+			var expanded []interface{}
+			if strings.HasPrefix(strings.TrimSpace(rendered), "[") && json.Unmarshal([]byte(rendered), &expanded) == nil {
+				for expandedIndex, value := range expanded {
+					text, valueErr := variableString(value)
+					if valueErr != nil {
+						return EnsureConfig{}, fmt.Errorf(
+							"render ensure.attributes.%s[%d][%d]: %w",
+							label, index, expandedIndex, valueErr,
+						)
+					}
+					renderedTargets = append(renderedTargets, text)
+				}
+				continue
+			}
+			renderedTargets = append(renderedTargets, rendered)
 		}
+		*targets = renderedTargets
 	}
 	return config, nil
 }

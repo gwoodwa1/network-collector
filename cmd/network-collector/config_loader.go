@@ -243,6 +243,18 @@ func configVariables(values map[string]interface{}) (map[string]string, error) {
 	return variables, nil
 }
 
+func mergeInventoryVariables(base map[string]string, inventory map[string]interface{}) (map[string]string, error) {
+	merged := cloneVariables(base)
+	overrides, err := configVariables(inventory)
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range overrides {
+		merged[name] = value
+	}
+	return merged, nil
+}
+
 func expandConfigImport(importingFile, configuredPath string) ([]string, error) {
 	path := strings.TrimSpace(configuredPath)
 	if path == "" {

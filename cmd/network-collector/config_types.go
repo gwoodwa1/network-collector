@@ -219,24 +219,25 @@ type RepeatConfig struct {
 }
 
 type DeviceConfig struct {
-	Hostname          string                `mapstructure:"hostname" yaml:"hostname"`
-	IP                string                `mapstructure:"ip" yaml:"ip"`
-	Host              string                `mapstructure:"host" yaml:"host"`
-	Hosts             []string              `mapstructure:"hosts" yaml:"hosts"`
-	Group             string                `mapstructure:"group" yaml:"group"`
-	Groups            []string              `mapstructure:"groups" yaml:"groups"`
-	Type              string                `mapstructure:"type" yaml:"type"`
-	Timeout           int                   `mapstructure:"timeout" yaml:"timeout"`
-	OperationTimeout  int                   `mapstructure:"operation_timeout" yaml:"operation_timeout"`
-	Steps             []StepConfig          `mapstructure:"steps" yaml:"steps"`
-	Command           string                `mapstructure:"cmd" yaml:"cmd"`
-	Parser            string                `mapstructure:"parser" yaml:"parser"`
-	Validation        *ValidationConfig     `mapstructure:"validation" yaml:"validation"`
-	Validations       []ValidationConfig    `mapstructure:"validations" yaml:"validations"`
-	SSHSecurity       *SSHSecurityConfig    `mapstructure:"ssh_security" yaml:"ssh_security"`
-	GNMI              *GNMIConnectionConfig `mapstructure:"gnmi" yaml:"gnmi"`
-	Labels            map[string]string     `mapstructure:"labels" yaml:"labels"`
-	CredentialProfile string                `mapstructure:"credential_profile" yaml:"credential_profile"`
+	Hostname          string                 `mapstructure:"hostname" yaml:"hostname"`
+	IP                string                 `mapstructure:"ip" yaml:"ip"`
+	Host              string                 `mapstructure:"host" yaml:"host"`
+	Hosts             []string               `mapstructure:"hosts" yaml:"hosts"`
+	Group             string                 `mapstructure:"group" yaml:"group"`
+	Groups            []string               `mapstructure:"groups" yaml:"groups"`
+	Type              string                 `mapstructure:"type" yaml:"type"`
+	Timeout           int                    `mapstructure:"timeout" yaml:"timeout"`
+	OperationTimeout  int                    `mapstructure:"operation_timeout" yaml:"operation_timeout"`
+	Steps             []StepConfig           `mapstructure:"steps" yaml:"steps"`
+	Command           string                 `mapstructure:"cmd" yaml:"cmd"`
+	Parser            string                 `mapstructure:"parser" yaml:"parser"`
+	Validation        *ValidationConfig      `mapstructure:"validation" yaml:"validation"`
+	Validations       []ValidationConfig     `mapstructure:"validations" yaml:"validations"`
+	SSHSecurity       *SSHSecurityConfig     `mapstructure:"ssh_security" yaml:"ssh_security"`
+	GNMI              *GNMIConnectionConfig  `mapstructure:"gnmi" yaml:"gnmi"`
+	Labels            map[string]string      `mapstructure:"labels" yaml:"labels"`
+	CredentialProfile string                 `mapstructure:"credential_profile" yaml:"credential_profile"`
+	InventoryVars     map[string]interface{} `mapstructure:"-" yaml:"-"`
 }
 
 type SSHSecurityConfig struct {
@@ -330,17 +331,18 @@ type ExecutionConfig struct {
 }
 
 type InventoryHostConfig struct {
-	Name              string                `yaml:"name"`
-	Hostname          string                `yaml:"hostname"`
-	IP                string                `yaml:"ip"`
-	Address           string                `yaml:"address"`
-	Type              string                `yaml:"type"`
-	Timeout           int                   `yaml:"timeout"`
-	OperationTimeout  int                   `yaml:"operation_timeout"`
-	SSHSecurity       *SSHSecurityConfig    `yaml:"ssh_security"`
-	GNMI              *GNMIConnectionConfig `yaml:"gnmi"`
-	Labels            map[string]string     `yaml:"labels"`
-	CredentialProfile string                `yaml:"credential_profile"`
+	Name              string                 `yaml:"name"`
+	Hostname          string                 `yaml:"hostname"`
+	IP                string                 `yaml:"ip"`
+	Address           string                 `yaml:"address"`
+	Type              string                 `yaml:"type"`
+	Timeout           int                    `yaml:"timeout"`
+	OperationTimeout  int                    `yaml:"operation_timeout"`
+	SSHSecurity       *SSHSecurityConfig     `yaml:"ssh_security"`
+	GNMI              *GNMIConnectionConfig  `yaml:"gnmi"`
+	Labels            map[string]string      `yaml:"labels"`
+	CredentialProfile string                 `yaml:"credential_profile"`
+	Vars              map[string]interface{} `yaml:"vars"`
 }
 
 type InventoryGroupConfig struct {

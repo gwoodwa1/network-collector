@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"io/ioutil"
 	"net"
@@ -348,6 +349,74 @@ func TestResolveInventoryDevicesExpandsHostAndGroup(t *testing.T) {
 	}
 	if resolved[0].Timeout != 20 || resolved[0].OperationTimeout != 120 {
 		t.Fatalf("expected inventory timeout and config operation timeout, got %+v", resolved[0])
+	}
+}
+
+func TestInventoryHostVariablesOverrideDefaultsAndRemainIsolated(t *testing.T) {
+	inventory := &InventoryConfig{
+		Hosts: []InventoryHostConfig{
+			{
+				Name: "router-01", IP: "192.0.2.1", Type: "cisco_iosxr",
+				Vars: map[string]interface{}{
+					"vrf_name":            "CUSTOMER-A",
+					"route_distinguisher": "65000:100",
+					"route_targets":       []interface{}{"65000:100", "65000:101"},
+				},
+			},
+			{
+				Name: "router-02", IP: "192.0.2.2", Type: "cisco_iosxr",
+				Vars: map[string]interface{}{
+					"vrf_name":            "CUSTOMER-B",
+					"route_distinguisher": "65000:200",
+					"route_targets":       []interface{}{"65000:200"},
+				},
+			},
+		},
+		Groups: map[string]InventoryGroupConfig{"xr": {Hosts: []string{"router-01", "router-02"}}},
+	}
+	resolved, err := resolveInventoryDevices([]DeviceConfig{{Group: "xr", Command: "show version"}}, inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := map[string]string{"vrf_name": "DEFAULT", "region": "emea"}
+	first, err := mergeInventoryVariables(defaults, resolved[0].InventoryVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := mergeInventoryVariables(defaults, resolved[1].InventoryVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first["vrf_name"] != "CUSTOMER-A" || first["region"] != "emea" ||
+		first["route_targets"] != `["65000:100","65000:101"]` ||
+		second["vrf_name"] != "CUSTOMER-B" || second["route_targets"] != `["65000:200"]` {
+		t.Fatalf("unexpected host variable precedence: first=%+v second=%+v", first, second)
+	}
+	first["vrf_name"] = "mutated"
+	if second["vrf_name"] != "CUSTOMER-B" || defaults["vrf_name"] != "DEFAULT" {
+		t.Fatalf("host variables leaked across device scopes: defaults=%+v first=%+v second=%+v", defaults, first, second)
+	}
+}
+
+func TestEnsureRouteTargetListsExpandInventoryJSONArrays(t *testing.T) {
+	rendered, err := renderEnsureConfig(EnsureConfig{
+		Resource: "vrf", Name: "{{vrf_name}}", State: "present", Transport: "ssh",
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "{{route_distinguisher}}",
+			ImportRouteTargets: []string{"{{route_targets}}"},
+			ExportRouteTargets: []string{"{{route_targets}}"},
+		},
+	}, map[string]string{
+		"vrf_name": "CUSTOMER-A", "route_distinguisher": "65000:100",
+		"route_targets": `["65000:100","65000:101"]`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rendered.Attributes.ImportRouteTargets) != 2 ||
+		rendered.Attributes.ImportRouteTargets[1] != "65000:101" ||
+		len(rendered.Attributes.ExportRouteTargets) != 2 {
+		t.Fatalf("inventory route-target array was not expanded: %+v", rendered.Attributes)
 	}
 }
 
@@ -1845,8 +1914,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 50 {
-		t.Fatalf("expected fifty vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 56 {
+		t.Fatalf("expected fifty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1865,8 +1934,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 50 {
-		t.Fatalf("expected fifty loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 56 {
+		t.Fatalf("expected fifty-six loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -2034,6 +2103,21 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		!iosxeVRFState[1].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative IOS-XE VRF example is incomplete: %+v", iosxeVRFState)
 	}
+	for _, example := range []string{
+		"51-iosxr-inventory-vars-vrf.yaml",
+		"52-eos-inventory-vars-vrf.yaml",
+		"53-iosxe-inventory-vars-vrf.yaml",
+		"54-nxos-inventory-vars-static-route.yaml",
+		"55-junos-inventory-vars-static-route.yaml",
+		"56-sros-inventory-vars-static-route.yaml",
+	} {
+		steps := loaded[example].SSH[0].Steps
+		if len(steps) != 2 || steps[0].Approval == nil || steps[1].Ensure == nil ||
+			steps[1].Ensure.Transport != "ssh" || !steps[1].Ensure.RollbackOnFailure ||
+			len(loaded[example].Vars) != 0 {
+			t.Fatalf("inventory-variable example %s is incomplete or has workbook vars: %+v", example, loaded[example])
+		}
+	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || !hardGate(recovery.Workflows["inspect-interface"].Steps[0]) || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 || !hardGate(recovery.SSH[0].Steps[2].Block.Steps[2]) {
 		t.Fatalf("recovery example is incomplete: %+v", recovery)
@@ -2186,6 +2270,66 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	srosNETCONF := loaded["26-nokia-sros-netconf-port.yaml"]
 	if len(srosNETCONF.NETCONF) != 1 || srosNETCONF.NETCONF[0].Steps[2].Block == nil || srosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF.Target != "candidate" || srosNETCONF.NETCONF[0].Steps[2].Block.Steps[1].NETCONF.Operation != "commit" || !strings.Contains(readPayload("26-nokia-sros-netconf-port.yaml", srosNETCONF.NETCONF[0].Steps[2].Block.Steps[0].NETCONF), "urn:nokia.com:sros:ns:yang:sr:conf") {
 		t.Fatalf("SR OS NETCONF example is incomplete: %+v", srosNETCONF)
+	}
+}
+
+func TestInventoryVariableExamplesResolveAndRenderPerHost(t *testing.T) {
+	root := filepath.Join("..", "..", "examples", "workflow-operations")
+	examples := []string{
+		filepath.Join("iosxr", "51-iosxr-inventory-vars-vrf.yaml"),
+		filepath.Join("arista", "52-eos-inventory-vars-vrf.yaml"),
+		filepath.Join("iosxe", "53-iosxe-inventory-vars-vrf.yaml"),
+		filepath.Join("nxos", "54-nxos-inventory-vars-static-route.yaml"),
+		filepath.Join("junos", "55-junos-inventory-vars-static-route.yaml"),
+		filepath.Join("sros", "56-sros-inventory-vars-static-route.yaml"),
+	}
+	for _, relative := range examples {
+		t.Run(filepath.Base(relative), func(t *testing.T) {
+			configPath := filepath.Join(root, relative)
+			config, _, err := loadConfig(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inventory, err := loadInventory(config.InventoryFile, configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			devices, err := resolveInventoryDevices(config.SSH, inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(devices) != 1 || len(devices[0].Steps) != 2 || devices[0].Steps[1].Ensure == nil {
+				t.Fatalf("unexpected resolved inventory example: %+v", devices)
+			}
+			defaults, err := configVariables(config.Vars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			variables, err := mergeInventoryVariables(defaults, devices[0].InventoryVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rendered, err := renderEnsureConfig(*devices[0].Steps[1].Ensure, variables)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(rendered)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "{{") {
+				t.Fatalf("inventory variables were not fully rendered: %s", encoded)
+			}
+			if rendered.Resource == "vrf" {
+				if rendered.Name == "" || rendered.Attributes.RouteDistinguisher == "" ||
+					len(rendered.Attributes.ImportRouteTargets) == 0 ||
+					len(rendered.Attributes.ExportRouteTargets) == 0 {
+					t.Fatalf("rendered VRF is incomplete: %+v", rendered)
+				}
+			} else if rendered.Prefix == "" || rendered.NextHop == "" || rendered.VRF == "" {
+				t.Fatalf("rendered static route is incomplete: %+v", rendered)
+			}
+		})
 	}
 }
 

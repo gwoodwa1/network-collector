@@ -1657,7 +1657,42 @@ vars:
   change_reference: CHG-2026-0042
 ```
 
-Earlier variable files are overridden by later files, inline `vars` override file values, and values registered during execution override both for that device. Variable files may contain a bare map or a single top-level `vars:` map. Lists and objects are exposed as compact JSON, allowing an imported list to be used directly by `foreach.from`. Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Files declared inside imported configs resolve relative to that imported config.
+Earlier variable files are overridden by later files, inline workbook `vars`
+override file values, per-host inventory `vars` override workbook defaults,
+and values registered during execution override all of them for that device.
+Each host receives an isolated variable scope.
+
+```yaml
+hosts:
+  - name: xr-vars-01
+    ip: 192.0.2.60
+    type: cisco_iosxr
+    vars:
+      vrf_name: CUSTOMER-XR
+      route_distinguisher: "65000:601"
+      route_targets: ["65000:601", "65000:1601"]
+```
+
+Scalar host values render normally as `{{vrf_name}}`. To expand an inventory
+list into an ensure list, place its template as the sole list item:
+
+```yaml
+attributes:
+  route_distinguisher: "{{route_distinguisher}}"
+  import_route_targets: ["{{route_targets}}"]
+  export_route_targets: ["{{route_targets}}"]
+```
+
+Variable files and inventory variables may contain scalar, list, or object
+values. Lists and objects are exposed internally as compact JSON, allowing
+them to be used by `foreach.from` and supported list-valued ensure fields.
+Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Files declared inside
+imported configs resolve relative to that imported config. Inventory
+variables are configuration data, not a secret store; use credential
+providers for passwords and tokens. See
+[`per-host-vars.yaml`](examples/workflow-operations/inventory/per-host-vars.yaml)
+and examples 51–56 in
+[`examples/workflow-operations`](examples/workflow-operations/README.md).
 
 ### Running local tools
 

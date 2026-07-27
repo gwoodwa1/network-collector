@@ -1,0 +1,21 @@
+name_playbook: Junos static route from host inventory variables
+inventory_file: ../inventory/per-host-vars.yaml
+fail_on_fail: true
+
+ssh:
+  - host: junos-vars-01
+    steps:
+      - name: authorize-inventory-static-route
+        approval:
+          message: Ensure inventory-defined route {{route_prefix}} on junos-vars-01?
+          timeout_seconds: 300
+
+      - name: ensure-inventory-static-route
+        ensure:
+          resource: static_route
+          prefix: "{{route_prefix}}"
+          next_hop: "{{route_next_hop}}"
+          vrf: "{{route_vrf}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true

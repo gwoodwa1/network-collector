@@ -64,6 +64,12 @@ easier to read.
 | `iosxr/48-declarative-ssh-vrf.yaml` | IOS XR VRF desired state with RD/route-target replacement plans, dependency-aware deletion refusal, inverse rollback, verification, and `--check` |
 | `arista/49-arista-eos-declarative-vrf.yaml` | Arista EOS VRF/BGP-VRF desired state with RD/VPN-IPv4 target replacement, dependency refusal, inverse rollback, verification, and `--check` |
 | `iosxe/50-cisco-iosxe-declarative-vrf.yaml` | Cisco IOS-XE `vrf definition` desired state with RD/IPv4 target replacement, dependency refusal, inverse rollback, verification, and `--check` |
+| `iosxr/51-iosxr-inventory-vars-vrf.yaml` | IOS XR VRF rendered entirely from per-host inventory variables, including a route-target list |
+| `arista/52-eos-inventory-vars-vrf.yaml` | Arista EOS VRF rendered entirely from per-host inventory variables |
+| `iosxe/53-iosxe-inventory-vars-vrf.yaml` | Cisco IOS-XE VRF rendered entirely from per-host inventory variables |
+| `nxos/54-nxos-inventory-vars-static-route.yaml` | Cisco NX-OS exact static route rendered from per-host inventory variables |
+| `junos/55-junos-inventory-vars-static-route.yaml` | Junos exact static route rendered from per-host inventory variables |
+| `sros/56-sros-inventory-vars-static-route.yaml` | Nokia SR OS exact static route rendered from per-host inventory variables |
 
 Run one example from the repository root:
 
