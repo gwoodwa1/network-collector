@@ -1926,14 +1926,66 @@ func TestLoadConfigRejectsAggregateImportFileCount(t *testing.T) {
 	}
 }
 
-func TestConfigImportBudgetRejectsAggregateBytesAndNodes(t *testing.T) {
-	byteBudget := &configImportBudget{bytes: maxConfigImportBytes}
-	if err := byteBudget.consumeFile("extra.yaml", []byte("x")); err == nil || !strings.Contains(err.Error(), "byte limit") {
-		t.Fatalf("expected byte-limit error, got %v", err)
+func TestLoadConfigRejectsAggregateBytesAcrossValidFiles(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "config.yaml")
+	part := filepath.Join(dir, "part.yaml")
+	rootContent := []byte("imports: [part.yaml]\n")
+	partContent := []byte("vars:\n  site: london\n")
+	if err := os.WriteFile(root, rootContent, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	nodeBudget := &configImportBudget{nodes: maxConfigImportNodes}
-	if err := nodeBudget.consumeNodes("extra.yaml", 1); err == nil || !strings.Contains(err.Error(), "node YAML limit") {
-		t.Fatalf("expected node-limit error, got %v", err)
+	if err := os.WriteFile(part, partContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	budget := &configImportBudget{maxBytes: len(rootContent) + len(partContent) - 1}
+	if _, err := loadConfigMap(root, 0, map[string]bool{}, map[string]bool{}, budget); err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("expected aggregate byte-limit error, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAggregateNodesAcrossValidFiles(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "config.yaml")
+	part := filepath.Join(dir, "part.yaml")
+	if err := os.WriteFile(root, []byte("imports: [part.yaml]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(part, []byte("vars:\n  site: london\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	budget := &configImportBudget{maxNodes: 6}
+	if _, err := loadConfigMap(root, 0, map[string]bool{}, map[string]bool{}, budget); err == nil || !strings.Contains(err.Error(), "node YAML limit") {
+		t.Fatalf("expected aggregate node-limit error, got %v", err)
+	}
+}
+
+func TestLoadConfigSharesBudgetWithVarsFilesAndCountsFailedParse(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "config.yaml")
+	vars := filepath.Join(dir, "vars.yaml")
+	if err := os.WriteFile(root, []byte("vars_files: [vars.yaml]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vars, []byte("site: london\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	budget := &configImportBudget{maxFiles: 1}
+	if _, err := loadConfigMap(root, 0, map[string]bool{}, map[string]bool{}, budget); err == nil || !strings.Contains(err.Error(), "file limit") {
+		t.Fatalf("expected vars_file to consume shared file budget, got %v", err)
+	}
+
+	invalid := filepath.Join(dir, "invalid.yaml")
+	invalidContent := []byte("vars: [unterminated\n")
+	if err := os.WriteFile(invalid, invalidContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedBudget := &configImportBudget{}
+	if _, err := loadConfigMap(invalid, 0, map[string]bool{}, map[string]bool{}, failedBudget); err == nil {
+		t.Fatal("invalid YAML was accepted")
+	}
+	if failedBudget.files != 1 || failedBudget.bytes != len(invalidContent) || failedBudget.nodes != 0 {
+		t.Fatalf("failed parse budget = %+v, want one file/%d bytes/zero decoded nodes", failedBudget, len(invalidContent))
 	}
 }
 

@@ -136,28 +136,43 @@ const (
 )
 
 type configImportBudget struct {
-	files int
-	bytes int
-	nodes int
+	files    int
+	bytes    int
+	nodes    int
+	maxFiles int
+	maxBytes int
+	maxNodes int
 }
 
 func (budget *configImportBudget) consumeFile(path string, content []byte) error {
+	fileLimit := budget.maxFiles
+	if fileLimit == 0 {
+		fileLimit = maxConfigImportFiles
+	}
+	byteLimit := budget.maxBytes
+	if byteLimit == 0 {
+		byteLimit = maxConfigImportBytes
+	}
 	budget.files++
 	budget.bytes += len(content)
 	switch {
-	case budget.files > maxConfigImportFiles:
-		return fmt.Errorf("config import session exceeds the %d-file limit at %q", maxConfigImportFiles, path)
-	case budget.bytes > maxConfigImportBytes:
-		return fmt.Errorf("config import session exceeds the %d-byte limit at %q", maxConfigImportBytes, path)
+	case budget.files > fileLimit:
+		return fmt.Errorf("config import session exceeds the %d-file limit at %q", fileLimit, path)
+	case budget.bytes > byteLimit:
+		return fmt.Errorf("config import session exceeds the %d-byte limit at %q", byteLimit, path)
 	default:
 		return nil
 	}
 }
 
 func (budget *configImportBudget) consumeNodes(path string, nodes int) error {
+	nodeLimit := budget.maxNodes
+	if nodeLimit == 0 {
+		nodeLimit = maxConfigImportNodes
+	}
 	budget.nodes += nodes
-	if budget.nodes > maxConfigImportNodes {
-		return fmt.Errorf("config import session exceeds the %d-node YAML limit at %q", maxConfigImportNodes, path)
+	if budget.nodes > nodeLimit {
+		return fmt.Errorf("config import session exceeds the %d-node YAML limit at %q", nodeLimit, path)
 	}
 	return nil
 }
