@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-func TestNormalizeSecurityProfileDefaultsToCompatibility(t *testing.T) {
+func TestNormalizeSecurityProfileDefaultsToModern(t *testing.T) {
 	profile, err := normalizeSecurityProfile("")
-	if err != nil || profile != "compatibility" {
+	if err != nil || profile != "modern" {
 		t.Fatalf("unexpected default profile=%q error=%v", profile, err)
 	}
 	for _, value := range []string{"compatibility", "auto", "modern", "legacy"} {
