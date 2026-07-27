@@ -14,15 +14,15 @@ import (
 )
 
 type lazyNETCONFExecutor struct {
-	once     sync.Once
-	client   *netconf.ScrapligoNETCONF
-	host     string
-	username string
-	password string
-	timeout  time.Duration
+	once           sync.Once
+	client         *netconf.ScrapligoNETCONF
+	host           string
+	username       string
+	password       string
+	timeout        time.Duration
 	hostKeyPolicy  string
 	knownHostsFile string
-	err      error
+	err            error
 }
 
 func (executor *lazyNETCONFExecutor) connect() error {
