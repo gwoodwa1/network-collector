@@ -444,41 +444,41 @@ var failureLogMu sync.Mutex
 var version = "dev"
 
 type stepExecutionContext struct {
-	hostname       string
-	ip             string
-	deviceType     string
-	username       string
-	password       string
-	opts           []ssh.Option
-	jsonOut        bool
-	consoleOutput  bool
-	sessionOutput  bool
-	sessionLog     io.Writer
-	failureLog     string
-	variables      map[string]string
-	aggregated     *[]deviceValidation
-	runFailed      *bool
-	parsers        map[string]ParserModuleConfig
-	configBaseDir  string
-	output         OutputConfig
-	runDir         string
-	deviceIndex    int
-	artifacts      *[]outputArtifact
-	artifactSeq    int
-	workflows      map[string]WorkflowConfig
-	approveAll     bool
-	approvalInput  *approvalInput
-	approvalWriter io.Writer
-	artifactPrefix string
-	factsDefaults  FactsDefaultsConfig
-	events         *eventDispatcher
-	reauthenticate func() (string, string, error)
-	netconf        netconfStepExecutor
-	sshCommand     sshEnsureCommandExecutor
-	sshEnsure      sshEnsureCommandExecutor
-	gnmi           *GNMIConnectionConfig
-	checkMode      bool
-	reportEnabled  bool
+	hostname         string
+	ip               string
+	deviceType       string
+	username         string
+	password         string
+	opts             []ssh.Option
+	jsonOut          bool
+	consoleOutput    bool
+	sessionOutput    bool
+	sessionLog       io.Writer
+	failureLog       string
+	variables        map[string]string
+	aggregated       *[]deviceValidation
+	runFailed        *bool
+	parsers          map[string]ParserModuleConfig
+	configBaseDir    string
+	output           OutputConfig
+	runDir           string
+	deviceIndex      int
+	artifacts        *[]outputArtifact
+	artifactSeq      int
+	workflows        map[string]WorkflowConfig
+	approveAll       bool
+	approvalInput    *approvalInput
+	approvalWriter   io.Writer
+	artifactPrefix   string
+	factsDefaults    FactsDefaultsConfig
+	events           *eventDispatcher
+	reauthenticate   func() (string, string, error)
+	netconf          netconfStepExecutor
+	sshCommand       sshEnsureCommandExecutor
+	sshEnsure        sshEnsureCommandExecutor
+	gnmi             *GNMIConnectionConfig
+	checkMode        bool
+	reportEnabled    bool
 	gnmiActionBudget *gnmiDeviceActionBudget
 }
 
