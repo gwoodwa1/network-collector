@@ -142,6 +142,9 @@ func validateEnsureConfig(config EnsureConfig) (bool, error) {
 	if strings.TrimSpace(config.RequireState) != "" {
 		return false, fmt.Errorf("ensure.require_state is currently supported only for SSH interfaces")
 	}
+	if config.RollbackOnFailure {
+		return false, fmt.Errorf("ensure.rollback_on_failure is currently supported only for SSH resources")
+	}
 	if strings.TrimSpace(config.Prefix) != "" || strings.TrimSpace(config.NextHop) != "" || strings.TrimSpace(config.VRF) != "" {
 		return false, fmt.Errorf("ensure.prefix, next_hop, and vrf are supported only for SSH static_route resources")
 	}

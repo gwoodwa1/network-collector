@@ -126,6 +126,8 @@ declarative adapters, then emits current/desired state and exact apply and
 rollback command lists. Its interface change requires the selected port to be
 administratively down whenever a mutation is needed. The static-route identity
 is the exact VRF, prefix, and next-hop tuple, so other next-hops are preserved.
+Both resources enable `rollback_on_failure`; recovery is attempted from the
+captured pre-change state while the unsuccessful ensure remains a failed step.
 
 `08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
 

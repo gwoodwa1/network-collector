@@ -495,6 +495,7 @@ ssh:
           require_state: disabled
           description: Customer path
           transport: ssh
+          rollback_on_failure: true
 
       - name: ensure-customer-route
         ensure:
@@ -504,6 +505,7 @@ ssh:
           vrf: CUSTOMER-A
           state: present
           transport: ssh
+          rollback_on_failure: true
 ```
 
 The interface adapter discovers state with `show interfaces`, changes only
@@ -521,8 +523,14 @@ Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,
 `commands`, and `rollback_commands`; no configuration is sent. Normal mode
 applies the planned command block and performs the same discovery again for
-verification. Declarative execution errors are hard gates and stop later
-device steps. See
+verification. Set `rollback_on_failure: true` to execute the generated inverse
+command block if apply returns an error or post-apply verification fails.
+Rollback is best-effort because a transport failure can leave device state
+uncertain. A successfully rolled-back ensure step deliberately remains failed:
+the requested desired state was not achieved, and the plan records
+`action: rolled-back` plus `rollback_status: succeeded`. A rollback error
+records `action: rollback-failed`. Declarative execution errors are hard gates
+and stop later device steps. See
 [`37-declarative-ssh-path.yaml`](examples/workflow-operations/iosxr/37-declarative-ssh-path.yaml).
 
 Do not include the outer `<rpc>` element in either payload form; the NETCONF

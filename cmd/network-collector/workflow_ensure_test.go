@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -157,6 +160,15 @@ func iosXRInterfaceOutput(name, state, description string) string {
 	return output
 }
 
+func readEnsureFixture(t *testing.T, name string) string {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("testdata", "ensure", "iosxr", name))
+	if err != nil {
+		t.Fatalf("read ensure fixture %s: %v", name, err)
+	}
+	return string(payload)
+}
+
 func TestSSHEnsureInterfaceCheckModeDiscoversAndPreviews(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{
 		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
@@ -239,6 +251,60 @@ func TestSSHEnsureInterfaceAppliesAndVerifies(t *testing.T) {
 	}
 }
 
+func TestSSHEnsureInterfaceVerificationFailureRollsBackAndRemainsFailed(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
+		"Commit complete",
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "new core uplink"),
+		"Rollback commit complete",
+	}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	description := "new core uplink"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "automatic rollback completed") {
+		t.Fatalf("verification failure did not remain failed after rollback: %v", err)
+	}
+	if len(executor.commands) != 4 ||
+		!strings.Contains(executor.commands[3], "description old description") ||
+		!strings.Contains(executor.commands[3], "shutdown") {
+		t.Fatalf("exact prior interface state was not restored: %+v", executor.commands)
+	}
+	if !strings.Contains(output, `"action": "rolled-back"`) ||
+		!strings.Contains(output, `"rollback_status": "succeeded"`) {
+		t.Fatalf("rollback audit state missing from plan: %s", output)
+	}
+}
+
+func TestSSHEnsureRollbackFailureIsReported(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{
+		outputs: []string{
+			iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
+			"partial apply",
+			"rollback rejected",
+		},
+		errors: []error{nil, errors.New("apply timed out"), errors.New("rollback commit rejected")},
+	}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	description := "new core uplink"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "automatic rollback failed") {
+		t.Fatalf("rollback failure was not returned: %v", err)
+	}
+	if !strings.Contains(output, `"action": "rollback-failed"`) ||
+		!strings.Contains(output, `"rollback_status": "failed"`) ||
+		!strings.Contains(output, "rollback commit rejected") {
+		t.Fatalf("rollback failure audit state missing: %s", output)
+	}
+}
+
 func TestSSHEnsureInterfaceIsIdempotent(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{
 		iosXRInterfaceOutput("HundredGigE0/0/0/0", "up", "core uplink"),
@@ -284,7 +350,7 @@ func TestSSHEnsureInterfaceRequireStateRefusesActivePortChange(t *testing.T) {
 
 func TestParseIOSXRInterfaceDownMeansAdminEnabled(t *testing.T) {
 	state, err := parseIOSXRInterfaceState(
-		iosXRInterfaceOutput("HundredGigE0/0/0/0", "down", "no light"),
+		readEnsureFixture(t, "interface-operationally-down.txt"),
 		"HundredGigE0/0/0/0",
 	)
 	if err != nil {
@@ -295,19 +361,35 @@ func TestParseIOSXRInterfaceDownMeansAdminEnabled(t *testing.T) {
 	}
 }
 
-const iosXRStaticRouteFixture = `router static
- address-family ipv4 unicast
-  198.51.100.0/24 192.0.2.1
- !
- vrf CUSTOMER-A
-  address-family ipv4 unicast
-   203.0.113.0/24 192.0.2.10
-   203.0.113.0/24 192.0.2.11
- !
-!
-`
+func TestParseIOSXRInterfaceFixtures(t *testing.T) {
+	tests := []struct {
+		name            string
+		fixture         string
+		enabled         bool
+		wantDescription bool
+	}{
+		{name: "administratively down", fixture: "interface-administratively-down.txt", enabled: false, wantDescription: true},
+		{name: "operationally down", fixture: "interface-operationally-down.txt", enabled: true, wantDescription: true},
+		{name: "up without description", fixture: "interface-up-no-description.txt", enabled: true, wantDescription: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, err := parseIOSXRInterfaceState(readEnsureFixture(t, test.fixture), "HundredGigE0/0/0/0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Enabled == nil || *state.Enabled != test.enabled || (state.Description != nil) != test.wantDescription {
+				t.Fatalf("unexpected state from %s: %+v", test.fixture, state)
+			}
+		})
+	}
+	if _, err := parseIOSXRInterfaceState(readEnsureFixture(t, "interface-not-found.txt"), "HundredGigE0/0/0/99"); err == nil {
+		t.Fatal("not-found fixture was accepted as an interface")
+	}
+}
 
 func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
+	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
 	if len(defaultRoute.NextHops) != 1 || defaultRoute.NextHops[0] != "192.0.2.1" {
 		t.Fatalf("unexpected default route state: %+v", defaultRoute)
@@ -316,12 +398,17 @@ func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
 	if len(customerRoute.NextHops) != 2 || customerRoute.NextHops[0] != "192.0.2.10" || customerRoute.NextHops[1] != "192.0.2.11" {
 		t.Fatalf("unexpected customer route state: %+v", customerRoute)
 	}
-	if wrongVRF := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "203.0.113.0/24", "CUSTOMER-B"); len(wrongVRF.NextHops) != 0 {
+	customerBRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "203.0.113.0/24", "CUSTOMER-B")
+	if len(customerBRoute.NextHops) != 1 || customerBRoute.NextHops[0] != "192.0.2.20" {
+		t.Fatalf("unexpected second VRF route state: %+v", customerBRoute)
+	}
+	if wrongVRF := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "203.0.113.0/24", "CUSTOMER-C"); len(wrongVRF.NextHops) != 0 {
 		t.Fatalf("route leaked across VRFs: %+v", wrongVRF)
 	}
 }
 
 func TestSSHEnsureStaticRouteCheckModePreviewsExactPath(t *testing.T) {
+	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
 	ctx, failed := interactionContext(t, nil)
 	ctx.deviceType = "cisco_iosxr"
@@ -343,6 +430,7 @@ func TestSSHEnsureStaticRouteCheckModePreviewsExactPath(t *testing.T) {
 }
 
 func TestSSHEnsureStaticRoutePresentIsIdempotentAndPreservesECMP(t *testing.T) {
+	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
 	ctx, _ := interactionContext(t, nil)
 	ctx.deviceType = "cisco_iosxr"
@@ -362,6 +450,7 @@ func TestSSHEnsureStaticRoutePresentIsIdempotentAndPreservesECMP(t *testing.T) {
 }
 
 func TestSSHEnsureStaticRouteAbsentPlanRemovesOnlyExactNextHop(t *testing.T) {
+	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
 	ctx, _ := interactionContext(t, nil)
 	ctx.deviceType = "cisco_iosxr"
@@ -380,6 +469,7 @@ func TestSSHEnsureStaticRouteAbsentPlanRemovesOnlyExactNextHop(t *testing.T) {
 }
 
 func TestSSHEnsureStaticRouteAppliesAndVerifies(t *testing.T) {
+	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	verifiedFixture := strings.Replace(iosXRStaticRouteFixture, "   203.0.113.0/24 192.0.2.10", "   203.0.114.0/24 192.0.2.10\n   203.0.113.0/24 192.0.2.10", 1)
 	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture, "Commit complete", verifiedFixture}}
 	ctx, failed := interactionContext(t, nil)

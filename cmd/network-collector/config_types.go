@@ -74,16 +74,17 @@ type StepConfig struct {
 }
 
 type EnsureConfig struct {
-	Resource     string  `mapstructure:"resource" yaml:"resource"`
-	Name         string  `mapstructure:"name" yaml:"name"`
-	Prefix       string  `mapstructure:"prefix" yaml:"prefix"`
-	NextHop      string  `mapstructure:"next_hop" yaml:"next_hop"`
-	VRF          string  `mapstructure:"vrf" yaml:"vrf"`
-	State        string  `mapstructure:"state" yaml:"state"`
-	RequireState string  `mapstructure:"require_state" yaml:"require_state"`
-	Description  *string `mapstructure:"description" yaml:"description"`
-	Transport    string  `mapstructure:"transport" yaml:"transport"`
-	Target       string  `mapstructure:"target" yaml:"target"`
+	Resource          string  `mapstructure:"resource" yaml:"resource"`
+	Name              string  `mapstructure:"name" yaml:"name"`
+	Prefix            string  `mapstructure:"prefix" yaml:"prefix"`
+	NextHop           string  `mapstructure:"next_hop" yaml:"next_hop"`
+	VRF               string  `mapstructure:"vrf" yaml:"vrf"`
+	State             string  `mapstructure:"state" yaml:"state"`
+	RequireState      string  `mapstructure:"require_state" yaml:"require_state"`
+	Description       *string `mapstructure:"description" yaml:"description"`
+	Transport         string  `mapstructure:"transport" yaml:"transport"`
+	Target            string  `mapstructure:"target" yaml:"target"`
+	RollbackOnFailure bool    `mapstructure:"rollback_on_failure" yaml:"rollback_on_failure"`
 }
 
 type NETCONFStepConfig struct {

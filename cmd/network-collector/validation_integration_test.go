@@ -1925,8 +1925,10 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if len(sshDesiredState) != 3 || sshDesiredState[0].Approval == nil ||
 		sshDesiredState[1].Ensure == nil || sshDesiredState[1].Ensure.Resource != "interface" ||
 		sshDesiredState[1].Ensure.Transport != "ssh" || sshDesiredState[1].Ensure.RequireState != "disabled" ||
+		!sshDesiredState[1].Ensure.RollbackOnFailure ||
 		sshDesiredState[2].Ensure == nil || sshDesiredState[2].Ensure.Resource != "static_route" ||
-		sshDesiredState[2].Ensure.Prefix == "" || sshDesiredState[2].Ensure.NextHop == "" {
+		sshDesiredState[2].Ensure.Prefix == "" || sshDesiredState[2].Ensure.NextHop == "" ||
+		!sshDesiredState[2].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative SSH path example is incomplete: %+v", sshDesiredState)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]

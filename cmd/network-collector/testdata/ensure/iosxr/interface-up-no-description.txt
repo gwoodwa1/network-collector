@@ -1,0 +1,4 @@
+HundredGigE0/0/0/0 is up, line protocol is up
+  Interface state transitions: 5
+  Hardware is HundredGigE, address is 0011.2233.4455 (bia 0011.2233.4455)
+  Internet address is Unknown

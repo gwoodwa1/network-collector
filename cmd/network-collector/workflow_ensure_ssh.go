@@ -19,6 +19,9 @@ type sshEnsurePlan struct {
 	DiscoveryCommands []string    `json:"discovery_commands"`
 	Commands          []string    `json:"commands,omitempty"`
 	RollbackCommands  []string    `json:"rollback_commands,omitempty"`
+	RollbackOnFailure bool        `json:"rollback_on_failure,omitempty"`
+	RollbackStatus    string      `json:"rollback_status,omitempty"`
+	Error             string      `json:"error,omitempty"`
 	Action            string      `json:"action"`
 	Verified          interface{} `json:"verified,omitempty"`
 }
@@ -130,7 +133,7 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 	plan := sshEnsurePlan{
 		Resource: "interface", Platform: platform, Current: current, Desired: desired,
 		Changed: changed, Check: ctx.checkMode, DiscoveryCommands: []string{discoveryCommand},
-		Commands: apply, RollbackCommands: rollback, Action: "none",
+		Commands: apply, RollbackCommands: rollback, RollbackOnFailure: config.RollbackOnFailure, Action: "none",
 	}
 	display := fmt.Sprintf("ensure interface %s state=%s transport=ssh", name, strings.ToLower(strings.TrimSpace(config.State)))
 	if !changed {
@@ -142,18 +145,21 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 	}
 	applyOutput, err := executor.Execute(strings.Join(apply, "\n"))
 	if err != nil {
-		return applyOutput, display, fmt.Errorf("apply interface %q over SSH: %w", name, err)
+		cause := fmt.Errorf("apply interface %q over SSH: %w", name, err)
+		return failSSHEnsure(executor, plan, display, applyOutput, cause)
 	}
 	verifyOutput, err := executor.Execute(discoveryCommand)
 	if err != nil {
-		return verifyOutput, display, fmt.Errorf("verify interface %q over SSH: %w", name, err)
+		cause := fmt.Errorf("verify interface %q over SSH: %w", name, err)
+		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
 	verified, err := parseIOSXRInterfaceState(verifyOutput, name)
 	if err != nil {
-		return verifyOutput, display, err
+		return failSSHEnsure(executor, plan, display, verifyOutput, err)
 	}
 	if !sshInterfaceMatches(verified, desiredEnabled, config.Description) {
-		return verifyOutput, display, fmt.Errorf("interface %q did not reach desired SSH state", name)
+		cause := fmt.Errorf("interface %q did not reach desired SSH state", name)
+		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
 	plan.Action = "changed"
 	plan.Verified = verified
@@ -265,7 +271,7 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 	plan := sshEnsurePlan{
 		Resource: "static_route", Platform: platform, Current: current, Desired: desired,
 		Changed: changed, Check: ctx.checkMode, DiscoveryCommands: []string{discoveryCommand},
-		Commands: apply, RollbackCommands: rollback, Action: "none",
+		Commands: apply, RollbackCommands: rollback, RollbackOnFailure: config.RollbackOnFailure, Action: "none",
 	}
 	display := fmt.Sprintf("ensure static route %s via %s vrf=%s state=%s transport=ssh", prefix, nextHop, routeVRFLabel(vrf), strings.ToLower(strings.TrimSpace(config.State)))
 	if !changed {
@@ -277,15 +283,18 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 	}
 	applyOutput, err := executor.Execute(strings.Join(apply, "\n"))
 	if err != nil {
-		return applyOutput, display, fmt.Errorf("apply static route %q over SSH: %w", prefix, err)
+		cause := fmt.Errorf("apply static route %q over SSH: %w", prefix, err)
+		return failSSHEnsure(executor, plan, display, applyOutput, cause)
 	}
 	verifyOutput, err := executor.Execute(discoveryCommand)
 	if err != nil {
-		return verifyOutput, display, fmt.Errorf("verify static route %q over SSH: %w", prefix, err)
+		cause := fmt.Errorf("verify static route %q over SSH: %w", prefix, err)
+		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
 	verified := parseIOSXRStaticRoutes(verifyOutput, prefix, vrf)
 	if containsString(verified.NextHops, nextHop) != present {
-		return verifyOutput, display, fmt.Errorf("static route %q via %s did not reach desired SSH state", prefix, nextHop)
+		cause := fmt.Errorf("static route %q via %s did not reach desired SSH state", prefix, nextHop)
+		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
 	plan.Action = "changed"
 	plan.Verified = verified
@@ -427,4 +436,28 @@ func leadingSpaces(value string) int {
 func marshalSSHEnsurePlan(plan sshEnsurePlan) string {
 	encoded, _ := json.MarshalIndent(plan, "", "  ")
 	return string(encoded)
+}
+
+func failSSHEnsure(executor sshEnsureCommandExecutor, plan sshEnsurePlan, display, fallbackOutput string, cause error) (string, string, error) {
+	plan.Action = "failed"
+	plan.Error = cause.Error()
+	if !plan.RollbackOnFailure || len(plan.RollbackCommands) == 0 {
+		output := marshalSSHEnsurePlan(plan)
+		if strings.TrimSpace(output) == "" {
+			output = fallbackOutput
+		}
+		return output, display, cause
+	}
+
+	_, rollbackErr := executor.Execute(strings.Join(plan.RollbackCommands, "\n"))
+	if rollbackErr != nil {
+		plan.Action = "rollback-failed"
+		plan.RollbackStatus = "failed"
+		plan.Error = cause.Error() + "; automatic rollback failed: " + rollbackErr.Error()
+		return marshalSSHEnsurePlan(plan), display, fmt.Errorf("%w; automatic rollback failed: %v", cause, rollbackErr)
+	}
+	plan.Action = "rolled-back"
+	plan.RollbackStatus = "succeeded"
+	plan.Error = cause.Error() + "; automatic rollback completed"
+	return marshalSSHEnsurePlan(plan), display, fmt.Errorf("%w; automatic rollback completed", cause)
 }
