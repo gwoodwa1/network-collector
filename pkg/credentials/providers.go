@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/gwoodwa1/network-collector/internal/safeyaml"
 )
 
 type Credentials struct {
@@ -145,7 +145,7 @@ func NewFileProvider(path string) (*FileProvider, error) {
 		return nil, fmt.Errorf("credential file %q exceeds 4 MiB", path)
 	}
 	var data credentialFile
-	if err := yaml.Unmarshal(content, &data); err != nil {
+	if err := safeyaml.Unmarshal(content, &data); err != nil {
 		return nil, fmt.Errorf("decode credential file: %w", err)
 	}
 	return &FileProvider{data: data}, nil

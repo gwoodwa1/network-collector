@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/safeyaml"
 	"github.com/gwoodwa1/network-collector/pkg/drift"
 	"github.com/gwoodwa1/network-collector/pkg/textfsm"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
-	"gopkg.in/yaml.v3"
 )
 
 func cloneDeviceConfig(device DeviceConfig) DeviceConfig {
@@ -106,13 +106,13 @@ func resolveInventoryPath(inventoryFile, configFile string) string {
 
 func loadInventory(inventoryFile, configFile string) (*InventoryConfig, error) {
 	path := resolveInventoryPath(inventoryFile, configFile)
-	b, err := os.ReadFile(path)
+	b, err := safeyaml.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	var inventory InventoryConfig
-	if err := yaml.Unmarshal(b, &inventory); err != nil {
+	if err := safeyaml.Unmarshal(b, &inventory); err != nil {
 		return nil, err
 	}
 	inventory.baseDir = filepath.Dir(path)
@@ -161,13 +161,13 @@ func resolveParsersPath(parsersFile, configFile string) string {
 
 func loadParsers(parsersFile, configFile string) (*ParsersConfig, error) {
 	path := resolveParsersPath(parsersFile, configFile)
-	b, err := os.ReadFile(path)
+	b, err := safeyaml.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	var parsers ParsersConfig
-	if err := yaml.Unmarshal(b, &parsers); err != nil {
+	if err := safeyaml.Unmarshal(b, &parsers); err != nil {
 		return nil, err
 	}
 	baseDir := filepath.Dir(path)

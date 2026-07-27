@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/gwoodwa1/network-collector/internal/safeyaml"
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 	"github.com/spf13/viper"
-	"gopkg.in/yaml.v3"
 )
 
 func effectiveSSHSecurity(global SSHSecurityConfig, device *SSHSecurityConfig) SSHSecurityConfig {
@@ -184,12 +184,12 @@ func configImports(value interface{}) ([]string, error) {
 }
 
 func loadVariableFile(path string) (map[string]interface{}, error) {
-	content, err := os.ReadFile(path)
+	content, err := safeyaml.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read variable file %q: %w", path, err)
 	}
 	values := map[string]interface{}{}
-	if err := yaml.Unmarshal(content, &values); err != nil {
+	if err := safeyaml.Unmarshal(content, &values); err != nil {
 		return nil, fmt.Errorf("failed to parse variable file %q: %w", path, err)
 	}
 	if wrapped, ok := values["vars"].(map[string]interface{}); ok {
@@ -342,12 +342,12 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool) (map[
 		return nil, fmt.Errorf("config file imported more than once: %q", absolutePath)
 	}
 
-	content, err := os.ReadFile(absolutePath)
+	content, err := safeyaml.ReadFile(absolutePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config %q: %w", absolutePath, err)
 	}
 	current := map[string]interface{}{}
-	if err := yaml.Unmarshal(content, &current); err != nil {
+	if err := safeyaml.Unmarshal(content, &current); err != nil {
 		return nil, fmt.Errorf("failed to parse config %q: %w", absolutePath, err)
 	}
 	if err := mergeConfigVariables(current, absolutePath); err != nil {
