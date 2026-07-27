@@ -1,20 +1,16 @@
 name_playbook: Mixed modern and legacy SSH estate
+security_mode: permissive
 inventory_file: ../inventory/security-profiles.yaml
 parsers_file: ../../../parsers.yaml
 fail_on_fail: true
 
-# Auto tries the SSH library's standard algorithms first and retries with the
-# compatibility algorithms only when negotiation reports no common algorithm.
-# Authentication, host-key, timeout, DNS, and connection failures never cause
-# a legacy retry.
+# This workbook is an explicit legacy-device migration example. Permissive mode
+# allows the inventory's legacy algorithm override, but host keys remain
+# verified. Do not use permissive mode for a production-only modern estate.
 ssh_security:
-  profile: auto
-
-  # This preserves the previous host-key behavior for backwards compatibility.
-  # Prefer `known_hosts` after customer keys have been enrolled:
-  # host_key_policy: known_hosts
+  profile: modern
+  host_key_policy: known_hosts
   # known_hosts_file: ~/.ssh/known_hosts
-  host_key_policy: insecure
 
 execution:
   max_parallel: 2
@@ -23,7 +19,7 @@ ssh:
   - group: mixed-estate
     steps:
       - name: identify-negotiated-estate
-        message: collecting through the global auto profile or inventory legacy override
+        message: collecting through the verified modern profile or explicit inventory legacy override
 
       - name: show-version
         cmd: show version

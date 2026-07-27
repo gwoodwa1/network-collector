@@ -21,7 +21,7 @@ easier to read.
 | `iosxr/05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
 | `iosxr/06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
 | `iosxr/07-interface-turnup.yaml` | admin-down precondition, approval, SSH configuration, hard-gated state/optics/error checks, automatic rollback |
-| `iosxr/08-ssh-security-profiles.yaml` | global `auto` negotiation, inventory-level `legacy` override, host-key migration |
+| `iosxr/08-ssh-security-profiles.yaml` | explicit permissive-mode legacy algorithm migration with verified host keys |
 | `iosxr/09-openconfig-facts.yaml` | vendor-neutral OpenConfig facts, native facts, per-subset transport fallback |
 | `iosxr/10-targeting-canary-and-replay.yaml` | inventory labels, Boolean selectors, exclusions, canaries, failure thresholds, JSONL events, failed-device replay |
 | `iosxr/11-reload-and-reconnect.yaml` | approval, expected disconnect, SSH probing, post-boot delay, reconnect, nested validation actions |
@@ -154,7 +154,10 @@ is the exact VRF, prefix, and next-hop tuple, so other next-hops are preserved.
 Both resources enable `rollback_on_failure`; recovery is attempted from the
 captured pre-change state while the unsuccessful ensure remains a failed step.
 
-`08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
+`08-ssh-security-profiles.yaml` is an explicit legacy migration exception. It
+sets `security_mode: permissive`, keeps `known_hosts` verification enabled, and
+assigns `legacy` only to the named older router. All other examples inherit the
+default production mode.
 
 `11-reload-and-reconnect.yaml` is intentionally a lab-only template. It demonstrates a command that disconnects before returning to the prompt, bounded TCP/SSH probing, a post-port-open boot delay, reconnection, post-reload validation, and nested `on_pass` steps. Replace and independently test the reload command before using it on real equipment.
 

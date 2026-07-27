@@ -5,9 +5,12 @@ hosts:
     operation_timeout: 60
     gnmi:
       port: 57400
-      # Lab-only plaintext gRPC. For production, remove insecure and use the
-      # certificate configuration shown in README.md.
-      insecure: true
+      # Documentation-only certificate paths. Replace these with the CA and
+      # client identity issued for this collector deployment.
+      ca_file: ../../../certs/gnmi-ca.pem
+      cert_file: ../../../certs/collector.pem
+      key_file: ../../../certs/collector-key.pem
+      server_name: xr-gnmi-lab-01.example.net
       timeout_seconds: 30
     labels:
       site: london

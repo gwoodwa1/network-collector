@@ -96,7 +96,9 @@ func (r *RESTCONFClient) Connect(baseURL, username, password string, opts ...Opt
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
+			MinVersion: tls.VersionTLS12,
+			// #nosec G402 -- this is an explicit lab-only API option; production
+			// workbook policy rejects certificate-verification bypasses.
 			InsecureSkipVerify: r.TLSConfig.SkipVerify,
 		},
 	}

@@ -251,6 +251,7 @@ type ValidationConfig struct {
 type Config struct {
 	Imports           []string                  `mapstructure:"imports" yaml:"imports"`
 	NamePlaybook      string                    `mapstructure:"name_playbook" yaml:"name_playbook"`
+	SecurityMode      string                    `mapstructure:"security_mode" yaml:"security_mode"`
 	InventoryFile     string                    `mapstructure:"inventory_file" yaml:"inventory_file"`
 	ParsersFile       string                    `mapstructure:"parsers_file" yaml:"parsers_file"`
 	Execution         ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
@@ -282,14 +283,15 @@ type ReportConfig struct {
 }
 
 type CredentialProviderConfig struct {
-	Provider       string                        `mapstructure:"provider" yaml:"provider"`
-	File           string                        `mapstructure:"file" yaml:"file"`
-	RemovedCommand interface{}                   `mapstructure:"command" yaml:"command"`
-	TimeoutSeconds int                           `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
-	RSAToken       bool                          `mapstructure:"rsa_token" yaml:"rsa_token"`
-	Hashicorp      credentials.HashicorpConfig   `mapstructure:"hashicorp" yaml:"hashicorp"`
-	OnePassword    credentials.OnePasswordConfig `mapstructure:"onepassword" yaml:"onepassword"`
-	CyberArk       credentials.CyberArkConfig    `mapstructure:"cyberark" yaml:"cyberark"`
+	Provider                string                        `mapstructure:"provider" yaml:"provider"`
+	File                    string                        `mapstructure:"file" yaml:"file"`
+	RemovedCommand          interface{}                   `mapstructure:"command" yaml:"command"`
+	TimeoutSeconds          int                           `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	RSAToken                bool                          `mapstructure:"rsa_token" yaml:"rsa_token"`
+	RSATokenReuseMaxDevices int                           `mapstructure:"rsa_token_reuse_max_devices" yaml:"rsa_token_reuse_max_devices"`
+	Hashicorp               credentials.HashicorpConfig   `mapstructure:"hashicorp" yaml:"hashicorp"`
+	OnePassword             credentials.OnePasswordConfig `mapstructure:"onepassword" yaml:"onepassword"`
+	CyberArk                credentials.CyberArkConfig    `mapstructure:"cyberark" yaml:"cyberark"`
 }
 
 type FactsDefaultsConfig struct {

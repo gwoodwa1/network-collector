@@ -23,6 +23,8 @@ func prettyColourEnabled(w io.Writer) bool {
 		return false
 	}
 	f, ok := w.(*os.File)
+	// #nosec G115 -- os.File.Fd is an operating-system file descriptor and
+	// x/term requires that descriptor as int.
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 

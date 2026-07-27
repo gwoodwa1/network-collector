@@ -82,6 +82,9 @@ func summarizeSSHSecurity(global SSHSecurityConfig, devices []DeviceConfig) sshS
 			summary.Compatibility++
 		}
 		policy := strings.ToLower(strings.TrimSpace(security.HostKeyPolicy))
+		if policy == "" {
+			policy = "known_hosts"
+		}
 		if policy == "known_hosts" || policy == "pinned" {
 			summary.Verified++
 		} else {

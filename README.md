@@ -65,16 +65,18 @@ Alternatively, pass `--creds_input` to any of the built commands to be
     ```
 
 For RSA SecurID authentication, use `--rsa-token` (or set
-`credentials.rsa_token: true`). The collector prompts once at startup and
-reuses that token while opening the selected devices, including devices
-started in parallel. Each device then keeps one SSH session for its complete
-workflow. If a workflow deliberately closes and reconnects the session, or a
-later scheduled occurrence needs a new session, the collector pauses for a
-fresh masked RSA passcode; it never silently retries with the old token.
+`credentials.rsa_token: true`). A passcode is reused for only one initial
+device connection by default. Cross-device reuse must be explicitly bounded
+with `rsa_token_reuse_max_devices`; values above 25 are rejected. Each device
+then keeps one SSH session for its complete workflow. If a workflow deliberately
+closes and reconnects the session, or a later scheduled occurrence needs a new
+session, the collector pauses for a fresh masked passcode and never retries
+silently with the old token.
 
 ```yaml
 credentials:
   rsa_token: true
+  rsa_token_reuse_max_devices: 1
 ```
 
 For unattended or mixed-credential estates, select a credential provider in the playbook. Existing environment behavior remains the default:
@@ -255,71 +257,26 @@ See [`cmd/xr-routing-monitor/README.md`](cmd/xr-routing-monitor/README.md) for d
      
 ## Configuration
 
-The configuration is done through a `config.yaml` file Here’s an example of the `config.yaml`:
-```
-fail_on_fail: false
+The playbook-driven CLI reads `config.yaml`. This minimal configuration uses
+the default production security policy, modern SSH algorithms, and verified
+host keys:
 
-restconf:
-  - hostname: device-eos-02
-    ip: 192.0.2.2
-    port: 3333
-    skip_tls: true
-    method: GET
-    endpoint: data/openconfig-interfaces:interfaces/interface
+```yaml
+name_playbook: Read-only route collection
+security_mode: production
+inventory_file: inventory.yaml
+fail_on_fail: true
 
-gnmi:
-  - hostname: device-eos-01
-    ip: 192.0.2.3:6030
-    skip_tls: true
-    path: /interfaces/interface/subinterfaces/subinterface/state/description
+ssh_security:
+  profile: modern
+  host_key_policy: known_hosts
 
 ssh:
-  - hostname: device-nxos-01
-    ip: 192.0.2.4
-    type: cisco_nxos
+  - host: device-nxos-01
     cmd: show ip route
-  - hostname: device-qfx-01
-    ip: 192.0.2.4
-    type: juniper_junos
+
+  - host: device-qfx-01
     cmd: show route
-
-http:
-  - hostname: device-eos-08
-    ip: 192.0.2.5
-    type: arista_eos
-    cmd: show version
-    skip_tls: true
-  - hostname: device-eos-03
-    ip: 192.0.2.6
-    type: arista_eos
-    cmd: show ip route
-    skip_tls: true
-
-netconf:
-  - hostname: device-eos-05
-    ip: 192.0.2.7
-    type: arista_eos
-    rpc: |
-      <get>
-        <filter type="subtree">
-          <interfaces>
-            <interface>
-            </interface>
-          </interfaces>
-        </filter>
-      </get>
-  - hostname: device-eos
-    ip: 192.0.2.8
-    type: arista_eos
-    rpc: |
-      <get>
-        <filter type="subtree">
-          <interfaces>
-            <interface>
-            </interface>
-          </interfaces>
-        </filter>
-      </get>
 ```
 
 ### SSH step-based commands with retry
@@ -680,14 +637,21 @@ network-collector --limit 'environment=production' --exclude 'maintenance=true'
 
 When structured output includes `results.json`, each result records whether its device failed. Use `--rerun-failed artifacts/run-.../results.json` to select only those failed devices on a subsequent run. It may be combined with `--limit` and `--exclude`. Older summaries without device outcomes fall back to hosts with failed or errored validations; connection-only failures require a newly generated summary.
 
-### SSH security profiles
+### Production security mode and SSH profiles
 
-Existing configurations remain compatible. When `ssh_security` is omitted, Network Collector uses the previous behavior: the `compatibility` algorithm profile with host-key verification disabled. This avoids breaking legacy device estates. At startup, one inventory-wide security summary reports profile and host-key-policy counts instead of repeating warnings for every connection.
+Network Collector starts in `production` security mode when `security_mode` is
+omitted. The secure SSH defaults are the `modern` algorithm profile and
+`known_hosts` host-key verification. Production mode rejects `auto`,
+`compatibility`, and `legacy` algorithm profiles, disabled host-key
+verification, plaintext gNMI, skipped gNMI certificate verification, and the
+legacy per-step gNMI `skip_tls` option before credentials are requested.
 
 ```yaml
+security_mode: production
 ssh_security:
-  profile: compatibility
-  host_key_policy: insecure
+  profile: modern
+  host_key_policy: known_hosts
+  known_hosts_file: ~/.ssh/known_hosts # optional
 ```
 
 Available profiles:
@@ -699,27 +663,27 @@ Available profiles:
 
 Auto fallback never occurs for authentication failures, host-key failures, timeouts, DNS errors, or refused connections.
 
-Enable known-host verification with either an explicit OpenSSH file or the normal system/user locations:
+If `known_hosts_file` is omitted, ScrapliGo checks its supported user and
+system defaults. `pinned` requires an explicit known-hosts file.
+
+For a temporary lab or approved legacy migration, the entire workbook must
+explicitly opt out of production enforcement. Keep host verification enabled
+even when old algorithms are unavoidable:
 
 ```yaml
-ssh_security:
-  profile: auto
-  host_key_policy: known_hosts
-  known_hosts_file: ~/.ssh/known_hosts # optional
-```
-
-If `known_hosts_file` is omitted, ScrapliGo checks its supported user and system defaults. A device entry or inventory host can override individual settings for mixed estates:
-
-```yaml
+security_mode: permissive
 ssh:
   - host: old-router
     ssh_security:
       profile: legacy
-      host_key_policy: insecure
+      host_key_policy: known_hosts
     cmd: show version
 ```
 
-Legacy fallback and host identity are independent. Where possible, use `known_hosts` even for devices that require old key exchange or cipher algorithms.
+`--security-mode permissive` provides the same explicit command-line override.
+Permissive mode emits a startup warning. Legacy fallback and host identity are
+independent; disabling host verification is never required merely because a
+device needs old key exchange or cipher algorithms.
 
 ### Custom SSH platform definitions
 
@@ -1366,8 +1330,8 @@ Certificate paths are relative to the inventory file. The supported security mod
 
 - Production server TLS: set `ca_file` and, when the certificate name differs from the inventory address, `server_name`.
 - Mutual TLS: also set both `cert_file` and `key_file`. They must be configured together.
-- TLS without certificate verification: set `skip_verify: true`. Traffic remains encrypted, but this is suitable only for controlled migration or lab use.
-- Plaintext gRPC: set `insecure: true`. Use this only when the target is explicitly configured without TLS on a trusted lab network.
+- TLS without certificate verification: `skip_verify: true`, accepted only in explicit `permissive` mode for a controlled migration or lab.
+- Plaintext gRPC: `insecure: true`, accepted only in explicit `permissive` mode for a trusted lab network.
 
 For a small lab CA and mutual-TLS client certificate, create a private directory and issue the files before starting the collector:
 
@@ -1396,7 +1360,10 @@ gnmi:
   server_name: router-01.example.net
 ```
 
-The older per-step `skip_tls: true` remains compatible and means plaintext gRPC; new inventories should use `gnmi.insecure` so the security choice is explicit.
+The older per-step `skip_tls: true` means plaintext gRPC and is rejected in
+production mode. In permissive mode it remains available for compatibility;
+prefer the inventory-level `gnmi.insecure` setting so the exception is visible
+at the connection boundary.
 
 Add `triggers` to react immediately to individual updates or deletes while the subscription is open:
 

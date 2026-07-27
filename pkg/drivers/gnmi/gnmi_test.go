@@ -83,6 +83,11 @@ func TestValidationErrors(t *testing.T) {
 	if _, err := client.Subscribe(context.Background(), Subscription{Paths: []string{"/interfaces"}, Mode: "stream"}); err == nil {
 		t.Fatal("unbounded stream accepted")
 	}
+	if _, err := client.Subscribe(context.Background(), Subscription{
+		Paths: []string{"/interfaces"}, Mode: "once", SampleInterval: -time.Second,
+	}); err == nil {
+		t.Fatal("negative sample interval accepted")
+	}
 }
 
 func TestNotificationEventsIncludeFullPathsAndDeletes(t *testing.T) {

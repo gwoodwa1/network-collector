@@ -81,7 +81,9 @@ func (a *AristaHTTP) Connect(ip string, username string, password string, opts .
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
+			MinVersion: tls.VersionTLS12,
+			// #nosec G402 -- this is an explicit lab-only API option; production
+			// workbook policy rejects certificate-verification bypasses.
 			InsecureSkipVerify: a.TLSConfig.SkipVerify,
 		},
 	}

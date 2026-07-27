@@ -23,12 +23,13 @@ Supported top-level keys for `network-collector`:
 imports:
   - roles/*.yaml
 name_playbook: Human readable playbook title
+security_mode: production
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 fail_on_fail: false
 ssh_security:
-  profile: compatibility
-  host_key_policy: insecure
+  profile: modern
+  host_key_policy: known_hosts
 vars_files:
   - vars/common.yaml
 vars:
@@ -56,8 +57,10 @@ Rules:
 - `inventory_file` is optional; default behavior is to look for `inventory.yaml`.
 - `parsers_file` is optional; default behavior is to look for `parsers.yaml`.
 - `fail_on_fail` is optional. Use `true` when the process should exit non-zero if any validation fails or errors.
-- `ssh_security` supports `compatibility`, `auto`, `modern`, and `legacy` profiles plus `insecure` or `known_hosts` host-key policy.
-- Omitting `ssh_security` preserves the prior compatibility algorithms and disabled host-key checking.
+- `security_mode` defaults to `production` when omitted. Production mode rejects legacy/automatic SSH fallback, disabled host-key verification, plaintext gNMI, skipped certificate verification, and per-step gNMI `skip_tls`.
+- Use `security_mode: permissive` only for an explicitly approved lab or legacy migration. It restores access to insecure transport switches but emits a startup warning.
+- `ssh_security` supports `compatibility`, `auto`, `modern`, and `legacy` profiles plus `insecure`, `known_hosts`, or `pinned` host-key policy. Production mode permits only `modern` with `known_hosts` or `pinned`.
+- Omitting `ssh_security` securely defaults to `modern` algorithms and `known_hosts` verification.
 - `auto` falls back only for algorithm negotiation errors, never authentication, identity, timeout, or connection failures.
 - Device and inventory-host `ssh_security` maps override individual global settings.
 - The CLI emits one startup SSH policy summary across the resolved inventory; only actual auto-mode downgrade retries produce per-connection warnings.

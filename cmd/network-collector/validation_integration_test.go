@@ -1794,6 +1794,13 @@ func TestSSHSecuritySummaryCountsResolvedPolicies(t *testing.T) {
 	}
 }
 
+func TestSSHSecuritySummaryUsesEffectiveSecureDefaults(t *testing.T) {
+	summary := summarizeSSHSecurity(SSHSecurityConfig{}, []DeviceConfig{{Hostname: "default"}})
+	if summary.Modern != 1 || summary.Verified != 1 || summary.Insecure != 0 {
+		t.Fatalf("unexpected default SSH security summary: %+v", summary)
+	}
+}
+
 func TestLoadConfigComposesImports(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")
@@ -2213,7 +2220,11 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	security := loaded["08-ssh-security-profiles.yaml"]
 	securityInventory, err := loadOptionalInventory(security.InventoryFile, loadedPaths["08-ssh-security-profiles.yaml"])
-	if err != nil || security.SSHSecurity.Profile != "auto" || securityInventory == nil || len(securityInventory.Hosts) != 2 || securityInventory.Hosts[1].SSHSecurity == nil || securityInventory.Hosts[1].SSHSecurity.Profile != "legacy" {
+	if err != nil || security.SecurityMode != "permissive" || security.SSHSecurity.Profile != "modern" ||
+		security.SSHSecurity.HostKeyPolicy != "known_hosts" || securityInventory == nil ||
+		len(securityInventory.Hosts) != 2 || securityInventory.Hosts[1].SSHSecurity == nil ||
+		securityInventory.Hosts[1].SSHSecurity.Profile != "legacy" ||
+		securityInventory.Hosts[1].SSHSecurity.HostKeyPolicy != "known_hosts" {
 		t.Fatalf("SSH security profile example is incomplete: inventory=%+v config=%+v error=%v", securityInventory, security, err)
 	}
 	facts := loaded["09-openconfig-facts.yaml"]

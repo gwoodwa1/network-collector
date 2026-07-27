@@ -35,6 +35,7 @@ func main() {
 	var excludeExpression string
 	var rerunFailedFile string
 	var eventsFile string
+	var cliSecurityMode string
 	flag.StringVar(&configFile, "config", "config.yaml", "path to config file")
 	flag.StringVar(&cliInventoryFile, "inventory", "", "path to inventory file")
 	flag.StringVar(&cliParsersFile, "parsers", "", "path to parser module file")
@@ -42,6 +43,7 @@ func main() {
 	flag.StringVar(&excludeExpression, "exclude", "", "inventory selector expression to exclude")
 	flag.StringVar(&rerunFailedFile, "rerun-failed", "", "run only devices marked failed in a previous results.json")
 	flag.StringVar(&eventsFile, "events-jsonl", "", "append lifecycle events as JSON Lines to this file")
+	flag.StringVar(&cliSecurityMode, "security-mode", "", "security policy override: production (default) or permissive")
 	flag.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON only")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cliFailOnFail, "fail-on-fail", false, "exit non-zero if any validation fails or errors")
@@ -66,6 +68,9 @@ func main() {
 		os.Exit(1)
 	}
 	config.checkMode = checkMode
+	if strings.TrimSpace(cliSecurityMode) != "" {
+		config.SecurityMode = cliSecurityMode
+	}
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "fail-on-fail" {
 			failOnFail = cliFailOnFail
@@ -129,6 +134,16 @@ func main() {
 	}
 	devices := append([]DeviceConfig(nil), sshDevices...)
 	devices = append(devices, netconfDevices...)
+	securityMode, err := validateSecurityPolicy(config, devices)
+	if err != nil {
+		slog.Error("security policy rejected configuration", "error", err)
+		os.Exit(1)
+	}
+	if securityMode == securityModePermissive {
+		slog.Warn("permissive security mode is enabled; legacy algorithms or unverified transports may be allowed")
+	} else {
+		slog.Info("production security mode is enabled")
+	}
 	includeSelector, err := parseDeviceSelector(limitExpression)
 	if err != nil {
 		slog.Error("invalid --limit selector", "error", err)
@@ -150,6 +165,15 @@ func main() {
 	devices = filterDevices(devices, includeSelector, excludeSelector, replayDevices)
 	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(devices) == 0 {
 		slog.Warn("inventory selection matched no devices")
+	}
+	rsaToken := cliRSAToken || config.Credentials.RSAToken
+	rsaReuseMax, err := validateRSATokenReuse(config.Credentials, rsaToken, len(devices))
+	if err != nil {
+		slog.Error("RSA passcode reuse policy rejected configuration", "error", err)
+		os.Exit(1)
+	}
+	if rsaToken {
+		slog.Info("RSA passcode startup reuse is enabled", "selected_devices", len(devices), "maximum_devices", rsaReuseMax)
 	}
 
 	initialVariables, err := configVariables(config.Vars)
@@ -177,7 +201,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	rsaToken := cliRSAToken || config.Credentials.RSAToken
 	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth
 	if len(devices) > 0 {
@@ -306,6 +329,8 @@ func main() {
 	}
 	var approvals *approvalInput
 	var approvalWriter io.Writer
+	// #nosec G115 -- os.File.Fd is an operating-system file descriptor and
+	// x/term requires that descriptor as int.
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		approvals, approvalWriter = newApprovalInput(os.Stdin), os.Stdout
 	}

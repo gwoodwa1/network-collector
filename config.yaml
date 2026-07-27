@@ -1,5 +1,6 @@
 fail_on_fail: false
 name_playbook: Software Upgrade on Cisco IOS
+security_mode: production
 inventory_file: inventory.yaml
 parsers_file: parsers.yaml
 
@@ -18,25 +19,6 @@ output:
   save_raw: true
   save_parsed: true
   summary_file: results.json
-
-restconf:
-  - hostname: device-eos-02
-    ip: 192.0.2.2
-    port: 3333
-    skip_tls: true
-    method: GET
-    endpoint: data/openconfig-interfaces:interfaces/interface
-
-gnmi:
-  - hostname: device-eos-01
-    ip: 192.0.2.3:6030
-    skip_tls: true
-    path: /interfaces/interface/subinterfaces/subinterface/state/description
-    validation:
-      extractor: gjson
-      json_path: "interfaces.0.interface.0.subinterfaces.0.subinterface.0.state.description"
-      condition: contains
-      expected: "up"
 
 ssh:
   - host: device-nxos-01
@@ -130,18 +112,6 @@ ssh:
       condition: contains
       expected: overload
       expected_type: string
-
-http:
-  - hostname: device-eos-08
-    ip: 192.0.2.5
-    type: arista_eos
-    cmd: show version
-    skip_tls: true
-  - hostname: device-eos-03
-    ip: 192.0.2.6
-    type: arista_eos
-    cmd: show ip route
-    skip_tls: true
 
 netconf:
   - hostname: device-eos-05

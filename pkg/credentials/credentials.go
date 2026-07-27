@@ -53,6 +53,8 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 	if terminalFile == nil {
 		terminalFile, _ = input.(*os.File)
 	}
+	// #nosec G115 -- os.File.Fd is an operating-system file descriptor and
+	// x/term requires that descriptor as int.
 	terminalInput := terminalFile != nil && term.IsTerminal(int(terminalFile.Fd()))
 	if terminalInput {
 		fmt.Fprint(output, "Username: ")
@@ -61,6 +63,7 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 		}
 
 		fmt.Fprint(output, "Password (input hidden): ")
+		// #nosec G115 -- see the descriptor conversion rationale above.
 		passwordBytes, err := term.ReadPassword(int(terminalFile.Fd()))
 		if err != nil {
 			fmt.Fprintln(output)

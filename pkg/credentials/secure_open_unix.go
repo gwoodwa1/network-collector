@@ -14,6 +14,8 @@ func secureOpenCredentialFile(path string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// #nosec G115 -- unix.Open returned a valid non-negative native file
+	// descriptor; os.NewFile requires its uintptr representation.
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)

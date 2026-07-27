@@ -223,12 +223,16 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 	default:
 		return "", fmt.Errorf("stream mode must be target_defined, on_change, or sample")
 	}
+	if config.SampleInterval < 0 {
+		return "", errors.New("sample_interval must not be negative")
+	}
 	subscriptions := make([]*gnmi.Subscription, 0, len(config.Paths))
 	for _, value := range config.Paths {
 		parsed, err := path.ParsePath(strings.TrimSpace(value))
 		if err != nil {
 			return "", fmt.Errorf("failed to parse subscription path %q: %w", value, err)
 		}
+		// #nosec G115 -- negative durations are rejected above.
 		subscriptions = append(subscriptions, &gnmi.Subscription{Path: parsed, Mode: subscriptionMode, SampleInterval: uint64(config.SampleInterval)})
 	}
 	listMode := gnmi.SubscriptionList_ONCE

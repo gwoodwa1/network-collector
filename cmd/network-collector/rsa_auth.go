@@ -32,7 +32,10 @@ func (a *rsaTokenAuth) prompt() (string, string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	fmt.Fprintf(a.output, "SSH session closed; enter a fresh RSA passcode for %s: ", a.username)
+	// #nosec G115 -- os.File.Fd is an operating-system file descriptor and
+	// x/term requires that descriptor as int.
 	if term.IsTerminal(int(a.input.Fd())) {
+		// #nosec G115 -- see the descriptor conversion rationale above.
 		value, err := term.ReadPassword(int(a.input.Fd()))
 		fmt.Fprintln(a.output, "********")
 		if err != nil {
