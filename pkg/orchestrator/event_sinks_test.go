@@ -66,12 +66,22 @@ func TestWebhookSinkRequiresHTTPSAndAllowlistedPublicDestination(t *testing.T) {
 }
 
 func TestWebhookSinkDoesNotInheritEnvironmentProxy(t *testing.T) {
-	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:8443")
-	t.Setenv("HTTP_PROXY", "http://proxy.example.test:8080")
+	const unreachableProxy = "http://127.0.0.1:1"
+	t.Setenv("HTTPS_PROXY", unreachableProxy)
+	t.Setenv("HTTP_PROXY", unreachableProxy)
+	t.Setenv("ALL_PROXY", unreachableProxy)
+	t.Setenv("NO_PROXY", "unrelated.example.test")
+
+	var received bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		received = true
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
 
 	sink, err := NewWebhookSinkWithPolicy(
-		"https://events.example.test/hook", nil, "", time.Second,
-		WebhookPolicy{AllowedHosts: []string{"events.example.test"}},
+		server.URL, nil, "", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"127.0.0.1"}, AllowPrivateNetworks: true},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +92,13 @@ func TestWebhookSinkDoesNotInheritEnvironmentProxy(t *testing.T) {
 	}
 	if transport.Proxy != nil {
 		t.Fatal("hardened webhook transport inherited proxy configuration")
+	}
+	transport.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	if err := sink.Handle(context.Background(), Event{Type: "run.started"}); err != nil {
+		t.Fatalf("direct webhook delivery failed with ambient proxies set: %v", err)
+	}
+	if !received {
+		t.Fatal("webhook request did not reach the direct destination")
 	}
 }
 
