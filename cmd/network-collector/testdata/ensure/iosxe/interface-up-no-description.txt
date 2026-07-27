@@ -1,0 +1,3 @@
+GigabitEthernet1 is up, line protocol is up
+  Hardware is CSR vNIC, address is 0011.2233.4455 (bia 0011.2233.4455)
+  Internet address is unassigned

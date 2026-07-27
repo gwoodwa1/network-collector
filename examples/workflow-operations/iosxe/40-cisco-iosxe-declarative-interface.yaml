@@ -1,0 +1,31 @@
+name_playbook: Declarative Cisco IOS-XE SSH interface
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  interface: GigabitEthernet1
+  interface_description: Example declarative customer handoff
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: iosxe-cli-01
+    steps:
+      - name: authorize-iosxe-interface
+        approval:
+          message: Enable {{interface}} with description "{{interface_description}}"?
+          timeout_seconds: 300
+
+      - name: ensure-iosxe-interface
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          require_state: disabled
+          description: "{{interface_description}}"
+          transport: ssh
+          rollback_on_failure: true
+        register: interface_plan

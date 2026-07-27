@@ -1,0 +1,4 @@
+GigabitEthernet1 is administratively down, line protocol is down
+  Hardware is CSR vNIC, address is 0011.2233.4455 (bia 0011.2233.4455)
+  Description: Example customer handoff
+  Internet address is unassigned
