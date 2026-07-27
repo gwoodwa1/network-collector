@@ -15,6 +15,11 @@ All notable changes to Network Collector are documented here.
   startup validation of administrator-controlled absolute executable paths.
 - Pinned the Docker build and runtime base images to immutable multi-platform
   digests.
+- Added 4 MiB external-YAML limits with anchors and aliases disabled, bounded
+  non-gNMI device responses before parsing/registration/artifact writes, and
+  connected-peer verification for the IP-pinned webhook dialer.
+- Added adversarial regression coverage proving registered device output
+  cannot flow into SSH commands or NETCONF payloads.
 
 ## [2.0.1] - 2026-07-27
 

@@ -143,6 +143,9 @@ func netconfResult(operation string, r *response.NetconfResponse, err error) (st
 	if r.Failed != nil {
 		return "", fmt.Errorf("NETCONF %s response indicates failure: %+v", operation, r.Failed)
 	}
+	if len(r.Result) > 64*1024*1024 {
+		return "", fmt.Errorf("NETCONF %s response exceeds the 67108864-byte limit", operation)
+	}
 	return r.Result, nil
 }
 

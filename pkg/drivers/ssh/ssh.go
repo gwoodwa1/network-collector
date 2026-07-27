@@ -316,6 +316,9 @@ func (c *Client) Execute(cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to send input command: %w", err)
 	}
+	if len(output) > 64*1024*1024 {
+		return "", fmt.Errorf("SSH response exceeds the 67108864-byte limit")
+	}
 
 	return string(output), nil
 }

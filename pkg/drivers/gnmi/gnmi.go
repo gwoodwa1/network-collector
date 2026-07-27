@@ -191,6 +191,9 @@ func (g *GNMIClient) Execute(gnmiPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal gNMI response: %w", err)
 	}
+	if len(jsonOutput) > MaxSubscriptionResponseBytes {
+		return "", fmt.Errorf("gNMI get response exceeds the %d-byte limit", MaxSubscriptionResponseBytes)
+	}
 
 	return string(jsonOutput), nil
 }

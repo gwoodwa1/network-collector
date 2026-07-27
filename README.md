@@ -781,7 +781,13 @@ ssh:
 
 Imports are recursive and paths are relative to the file containing the import. Imported files are merged in declared order, then the importing file is applied. Maps merge recursively, lists such as `ssh` append, and later scalar values override earlier ones. Keep shared settings such as `inventory_file`, `parsers_file`, credentials policy, execution, and output in the master config; put reusable workflows in role files.
 
-The loader rejects import cycles, duplicate inclusion, unmatched glob patterns, invalid entries, and nesting deeper than 20 files. This prevents the same upgrade role from silently running twice. See [`examples/modular`](examples/modular) for a complete master, inventory, and role layout. The [`workflow operation examples`](examples/workflow-operations) provide full playbooks for every control operation described below.
+The loader rejects import cycles, duplicate inclusion, unmatched glob patterns,
+invalid entries, and nesting deeper than 20 files. Every external YAML file is
+limited to 4 MiB; YAML anchors and aliases are unsupported to prevent expansion
+amplification. This prevents the same upgrade role from silently running
+twice. See [`examples/modular`](examples/modular) for a complete master,
+inventory, and role layout. The [`workflow operation examples`](examples/workflow-operations)
+provide full playbooks for every control operation described below.
 
 ### Staged and concurrent SSH execution
 
@@ -1571,6 +1577,11 @@ When `events_file` is set, lifecycle events are appended as JSON Lines. Relative
 
 `event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.
 
+Webhook destinations must be explicitly allow-listed. The client resolves the
+host once, rejects private/local addresses unless explicitly enabled, dials the
+verified IP literal, and verifies the connected peer address. Prefer IP
+literals in the allow-list when operational DNS is unnecessary.
+
 ### HTML change reports
 
 Enable the post-run reporter directly from a workbook:
@@ -1739,7 +1750,20 @@ Use `ssh_probe` after software upgrades or reloads. The collector closes the sta
 
 Use `return_to_prompt: false` for commands that intentionally reboot or disconnect the device before a normal CLI prompt can return, such as a `yes` confirmation. Timeout/error from that command is treated as expected, the stale SSH client is closed, and the next wait/probe step can handle reconnecting. The collector also accepts `no` as a compatibility alias.
 
-You can also register a value from a step using `register: <name>` and reuse it in later steps with `{{<name>}}` in `cmd`, `pattern`, `json_path`, or string `expected` values.
+You can register device output with `register: <name>` and reuse it in
+display-only messages, validation patterns, JSON paths, conditions, and
+expected values. Registered device output is tainted: preflight rejects its
+interpolation into SSH commands, validation action commands, NETCONF fields,
+declarative ensure fields, or workflow parameters that reach those executable
+sinks. This prevents a malicious device response containing newlines or CLI/XML
+syntax from becoming executable intent.
+
+Ordinary SSH, NETCONF, ensure, and facts steps retain at most 10 MiB of device
+output by default. Set step-level `max_output_bytes` to a smaller limit or,
+when operationally required, a larger value up to the non-configurable 64 MiB
+ceiling. Validation action commands accept the same field. Oversized output
+fails before parsing, registration, or artifact writing. gNMI subscriptions
+use their stricter response budgets described above.
 
 Define custom variables inline or import variable maps relative to the file that declares them:
 
