@@ -1990,7 +1990,9 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("conditions example is missing workflow operations: %+v", conditions)
 	}
 	gnmiEvents := loaded["27-gnmi-event-actions.yaml"].SSH[0].Steps[0].GNMISubscribe
-	if gnmiEvents == nil || len(gnmiEvents.Triggers) != 2 || gnmiEvents.Triggers[0].Event != "update" || gnmiEvents.Triggers[1].Event != "delete" {
+	if gnmiEvents == nil || gnmiEvents.MaxResponseBytes != 10485760 || gnmiEvents.MaxResponseCount != 10000 ||
+		gnmiEvents.MaxTriggerFires != 5 || gnmiEvents.TriggerCooldownSeconds != 30 ||
+		len(gnmiEvents.Triggers) != 2 || gnmiEvents.Triggers[0].Event != "update" || gnmiEvents.Triggers[1].Event != "delete" {
 		t.Fatalf("gNMI event example is incomplete: %+v", gnmiEvents)
 	}
 	trafficGuard := loaded["29-gnmi-interface-traffic-guard.yaml"].SSH[0].Steps[0].GNMISubscribe
