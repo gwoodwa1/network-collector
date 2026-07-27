@@ -7,12 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
 func pathParts(path string) (int, []string, error) {
-	cleaned := filepath.Clean(path)
+	cleaned, err := canonicalizeTrustedSystemSymlinks(filepath.Clean(path))
+	if err != nil {
+		return -1, nil, err
+	}
 	start := "."
 	if filepath.IsAbs(cleaned) {
 		start = string(filepath.Separator)
@@ -29,6 +33,48 @@ func pathParts(path string) (int, []string, error) {
 		return -1, nil, err
 	}
 	return fd, parts, nil
+}
+
+// canonicalizeTrustedSystemSymlinks permits conventional root-controlled
+// filesystem aliases such as macOS /var -> /private/var. Symlinks owned by a
+// non-root user or located in a writable parent remain forbidden.
+func canonicalizeTrustedSystemSymlinks(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return path, nil
+	}
+	for attempts := 0; attempts < 16; attempts++ {
+		parts := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
+		prefix := string(filepath.Separator)
+		for index, part := range parts {
+			if part == "" {
+				continue
+			}
+			prefix = filepath.Join(prefix, part)
+			info, err := os.Lstat(prefix)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return path, nil
+				}
+				return "", err
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			parentInfo, parentErr := os.Stat(filepath.Dir(prefix))
+			if !ok || parentErr != nil || stat.Uid != 0 || parentInfo.Mode().Perm()&0o022 != 0 {
+				return "", fmt.Errorf("artifact path %q contains untrusted symlink component %q", path, prefix)
+			}
+			resolved, err := filepath.EvalSymlinks(prefix)
+			if err != nil {
+				return "", err
+			}
+			path = filepath.Join(append([]string{resolved}, parts[index+1:]...)...)
+			break
+		}
+		return path, nil
+	}
+	return "", fmt.Errorf("artifact path %q contains too many symbolic links", path)
 }
 
 func openDirectoryAt(parent int, name string) (int, error) {
