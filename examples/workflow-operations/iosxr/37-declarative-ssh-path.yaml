@@ -1,0 +1,52 @@
+name_playbook: Declarative IOS XR SSH path turn-up
+inventory_file: ../inventory.yaml
+fail_on_fail: true
+
+vars:
+  interface: HundredGigE0/0/0/0
+  interface_description: Example declarative core uplink
+  route_prefix: 203.0.113.0/24
+  route_next_hop: 192.0.2.1
+  route_vrf: CUSTOMER-A
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: xr-lab
+    steps:
+      # Under --check, approval is skipped and each ensure step runs only its
+      # adapter-owned show command. The JSON output contains current/desired
+      # state plus the exact commands and rollback_commands without applying.
+      - name: authorize-declarative-path
+        approval:
+          message: >-
+            Enable {{interface}} and install {{route_prefix}} via
+            {{route_next_hop}} in VRF {{route_vrf}}?
+          timeout_seconds: 300
+
+      - name: ensure-path-interface
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          require_state: disabled
+          description: "{{interface_description}}"
+          transport: ssh
+        register: interface_plan
+
+      # The route identity is the exact VRF, prefix, and next-hop tuple. Other
+      # next-hops for the same prefix are preserved for intentional ECMP.
+      - name: ensure-path-route
+        ensure:
+          resource: static_route
+          prefix: "{{route_prefix}}"
+          next_hop: "{{route_next_hop}}"
+          vrf: "{{route_vrf}}"
+          state: present
+          transport: ssh
+        register: route_plan
+

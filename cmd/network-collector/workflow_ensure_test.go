@@ -10,6 +10,27 @@ type sequenceNETCONFExecutor struct {
 	outputs []string
 }
 
+type sequenceSSHEnsureExecutor struct {
+	commands []string
+	outputs  []string
+	errors   []error
+}
+
+func (executor *sequenceSSHEnsureExecutor) Execute(command string) (string, error) {
+	executor.commands = append(executor.commands, command)
+	var output string
+	if len(executor.outputs) > 0 {
+		output = executor.outputs[0]
+		executor.outputs = executor.outputs[1:]
+	}
+	var err error
+	if len(executor.errors) > 0 {
+		err = executor.errors[0]
+		executor.errors = executor.errors[1:]
+	}
+	return output, err
+}
+
 func (executor *sequenceNETCONFExecutor) ExecuteNETCONF(config NETCONFStepConfig) (string, error) {
 	executor.configs = append(executor.configs, config)
 	if len(executor.outputs) == 0 {
@@ -125,5 +146,295 @@ func TestValidateEnsureConfig(t *testing.T) {
 		if _, err := validateEnsureConfig(config); err == nil {
 			t.Fatalf("invalid ensure configuration accepted: %+v", config)
 		}
+	}
+}
+
+func iosXRInterfaceOutput(name, state, description string) string {
+	output := name + " is " + state + ", line protocol is down\n"
+	if description != "" {
+		output += "  Description: " + description + "\n"
+	}
+	return output
+}
+
+func TestSSHEnsureInterfaceCheckModeDiscoversAndPreviews(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
+	}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	ctx.sshEnsure = executor
+	description := "new core uplink"
+
+	if executeSteps(ctx, nil, []StepConfig{{
+		Name: "ensure-interface",
+		Ensure: &EnsureConfig{
+			Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+			RequireState: "disabled", Description: &description, Transport: "ssh",
+		},
+	}}) || *failed {
+		t.Fatalf("SSH interface check failed: failed=%v", *failed)
+	}
+	if len(executor.commands) != 1 || executor.commands[0] != "show interfaces HundredGigE0/0/0/0" {
+		t.Fatalf("check mode sent more than safe discovery: %+v", executor.commands)
+	}
+}
+
+func TestSSHEnsureInterfacePlanIncludesExactApplyAndRollbackCommands(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
+	}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	description := "new core uplink"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wanted := range []string{
+		`"action": "would-change"`,
+		`"commands"`,
+		`description new core uplink`,
+		`no shutdown`,
+		`"rollback_commands"`,
+		`description old description`,
+		`shutdown`,
+	} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("SSH interface plan missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestSSHEnsureInterfaceAppliesAndVerifies(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "administratively down", "old description"),
+		"Commit complete",
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "up", "new core uplink"),
+	}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.sshEnsure = executor
+	description := "new core uplink"
+
+	if executeSteps(ctx, nil, []StepConfig{{
+		Name: "ensure-interface",
+		Ensure: &EnsureConfig{
+			Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+			RequireState: "disabled", Description: &description, Transport: "ssh",
+		},
+	}}) || *failed {
+		t.Fatalf("SSH interface apply failed: failed=%v commands=%+v", *failed, executor.commands)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "description new core uplink") ||
+		!strings.Contains(executor.commands[1], "no shutdown") ||
+		executor.commands[2] != "show interfaces HundredGigE0/0/0/0" {
+		t.Fatalf("SSH interface did not discover, apply, and verify: %+v", executor.commands)
+	}
+}
+
+func TestSSHEnsureInterfaceIsIdempotent(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "up", "core uplink"),
+	}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.sshEnsure = executor
+	description := "core uplink"
+	if executeSteps(ctx, nil, []StepConfig{{
+		Ensure: &EnsureConfig{
+			Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+			Description: &description, Transport: "ssh",
+		},
+	}}) || *failed {
+		t.Fatalf("idempotent SSH interface ensure failed: %v", *failed)
+	}
+	if len(executor.commands) != 1 {
+		t.Fatalf("in-sync SSH interface sent a mutation: %+v", executor.commands)
+	}
+}
+
+func TestSSHEnsureInterfaceRequireStateRefusesActivePortChange(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "up", "unexpected service"),
+	}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.sshEnsure = executor
+	description := "new core uplink"
+	if !executeSteps(ctx, nil, []StepConfig{{
+		Name: "guarded-interface",
+		Ensure: &EnsureConfig{
+			Resource: "interface", Name: "HundredGigE0/0/0/0", State: "enabled",
+			RequireState: "disabled", Description: &description, Transport: "ssh",
+		},
+	}}) || !*failed {
+		t.Fatalf("active interface should fail the require_state gate: failed=%v", *failed)
+	}
+	if len(executor.commands) != 1 {
+		t.Fatalf("require_state failure sent a mutation: %+v", executor.commands)
+	}
+}
+
+func TestParseIOSXRInterfaceDownMeansAdminEnabled(t *testing.T) {
+	state, err := parseIOSXRInterfaceState(
+		iosXRInterfaceOutput("HundredGigE0/0/0/0", "down", "no light"),
+		"HundredGigE0/0/0/0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Enabled == nil || !*state.Enabled {
+		t.Fatalf("operationally down IOS XR interface should remain administratively enabled: %+v", state)
+	}
+}
+
+const iosXRStaticRouteFixture = `router static
+ address-family ipv4 unicast
+  198.51.100.0/24 192.0.2.1
+ !
+ vrf CUSTOMER-A
+  address-family ipv4 unicast
+   203.0.113.0/24 192.0.2.10
+   203.0.113.0/24 192.0.2.11
+ !
+!
+`
+
+func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
+	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
+	if len(defaultRoute.NextHops) != 1 || defaultRoute.NextHops[0] != "192.0.2.1" {
+		t.Fatalf("unexpected default route state: %+v", defaultRoute)
+	}
+	customerRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 || customerRoute.NextHops[0] != "192.0.2.10" || customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected customer route state: %+v", customerRoute)
+	}
+	if wrongVRF := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "203.0.113.0/24", "CUSTOMER-B"); len(wrongVRF.NextHops) != 0 {
+		t.Fatalf("route leaked across VRFs: %+v", wrongVRF)
+	}
+}
+
+func TestSSHEnsureStaticRouteCheckModePreviewsExactPath(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	ctx.sshEnsure = executor
+
+	if executeSteps(ctx, nil, []StepConfig{{
+		Name: "ensure-route",
+		Ensure: &EnsureConfig{
+			Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+			VRF: "CUSTOMER-A", State: "present", Transport: "ssh",
+		},
+	}}) || *failed {
+		t.Fatalf("SSH route check failed: %v", *failed)
+	}
+	if len(executor.commands) != 1 || executor.commands[0] != "show running-config router static" {
+		t.Fatalf("check mode sent more than route discovery: %+v", executor.commands)
+	}
+}
+
+func TestSSHEnsureStaticRoutePresentIsIdempotentAndPreservesECMP(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 || !strings.Contains(output, `"changed": false`) {
+		t.Fatalf("existing exact route should be idempotent: commands=%+v output=%s", executor.commands, output)
+	}
+	if !strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("ECMP peer was not preserved in current state: %s", output)
+	}
+}
+
+func TestSSHEnsureStaticRouteAbsentPlanRemovesOnlyExactNextHop(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, `no 203.0.113.0/24 192.0.2.10`) ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("route removal plan did not target only the exact path: %s", output)
+	}
+}
+
+func TestSSHEnsureStaticRouteAppliesAndVerifies(t *testing.T) {
+	verifiedFixture := strings.Replace(iosXRStaticRouteFixture, "   203.0.113.0/24 192.0.2.10", "   203.0.114.0/24 192.0.2.10\n   203.0.113.0/24 192.0.2.10", 1)
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{iosXRStaticRouteFixture, "Commit complete", verifiedFixture}}
+	ctx, failed := interactionContext(t, nil)
+	ctx.deviceType = "cisco_iosxr"
+	ctx.sshEnsure = executor
+
+	if executeSteps(ctx, nil, []StepConfig{{
+		Name: "ensure-route",
+		Ensure: &EnsureConfig{
+			Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+			VRF: "CUSTOMER-A", State: "present", Transport: "ssh",
+		},
+	}}) || *failed {
+		t.Fatalf("SSH route apply failed: failed=%v commands=%+v", *failed, executor.commands)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "vrf CUSTOMER-A") ||
+		!strings.Contains(executor.commands[1], "203.0.114.0/24 192.0.2.10") ||
+		executor.commands[2] != "show running-config router static" {
+		t.Fatalf("SSH route did not discover, apply, and verify: %+v", executor.commands)
+	}
+}
+
+func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
+	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr") {
+		t.Fatalf("unsupported platform was accepted: %v", err)
+	}
+	ctx.deviceType = "cisco_iosxr"
+	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "Ethernet1\nshutdown", State: "enabled", Transport: "ssh",
+	}); err == nil {
+		t.Fatal("unsafe interface value was accepted")
+	}
+	injectedDescription := "uplink; shutdown"
+	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "Ethernet1", State: "enabled",
+		Description: &injectedDescription, Transport: "ssh",
+	}); err == nil {
+		t.Fatal("unsafe description value was accepted")
+	}
+}
+
+func TestCheckModeSSHNeedDetectionOnlyConnectsForSSHEnsure(t *testing.T) {
+	workflows := map[string]WorkflowConfig{
+		"ensure-route": {Steps: []StepConfig{{Ensure: &EnsureConfig{Resource: "static_route", Transport: "ssh"}}}},
+	}
+	if stepsNeedSSHInCheck([]StepConfig{{Use: "ensure-route"}}, workflows, map[string]bool{}) != true {
+		t.Fatal("nested SSH ensure was not detected in check mode")
+	}
+	if stepsNeedSSHInCheck([]StepConfig{{Command: "show version"}}, nil, map[string]bool{}) {
+		t.Fatal("generic SSH command should not open a check-mode SSH connection")
 	}
 }

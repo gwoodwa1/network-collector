@@ -1845,8 +1845,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 36 {
-		t.Fatalf("expected thirty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 37 {
+		t.Fatalf("expected thirty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1865,8 +1865,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 36 {
-		t.Fatalf("expected thirty-six loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 37 {
+		t.Fatalf("expected thirty-seven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1920,6 +1920,14 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		transaction.Rollback[1].NETCONF.Operation != "rollback" ||
 		transaction.Always[0].NETCONF.Operation != "unlock" {
 		t.Fatalf("transactional NETCONF example is incomplete: %+v", transaction)
+	}
+	sshDesiredState := loaded["37-declarative-ssh-path.yaml"].SSH[0].Steps
+	if len(sshDesiredState) != 3 || sshDesiredState[0].Approval == nil ||
+		sshDesiredState[1].Ensure == nil || sshDesiredState[1].Ensure.Resource != "interface" ||
+		sshDesiredState[1].Ensure.Transport != "ssh" || sshDesiredState[1].Ensure.RequireState != "disabled" ||
+		sshDesiredState[2].Ensure == nil || sshDesiredState[2].Ensure.Resource != "static_route" ||
+		sshDesiredState[2].Ensure.Prefix == "" || sshDesiredState[2].Ensure.NextHop == "" {
+		t.Fatalf("declarative SSH path example is incomplete: %+v", sshDesiredState)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || !hardGate(recovery.Workflows["inspect-interface"].Steps[0]) || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 || !hardGate(recovery.SSH[0].Steps[2].Block.Steps[2]) {

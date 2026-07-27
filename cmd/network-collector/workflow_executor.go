@@ -552,6 +552,9 @@ func executeWorkflow(ctx *stepExecutionContext, client **ssh.Client, step StepCo
 
 func stepsNeedSSH(steps []StepConfig, workflows map[string]WorkflowConfig, seen map[string]bool) bool {
 	for _, step := range steps {
+		if ensureUsesSSH(step.Ensure) {
+			return true
+		}
 		if step.Facts != nil {
 			return true
 		}
@@ -590,6 +593,46 @@ func stepsNeedSSH(steps []StepConfig, workflows map[string]WorkflowConfig, seen 
 		}
 	}
 	return false
+}
+
+func stepsNeedSSHInCheck(steps []StepConfig, workflows map[string]WorkflowConfig, seen map[string]bool) bool {
+	for _, step := range steps {
+		if ensureUsesSSH(step.Ensure) {
+			return true
+		}
+		if step.GNMISubscribe != nil {
+			for _, trigger := range step.GNMISubscribe.Triggers {
+				if stepsNeedSSHInCheck(trigger.Steps, workflows, seen) {
+					return true
+				}
+			}
+		}
+		if step.Repeat != nil && stepsNeedSSHInCheck(step.Repeat.Steps, workflows, seen) {
+			return true
+		}
+		if step.Foreach != nil && stepsNeedSSHInCheck(step.Foreach.Steps, workflows, seen) {
+			return true
+		}
+		if step.Block != nil && (stepsNeedSSHInCheck(step.Block.Steps, workflows, seen) || stepsNeedSSHInCheck(step.Block.Rescue, workflows, seen) || stepsNeedSSHInCheck(step.Block.Rollback, workflows, seen) || stepsNeedSSHInCheck(step.Block.Always, workflows, seen)) {
+			return true
+		}
+		if step.Parallel != nil && stepsNeedSSHInCheck(step.Parallel.Steps, workflows, seen) {
+			return true
+		}
+		name := strings.TrimSpace(step.Use)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			workflow, ok := workflows[name]
+			if ok && stepsNeedSSHInCheck(workflow.Steps, workflows, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ensureUsesSSH(config *EnsureConfig) bool {
+	return config != nil && strings.EqualFold(strings.TrimSpace(config.Transport), "ssh")
 }
 
 type parallelBranchResult struct {
@@ -645,7 +688,11 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 			}
 			branchCtx.netconf = branchNETCONF
 			var client *ssh.Client
-			if !ctx.checkMode && stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{}) {
+			needsSSH := stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{})
+			if ctx.checkMode {
+				needsSSH = stepsNeedSSHInCheck([]StepConfig{branch}, ctx.workflows, map[string]bool{})
+			}
+			if needsSSH {
 				client = ssh.NewClient(ctx.opts...)
 				if err := client.Connect(ctx.ip, ctx.username, ctx.password, ctx.deviceType); err != nil {
 					failed = true
@@ -1074,6 +1121,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 		}
 		attempt := 0
+		stepExecutionFailed := false
 		for {
 			attempt++
 
@@ -1095,7 +1143,11 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			} else if step.NETCONF != nil {
 				output, commandDisplay, err = executeNETCONFStep(ctx, *step.NETCONF)
 			} else if step.Ensure != nil {
-				output, commandDisplay, err = executeEnsureStep(ctx, *step.Ensure)
+				ensureExecutor := ctx.sshEnsure
+				if ensureExecutor == nil && client != nil && *client != nil {
+					ensureExecutor = *client
+				}
+				output, commandDisplay, err = executeEnsureStep(ctx, ensureExecutor, *step.Ensure)
 			} else {
 				commandDisplay = cmd
 				output, err = (*client).Execute(cmd)
@@ -1112,6 +1164,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 					break
 				}
 				*ctx.runFailed = true
+				stepExecutionFailed = true
 				slog.Error("error executing step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n%s", stepName, err, output)
 				recordStepFailure(ctx, stepName, fmt.Sprintf("command error: %v", err))
@@ -1236,6 +1289,12 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				continue
 			}
 
+			break
+		}
+
+		if stepExecutionFailed && step.Ensure != nil {
+			stopDeviceSteps = true
+			slog.Info("stopping remaining steps after declarative ensure failure", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 			break
 		}
 

@@ -237,13 +237,15 @@ Example: preview a workbook without applying changes
 
 Check mode never sends generic SSH commands, local commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
-operations. NETCONF RPC payloads whose top-level operation is `get` or
-`get-config` still run because they are unambiguously read-only; arbitrary
-vendor RPCs are previewed but skipped. Native `get-config` and `validate`
-steps also run; lock, unlock, edit, commit, copy, delete, discard, and
-cancel-commit are previewed only. Declarative `ensure` steps perform their
-discovery read and emit a JSON current/desired diff plus the exact OpenConfig
-XML that would be applied.
+operations. A supported SSH `ensure` adapter may run only its predefined
+read-only discovery command and emits exact apply and rollback command lists;
+arbitrary SSH commands remain skipped. NETCONF RPC payloads whose top-level
+operation is `get` or `get-config` still run because they are unambiguously
+read-only; arbitrary vendor RPCs are previewed but skipped. Native `get-config`
+and `validate` steps also run; lock, unlock, edit, commit, copy, delete,
+discard, and cancel-commit are previewed only. NETCONF `ensure` steps perform
+their discovery read and emit a JSON current/desired diff plus the exact
+OpenConfig XML that would be applied.
 This intentionally treats arbitrary imperative commands as unsafe instead of
 guessing whether a vendor command is read-only. A separate post-change RPC in
 an imperative workbook can still validate the current state and fail; use an
@@ -445,11 +447,11 @@ contents are loaded and then rendered with the same `{{variable}}` values as
 inline payloads, which keeps large XML artifacts separate without losing
 workflow parameterization.
 
-### Declarative interface state
+### Declarative desired state
 
 Use `ensure` when the workbook should express the desired state rather than an
-imperative command followed by a regular-expression check. The first supported
-resource is an OpenConfig interface over NETCONF:
+imperative command followed by a regular-expression check. OpenConfig
+interfaces are supported over NETCONF:
 
 ```yaml
 netconf:
@@ -465,9 +467,9 @@ netconf:
           target: running
 ```
 
-`state` accepts `enabled` or `disabled` (`up` and `down` are aliases).
-`transport` defaults to `netconf`, and `target` defaults to `running`; other
-transports and candidate-datastore commits are rejected rather than silently
+For NETCONF interfaces, `state` accepts `enabled` or `disabled` (`up` and
+`down` are aliases). `transport` defaults to `netconf`, and `target` defaults
+to `running`; candidate-datastore commits are rejected rather than silently
 approximated. `description` is optional, so omitting it leaves the existing
 description unmanaged.
 
@@ -477,6 +479,51 @@ the desired state. It therefore reports success without a write when the
 device is already compliant. With `--check`, the discovery still runs but the
 edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
+
+IOS XR supports state-aware SSH `ensure` adapters for interfaces and exact
+static routes:
+
+```yaml
+ssh:
+  - host: xr-lab-01
+    steps:
+      - name: ensure-uplink
+        ensure:
+          resource: interface
+          name: HundredGigE0/0/0/0
+          state: enabled
+          require_state: disabled
+          description: Customer path
+          transport: ssh
+
+      - name: ensure-customer-route
+        ensure:
+          resource: static_route
+          prefix: 203.0.113.0/24
+          next_hop: 192.0.2.1
+          vrf: CUSTOMER-A
+          state: present
+          transport: ssh
+```
+
+The interface adapter discovers state with `show interfaces`, changes only
+managed fields, and verifies after applying. `require_state: disabled` is a
+precondition whenever a mutation is required: selecting an active port with
+different desired configuration fails before any write. An already compliant
+interface remains idempotent and sends no configuration.
+
+The static-route adapter discovers `router static` configuration and treats
+`vrf`, `prefix`, and `next_hop` as the resource identity. `state` is `present`
+or `absent`; removing one tuple preserves other next-hops for intentional
+ECMP. IPv4 is supported in this first adapter release.
+
+Under `--check`, these adapters open SSH only for their fixed read-only
+discovery commands. The JSON plan contains `current`, `desired`, `changed`,
+`commands`, and `rollback_commands`; no configuration is sent. Normal mode
+applies the planned command block and performs the same discovery again for
+verification. Declarative execution errors are hard gates and stop later
+device steps. See
+[`37-declarative-ssh-path.yaml`](examples/workflow-operations/iosxr/37-declarative-ssh-path.yaml).
 
 Do not include the outer `<rpc>` element in either payload form; the NETCONF
 driver adds the protocol envelope and message ID. Junos accepts either native

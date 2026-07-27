@@ -15,10 +15,17 @@ type interfaceEnsureState struct {
 	Description *string `json:"description,omitempty"`
 }
 
-func executeEnsureStep(ctx *stepExecutionContext, config EnsureConfig) (string, string, error) {
+type sshEnsureCommandExecutor interface {
+	Execute(string) (string, error)
+}
+
+func executeEnsureStep(ctx *stepExecutionContext, sshExecutor sshEnsureCommandExecutor, config EnsureConfig) (string, string, error) {
 	rendered, err := renderEnsureConfig(config, ctx.variables)
 	if err != nil {
 		return "", "", err
+	}
+	if strings.EqualFold(strings.TrimSpace(rendered.Transport), "ssh") {
+		return executeSSHEnsureStep(ctx, sshExecutor, rendered)
 	}
 	desiredEnabled, err := validateEnsureConfig(rendered)
 	if err != nil {
@@ -100,11 +107,15 @@ func executeEnsureStep(ctx *stepExecutionContext, config EnsureConfig) (string, 
 func renderEnsureConfig(config EnsureConfig, vars map[string]string) (EnsureConfig, error) {
 	var err error
 	for label, target := range map[string]*string{
-		"resource":  &config.Resource,
-		"name":      &config.Name,
-		"state":     &config.State,
-		"transport": &config.Transport,
-		"target":    &config.Target,
+		"resource":      &config.Resource,
+		"name":          &config.Name,
+		"prefix":        &config.Prefix,
+		"next_hop":      &config.NextHop,
+		"vrf":           &config.VRF,
+		"state":         &config.State,
+		"require_state": &config.RequireState,
+		"transport":     &config.Transport,
+		"target":        &config.Target,
 	} {
 		*target, err = renderTemplate(strings.TrimSpace(*target), vars)
 		if err != nil {
@@ -127,6 +138,12 @@ func validateEnsureConfig(config EnsureConfig) (bool, error) {
 	}
 	if strings.TrimSpace(config.Name) == "" {
 		return false, fmt.Errorf("ensure.name is required")
+	}
+	if strings.TrimSpace(config.RequireState) != "" {
+		return false, fmt.Errorf("ensure.require_state is currently supported only for SSH interfaces")
+	}
+	if strings.TrimSpace(config.Prefix) != "" || strings.TrimSpace(config.NextHop) != "" || strings.TrimSpace(config.VRF) != "" {
+		return false, fmt.Errorf("ensure.prefix, next_hop, and vrf are supported only for SSH static_route resources")
 	}
 	transport := strings.ToLower(strings.TrimSpace(config.Transport))
 	if transport == "" {

@@ -82,7 +82,11 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		}
 	}
 	var client *ssh.Client
-	if !config.checkMode && stepsNeedSSH(steps, config.Workflows, map[string]bool{}) {
+	needsSSH := stepsNeedSSH(steps, config.Workflows, map[string]bool{})
+	if config.checkMode {
+		needsSSH = stepsNeedSSHInCheck(steps, config.Workflows, map[string]bool{})
+	}
+	if needsSSH {
 		client = ssh.NewClient(opts...)
 		if err := client.Connect(ip, username, password, deviceType); err != nil {
 			result.failed = true

@@ -50,6 +50,7 @@ easier to read.
 | `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process monitor combining optics, discards, errors, and IS-IS/LDP/BGP neighbor state |
 | `multivendor/35-declarative-interface-ensure.yaml` | idempotent OpenConfig interface state with NETCONF discovery, diff, apply, verification, and `--check` preview |
 | `junos/36-junos-netconf-transaction.yaml` | candidate lock, edit, validation, filtered get-config, confirmed commit, cancel/timed rollback, discard recovery, and guaranteed unlock |
+| `iosxr/37-declarative-ssh-path.yaml` | IOS XR SSH interface and exact static-route desired state with safe discovery, apply/rollback plans, verification, and `--check` |
 
 Run one example from the repository root:
 
@@ -118,6 +119,13 @@ protocol, parses Rx/Tx optical power and alarm flags, verifies zero
 input/CRC/output errors, and returns the interface to shutdown if a post-check
 fails. Its multiline IOS-XR configuration commands are a lab template and must
 be tested against the target driver and commit policy.
+
+`37-declarative-ssh-path.yaml` is the state-aware SSH counterpart. Under
+`--check`, it connects only to run the IOS XR discovery commands owned by the
+declarative adapters, then emits current/desired state and exact apply and
+rollback command lists. Its interface change requires the selected port to be
+administratively down whenever a mutation is needed. The static-route identity
+is the exact VRF, prefix, and next-hop tuple, so other next-hops are preserved.
 
 `08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
 
