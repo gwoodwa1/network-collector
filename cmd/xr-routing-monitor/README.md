@@ -67,6 +67,7 @@ files are required.
 | `--diff-before`, `--diff-after` | *(none)* | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end-written-to-output-dirdevices-file-hostname-timestamp-labeltxtjson). |
 | `--capture-running-config` | `false`       | Also capture `show running-config` before and after the change window, as a separate `<base>-running-config.txt` file per label. See [below](#running-config-optional). |
 | `--diff-before-config`, `--diff-after-config` | *(none)* | Paths to a captured before/after running-config `.txt` pair. When both are set, prints a unified line diff and exits instead of connecting to any device. See [below](#running-config-optional). |
+| `--version` | `false` | Print the build version and exit, instead of connecting to any device. |
 
 ### Onboarding (once at startup)
 

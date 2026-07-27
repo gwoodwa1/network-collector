@@ -10,15 +10,27 @@ import (
 	"time"
 )
 
+// scriptedConfigExecutor returns a fixed response for "show configuration",
+// standing in for a real Junos session for captureRunningConfig tests.
+type scriptedConfigExecutor struct {
+	response string
+}
+
+func (e *scriptedConfigExecutor) Execute(cmd string) (string, error) { return e.response, nil }
+func (e *scriptedConfigExecutor) Close() error                       { return nil }
+
+type erroringConfigExecutor struct{ err error }
+
+func (e *erroringConfigExecutor) Execute(cmd string) (string, error) { return "", e.err }
+func (e *erroringConfigExecutor) Close() error                       { return nil }
+
 // TestCaptureRunningConfigWritesFileAndConfirmation proves the running
 // config is written to "<base>-running-config.txt" (sharing
 // captureSnapshot's <base> naming, see snapshotFilenameBase) and a
 // confirmation is written to the provided writer.
 func TestCaptureRunningConfigWritesFileAndConfirmation(t *testing.T) {
 	dir := t.TempDir()
-	exec := &scriptedExecutor{responses: map[string]string{
-		"show running-config": "interface Bundle-Ether45\n description core\n!\n",
-	}}
+	exec := &scriptedConfigExecutor{response: "interfaces {\n    ae0 {\n        description core;\n    }\n}\n"}
 	session := &deviceSession{hostname: "pe-router-1", client: exec}
 	capturedAt := time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)
 
@@ -32,7 +44,7 @@ func TestCaptureRunningConfigWritesFileAndConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected file at %s, got error: %v", wantPath, err)
 	}
-	if !strings.Contains(string(content), "interface Bundle-Ether45") {
+	if !strings.Contains(string(content), "description core;") {
 		t.Fatalf("expected captured config content, got: %q", content)
 	}
 	if !strings.Contains(buf.String(), "before-change running-config captured for pe-router-1") {
@@ -42,18 +54,13 @@ func TestCaptureRunningConfigWritesFileAndConfirmation(t *testing.T) {
 
 func TestCaptureRunningConfigPropagatesExecuteFailure(t *testing.T) {
 	dir := t.TempDir()
-	failing := &erroringExecutor{err: fmt.Errorf("channel closed")}
+	failing := &erroringConfigExecutor{err: fmt.Errorf("channel closed")}
 	session := &deviceSession{hostname: "pe-router-1", client: failing}
 
 	if err := captureRunningConfig(session, "before", dir, "", time.Now().UTC(), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected an error when the running-config command fails")
 	}
 }
-
-type erroringExecutor struct{ err error }
-
-func (e *erroringExecutor) Execute(cmd string) (string, error) { return "", e.err }
-func (e *erroringExecutor) Close() error                       { return nil }
 
 // TestRunConfigDiffReportsLineChanges proves runConfigDiff produces a
 // unified diff (added/removed lines, correctly ordered) rather than an
@@ -63,10 +70,10 @@ func TestRunConfigDiffReportsLineChanges(t *testing.T) {
 	dir := t.TempDir()
 	beforePath := filepath.Join(dir, "before-running-config.txt")
 	afterPath := filepath.Join(dir, "after-running-config.txt")
-	if err := os.WriteFile(beforePath, []byte("interface Bundle-Ether45\n description core\n!\n"), 0o644); err != nil {
+	if err := os.WriteFile(beforePath, []byte("interfaces {\n    ae0 {\n        description core;\n    }\n}\n"), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if err := os.WriteFile(afterPath, []byte("interface Bundle-Ether45\n description core-updated\n!\n"), 0o644); err != nil {
+	if err := os.WriteFile(afterPath, []byte("interfaces {\n    ae0 {\n        description core-updated;\n    }\n}\n"), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
@@ -75,7 +82,7 @@ func TestRunConfigDiffReportsLineChanges(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := buf.String()
-	if !strings.Contains(got, "-description core\n") && !strings.Contains(got, "- description core\n") {
+	if !strings.Contains(got, "description core;\n") && !strings.Contains(got, "-        description core;\n") {
 		t.Fatalf("expected the removed line to be reported, got: %q", got)
 	}
 	if !strings.Contains(got, "description core-updated") {
@@ -87,7 +94,7 @@ func TestRunConfigDiffNoChanges(t *testing.T) {
 	dir := t.TempDir()
 	beforePath := filepath.Join(dir, "before-running-config.txt")
 	afterPath := filepath.Join(dir, "after-running-config.txt")
-	content := []byte("interface Bundle-Ether45\n description core\n!\n")
+	content := []byte("interfaces {\n    ae0 {\n        description core;\n    }\n}\n")
 	if err := os.WriteFile(beforePath, content, 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
@@ -120,9 +127,8 @@ func TestRunConfigDiffMissingFile(t *testing.T) {
 // runConfigDiff, this would always report a spurious diff.
 func TestCaptureRunningConfigThenDiffReportsNoChangesForIdenticalConfig(t *testing.T) {
 	dir := t.TempDir()
-	config := "interface Bundle-Ether45\n description core\n!\n"
-	exec := &scriptedExecutor{responses: map[string]string{"show running-config": config}}
-	session := &deviceSession{hostname: "pe-router-1", client: exec}
+	config := "interfaces {\n    ae0 {\n        description core;\n    }\n}\n"
+	session := &deviceSession{hostname: "pe-router-1", client: &scriptedConfigExecutor{response: config}}
 
 	if err := captureRunningConfig(session, "before", dir, "", time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC), &bytes.Buffer{}); err != nil {
 		t.Fatalf("unexpected error capturing before: %v", err)

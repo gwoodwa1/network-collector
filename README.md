@@ -196,6 +196,7 @@ if err := client.Close(); err != nil {
 - `cmd/gnmi-client`: gNMI example using `pkg/drivers/gnmi`
 - `cmd/restconf-client`: RESTCONF example using `pkg/drivers/restconf`
 - `cmd/xr-routing-monitor`: standalone Cisco IOS-XR change-window monitor
+- `cmd/junos-routing-monitor`: standalone Juniper Junos change-window monitor
 
 ## CLI validation and output
 
@@ -254,7 +255,19 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o xr-routing-monitor ./cmd/xr
 ```
 
 See [`cmd/xr-routing-monitor/README.md`](cmd/xr-routing-monitor/README.md) for devices-file examples, RSA passcode reuse behavior, VRF auto-detection, snapshot output, and live status formatting.
-     
+
+## Junos Routing Monitor
+
+`cmd/junos-routing-monitor` is `cmd/xr-routing-monitor`'s sibling for Juniper Junos: the same live change-window workflow, retargeted at Junos CLI syntax. It opens persistent SSH sessions to a small set of routers, polls BGP, routing-table, and interface health on an interval, and captures before/after route-table and BGP neighbor route snapshots (plus, optionally, a before/after running-config diff) for later comparison.
+
+It is separate from the playbook-driven `network-collector` CLI and has its own embedded TextFSM parser set. Build it as a static binary for jump hosts:
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o junos-routing-monitor ./cmd/junos-routing-monitor
+```
+
+See [`cmd/junos-routing-monitor/README.md`](cmd/junos-routing-monitor/README.md) for devices-file examples, passcode reuse behavior, running-config capture and diffing, snapshot output, and live status formatting — and its "Not yet ported from xr-routing-monitor" section for what's deliberately out of scope in this first pass.
+
 ## Configuration
 
 The playbook-driven CLI reads `config.yaml`. This minimal configuration uses

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeIdenticalDevice mimics a Junos node answering the per-tick commands
@@ -27,6 +31,98 @@ func (f *fakeIdenticalDevice) Execute(cmd string) (string, error) {
 }
 
 func (f *fakeIdenticalDevice) Close() error { return nil }
+
+// genericFakeExecutor is a sessionExecutor that answers any command with
+// placeholder text, for tests that only care about pollDevice's control
+// flow (capture/diff sequencing) rather than realistic Junos output.
+type genericFakeExecutor struct{}
+
+func (f *genericFakeExecutor) Execute(cmd string) (string, error) {
+	return "output for: " + cmd, nil
+}
+
+func (f *genericFakeExecutor) Close() error { return nil }
+
+// TestPollDeviceAutomaticallyPrintsSnapshotDiffOnCtrlC proves pollDevice
+// diffs the before/after snapshots itself right after capturing "after" on
+// context cancellation (Ctrl+C), instead of requiring a second, separate
+// -diff-before/-diff-after invocation to see what changed.
+func TestPollDeviceAutomaticallyPrintsSnapshotDiffOnCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	exec := &genericFakeExecutor{}
+	session := &deviceSession{hostname: "node-1", tables: []string{"CUSTOMER-A.inet.0"}, client: exec}
+
+	var buf syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, false)
+		close(done)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollDevice did not return after context cancellation")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "snapshot diff for node-1") {
+		t.Fatalf("expected an automatic snapshot diff to be printed, got: %q", got)
+	}
+}
+
+// TestPollDeviceAutomaticallyPrintsRunningConfigDiffOnCtrlC proves the same
+// automatic behavior extends to the running-config diff when
+// --capture-running-config is enabled.
+func TestPollDeviceAutomaticallyPrintsRunningConfigDiffOnCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	exec := &genericFakeExecutor{}
+	session := &deviceSession{hostname: "node-1", tables: []string{"CUSTOMER-A.inet.0"}, client: exec}
+
+	var buf syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pollDevice(ctx, session, 10*time.Millisecond, dir, map[string]parserModule{}, newTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, true)
+		close(done)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollDevice did not return after context cancellation")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "running-config diff:") {
+		t.Fatalf("expected an automatic running-config diff to be printed, got: %q", got)
+	}
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer so pollDevice's concurrent
+// writers (session.log style output plus the diff report) can't race with
+// the test goroutine reading buf.String() after cancel.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // TestCollectTickTwoIdenticalDevicesBothReportNextHop runs the full
 // per-tick pipeline (collectTick then tickHeaderLine) for two

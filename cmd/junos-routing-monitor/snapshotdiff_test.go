@@ -314,7 +314,7 @@ func TestPrintAutoDiffAfterChangeSkipsWhenCaptureFailed(t *testing.T) {
 	writeSnapshotFixture(t, afterPath, after)
 
 	var buf bytes.Buffer
-	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, false, &buf)
+	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, false, false, true, &buf)
 
 	if got := buf.String(); got != "" {
 		t.Fatalf("expected no output when the capture failed (diff should be skipped, not attempted), got %q", got)
@@ -356,7 +356,7 @@ func TestPrintAutoDiffAfterChangeWritesAtomically(t *testing.T) {
 	writeSnapshotFixture(t, afterPath, after)
 
 	wc := &countingWriter{}
-	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, true, wc)
+	printAutoDiffAfterChange(session, dir, "", beforeCapturedAt, afterCapturedAt, false, true, true, wc)
 
 	if wc.calls != 1 {
 		t.Fatalf("expected the whole report in exactly one Write call, got %d calls: %q", wc.calls, wc.buf.String())

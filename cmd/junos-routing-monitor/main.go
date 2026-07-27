@@ -26,6 +26,9 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
+// version is replaced by GoReleaser at build time.
+var version = "dev"
+
 func main() {
 	var interval time.Duration
 	var outputDir string
@@ -34,6 +37,8 @@ func main() {
 	var devicesFile string
 	var passcodeReuseWindow time.Duration
 	var diffBeforePath, diffAfterPath string
+	var captureRunningConfigEnabled bool
+	var showVersion bool
 	var reportOutput, reportTitle, changeReference string
 	var logoFolder, headerLogo, footerLogo string
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
@@ -50,7 +55,13 @@ func main() {
 	flag.StringVar(&footerLogo, "footer-logo", "", "PNG filename inside logo-folder (default: footer.png when present)")
 	flag.StringVar(&diffBeforePath, "diff-before", "", "path to a captured *-before.json snapshot; combine with -diff-after to print a route-level diff and exit, instead of connecting to any device")
 	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
+	flag.BoolVar(&captureRunningConfigEnabled, "capture-running-config", false, "also capture \"show configuration\" before and after the change window; diffed automatically alongside the route snapshot when the window ends")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
+	if showVersion {
+		fmt.Printf("junos-routing-monitor %s\n", version)
+		return
+	}
 
 	snapshotDiffRequested := diffBeforePath != "" || diffAfterPath != ""
 	if snapshotDiffRequested {
@@ -207,7 +218,7 @@ func main() {
 		wg.Add(1)
 		go func(s *deviceSession) {
 			defer wg.Done()
-			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel, spec)
+			pollDevice(ctx, s, interval, outputDir, parsers, statusOut, snapshotOut, runLabel, spec, captureRunningConfigEnabled)
 		}(session)
 	}
 	wg.Wait()

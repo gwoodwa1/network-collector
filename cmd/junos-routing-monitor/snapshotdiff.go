@@ -260,48 +260,66 @@ func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 }
 
 // printAutoDiffAfterChange runs the same route-level diff as the standalone
-// -diff-before/-diff-after flags, automatically right after the
-// after-change capture on Ctrl+C — so an operator sees what changed
-// immediately, without a second invocation to point the diff flags at the
-// files by hand. The diff is read back from the files captureSnapshot just
-// wrote (rather than threading the in-memory capture results through
-// pollDevice), reusing exactly the same offline diff path the manual flag
-// uses, keyed by the same capturedAt timestamps and filename convention
-// (snapshotFilenameBase) used to write them.
+// -diff-before/-diff-after flags, plus (when --capture-running-config is
+// enabled) a config diff, automatically right after the after-change
+// capture on Ctrl+C — so an operator sees what changed immediately, without
+// a second invocation to point a diff flag at the files by hand. Both
+// diffs are read back from the files captureSnapshot/captureRunningConfig
+// just wrote (rather than threading the in-memory capture results through
+// pollDevice), keyed by the same capturedAt timestamps and filename
+// convention (snapshotFilenameBase) used to write them. There is no
+// standalone -diff-before-config/-diff-after-config flag pair (unlike
+// route snapshots) — the automatic diff on Ctrl+C is the only workflow
+// running-config capture needs.
 //
 // Mirrors captureSnapshot's own "nothing to do" gate: no route-level diff
 // is attempted for a device with no tables and no neighbors configured,
 // since captureSnapshot itself wrote no files to diff in that case.
-// snapshotCapturesOK reports whether the before *and* after captures this
-// diff would read back both actually succeeded (poll.go tracks this from
-// captureSnapshot's own return value) — skipping a diff attempt here when
-// either side failed avoids a second, confusing "file not found" error on
-// top of the already-logged capture failure.
+// snapshotCapturesOK/configCapturesOK report whether the before *and*
+// after captures each diff would read back both actually succeeded (poll.go
+// tracks this from captureSnapshot's/captureRunningConfig's own return
+// values) — skipping a diff attempt when either side failed avoids a
+// second, confusing "file not found" error on top of the already-logged
+// capture failure.
 //
 // Every device polls on its own goroutine, and Ctrl+C fires all of their
 // auto-diffs at nearly the same instant against the shared snapshotOut
 // writer — so the whole report is built in a local buffer and written to
 // out in one Write call, rather than the many small Fprintf/Fprintln calls
-// printSnapshotDiff would otherwise make directly against out. out's
-// underlying syncWriter only serializes one Write call at a time, not a
-// whole sequence of them, so multiple small writes from concurrent devices
-// could otherwise interleave into unreadable output.
-func printAutoDiffAfterChange(session *deviceSession, outputDir, runLabel string, beforeCapturedAt, afterCapturedAt time.Time, snapshotCapturesOK bool, out io.Writer) {
-	if len(session.tables) == 0 && len(session.neighbors) == 0 {
-		return
-	}
-	if !snapshotCapturesOK {
-		slog.Warn("skipping automatic snapshot diff: before or after capture failed, see prior error", "hostname", session.hostname)
-		return
-	}
-
+// printSnapshotDiff/runConfigDiff would otherwise make directly against
+// out. out's underlying syncWriter only serializes one Write call at a
+// time, not a whole sequence of them, so multiple small writes from
+// concurrent devices could otherwise interleave into unreadable output.
+func printAutoDiffAfterChange(session *deviceSession, outputDir, runLabel string, beforeCapturedAt, afterCapturedAt time.Time, captureRunningConfigEnabled, snapshotCapturesOK, configCapturesOK bool, out io.Writer) {
 	var buf bytes.Buffer
-	beforePath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "before", beforeCapturedAt)+".json")
-	afterPath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "after", afterCapturedAt)+".json")
-	fmt.Fprintln(&buf)
-	if err := runSnapshotDiff(beforePath, afterPath, &buf); err != nil {
-		slog.Error("failed to print automatic snapshot diff", "hostname", session.hostname, "error", err)
-		return
+	wroteAny := false
+	if len(session.tables) > 0 || len(session.neighbors) > 0 {
+		if !snapshotCapturesOK {
+			slog.Warn("skipping automatic snapshot diff: before or after capture failed, see prior error", "hostname", session.hostname)
+		} else {
+			beforePath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "before", beforeCapturedAt)+".json")
+			afterPath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "after", afterCapturedAt)+".json")
+			fmt.Fprintln(&buf)
+			if err := runSnapshotDiff(beforePath, afterPath, &buf); err != nil {
+				slog.Error("failed to print automatic snapshot diff", "hostname", session.hostname, "error", err)
+			}
+			wroteAny = true
+		}
 	}
-	out.Write(buf.Bytes())
+	if captureRunningConfigEnabled {
+		if !configCapturesOK {
+			slog.Warn("skipping automatic running-config diff: before or after capture failed, see prior error", "hostname", session.hostname)
+		} else {
+			beforePath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "before", beforeCapturedAt)+"-running-config.txt")
+			afterPath := filepath.Join(outputDir, snapshotFilenameBase(runLabel, session.hostname, "after", afterCapturedAt)+"-running-config.txt")
+			fmt.Fprintln(&buf)
+			if err := runConfigDiff(beforePath, afterPath, &buf); err != nil {
+				slog.Error("failed to print automatic running-config diff", "hostname", session.hostname, "error", err)
+			}
+			wroteAny = true
+		}
+	}
+	if wroteAny {
+		out.Write(buf.Bytes())
+	}
 }

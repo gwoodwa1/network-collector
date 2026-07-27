@@ -72,6 +72,8 @@ files are required.
 | `--logo-folder`            | *(none)*        | Folder containing optional PNG report branding. |
 | `--header-logo`, `--footer-logo` | *(automatic)* | PNG filenames inside `--logo-folder`; defaults to `header.png` and `footer.png` when present. |
 | `--diff-before`, `--diff-after` | *(none)*   | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end). |
+| `--capture-running-config` | `false` | Also capture `show configuration` before and after the change window, as a separate `<base>-running-config.txt` file per label. Diffed automatically alongside the route snapshot on Ctrl+C. See [below](#running-config-optional). |
+| `--version` | `false` | Print the build version and exit, instead of connecting to any device. |
 
 ### Onboarding (once at startup)
 
@@ -352,6 +354,27 @@ A section that failed to parse into structured records on either side
 back to `jq -S` against the raw JSON, or `diff` against the `.txt` pair, for
 that section.
 
+### Running config (optional)
+
+Pass `--capture-running-config` to also capture the full `show
+configuration` before and after the change window. This is a heavier
+capture (one extra SSH round trip per label, and a potentially large file
+on a big router) so it's off by default — the BGP/route snapshot above
+captures regardless of this flag.
+
+Each capture is written as its own raw text file, `<base>-running-config.txt`,
+where `<base>` is the exact same `[<devices-file>-]<hostname>-<capture-timestamp>-<label>`
+that the route snapshot for that same moment uses (see
+[above](#once-at-the-start-and-once-at-the-end)) — a separate file,
+correlated by name, not merged into the route snapshot's `.txt`/`.json` pair.
+
+Unlike the route-level snapshot diff, there is no standalone
+`-diff-before-config`/`-diff-after-config` flag pair — the before/after
+config diff is printed automatically, right alongside the route-level diff,
+the moment you hit Ctrl+C. Unlike the route-level snapshot diff (diffed by
+prefix, order-independent), this is an ordinary unified line diff, since
+config text doesn't reduce meaningfully to a by-key comparison.
+
 ### `session.log`
 
 Every scrolling status line, plus every operational log event (device
@@ -407,8 +430,11 @@ not (yet) in this tool:
 - **Hub-instance interface sampling.** xr-routing-monitor ranks a shared
   hub VRF's interfaces by current utilization and samples the busiest few.
   Not present here.
-- **Running-config capture and diff** (`--capture-running-config`,
-  `-diff-before-config`/`-diff-after-config`). Not present here.
+- **Standalone `-diff-before-config`/`-diff-after-config` replay flags.**
+  Running-config capture and its automatic Ctrl+C diff (`--capture-running-config`)
+  are ported — see [Running config (optional)](#running-config-optional) —
+  but xr-routing-monitor's manual flags for re-diffing a saved config pair
+  offline, without reconnecting, are not.
 
 Porting any of these should follow the same pattern already used for the
 BGP/route/interface polling and snapshot diff: reuse `discover.go`'s

@@ -59,8 +59,8 @@ var defaultSpec = collectionSpec{
 	// rate — the parser keys on that trailing rate, so the rate-less
 	// Traffic/Local statistics lines the filter also lets through are
 	// ignored rather than misparsed.
-	InterfaceCommand:    `show interfaces %s extensive | match "Description:|Input|Output"`,
-	InterfaceParser:     "junos_interface_stats",
+	InterfaceCommand: `show interfaces %s extensive | match "Description:|Input|Output"`,
+	InterfaceParser:  "junos_interface_stats",
 }
 
 // resolveCollectionSpec merges any non-empty overrides from a --devices
@@ -113,7 +113,7 @@ type tickResult struct {
 // error, since BGP is collected on every tick and acts as a session
 // liveness canary). It never reconnects: a dropped session requires fresh
 // credentials, which this loop cannot supply unattended.
-func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec) {
+func pollDevice(ctx context.Context, session *deviceSession, interval time.Duration, outputDir string, parsers map[string]parserModule, statusOut *tickStatusPrinter, snapshotOut io.Writer, runLabel string, spec collectionSpec, captureRunningConfigEnabled bool) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -154,6 +154,13 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
 		beforeSnapshotOK = false
 	}
+	beforeConfigOK := true
+	if captureRunningConfigEnabled {
+		if err := captureRunningConfig(session, "before", outputDir, runLabel, beforeCapturedAt, snapshotOut); err != nil {
+			slog.Error("failed to capture before-change running-config", "hostname", session.hostname, "error", err)
+			beforeConfigOK = false
+		}
+	}
 
 	if !tick() {
 		return
@@ -170,7 +177,14 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
 				afterSnapshotOK = false
 			}
-			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, beforeSnapshotOK && afterSnapshotOK, snapshotOut)
+			afterConfigOK := true
+			if captureRunningConfigEnabled {
+				if err := captureRunningConfig(session, "after", outputDir, runLabel, afterCapturedAt, snapshotOut); err != nil {
+					slog.Error("failed to capture after-change running-config", "hostname", session.hostname, "error", err)
+					afterConfigOK = false
+				}
+			}
+			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, captureRunningConfigEnabled, beforeSnapshotOK && afterSnapshotOK, beforeConfigOK && afterConfigOK, snapshotOut)
 			return
 		case <-ticker.C:
 			if !tick() {

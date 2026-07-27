@@ -11,19 +11,19 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 )
 
-// captureRunningConfig captures "show running-config" as a single raw text
+// captureRunningConfig captures "show configuration" as a single raw text
 // file named "<base>-running-config.txt", where <base> is the same
 // "[<runLabel>-]<hostname>-<capture-timestamp>-<label>" (see
 // snapshotFilenameBase) captureSnapshot uses — a separate file, but sharing
 // captureSnapshot's naming convention and capturedAt so a before/after
 // config pair for one hostname is identifiable alongside, without being
-// mixed into, that same moment's BGP snapshot pair. Opt-in via
-// --capture-running-config (see main.go): a full running-config is a
-// heavier capture (one extra SSH round trip, a potentially large file) that
-// not every change window needs. On success, a confirmation line is
-// written to out, matching captureSnapshot's confirmation style.
+// mixed into, that same moment's route/BGP snapshot pair. Opt-in via
+// --capture-running-config (see main.go): a full config is a heavier
+// capture (one extra SSH round trip, a potentially large file) that not
+// every change window needs. On success, a confirmation line is written to
+// out, matching captureSnapshot's confirmation style.
 func captureRunningConfig(session *deviceSession, label, outputDir, runLabel string, capturedAt time.Time, out io.Writer) error {
-	const cmd = "show running-config"
+	const cmd = "show configuration"
 	output, err := session.client.Execute(cmd)
 	if err != nil {
 		return fmt.Errorf("%s: %w", cmd, err)
@@ -60,12 +60,13 @@ func stripCaptureHeader(content string) string {
 }
 
 // runConfigDiff loads two captured running-config text files (see
-// captureRunningConfig) and prints a unified line diff to out — unlike the
-// route-level snapshot diff (see snapshotdiff.go), config text is not
-// meaningfully reducible to a by-key comparison, so this is an ordinary
-// ordered line diff (via go-difflib, already an indirect dependency of this
-// module through testify). Used by main's -diff-before-config/
-// -diff-after-config flags, entirely offline.
+// captureRunningConfig) and prints a unified line diff to out — config text
+// is not meaningfully reducible to a by-key comparison the way route tables
+// are (see snapshotdiff.go), so this is an ordinary ordered line diff via
+// go-difflib. Only called from printAutoDiffAfterChange right after the
+// after-change capture; there is no standalone CLI flag for it, unlike
+// -diff-before/-diff-after for route snapshots — the automatic diff on
+// Ctrl+C is the only workflow this needs.
 func runConfigDiff(beforePath, afterPath string, out io.Writer) error {
 	beforeContent, err := os.ReadFile(beforePath)
 	if err != nil {
