@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -38,7 +37,7 @@ type Option func(*Client)
 
 func NewClient(opts ...Option) *Client {
 	c := &Client{
-		channelLog:      os.Stdout,
+		channelLog:      io.Discard,
 		socketTimeout:   45 * time.Second,
 		opsTimeout:      90 * time.Second,
 		securityProfile: "modern",

@@ -389,7 +389,7 @@ func applyDriftCheck(ctx *stepExecutionContext, step StepConfig, stepName, curre
 		return err
 	}
 	encoded, _ := json.MarshalIndent(report, "", "  ")
-	writeSessionf(ctx.sessionLog, "[step:%s] drift result:\n%s\n", stepName, encoded)
+	writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] drift result:", stepName), string(encoded))
 	if err := saveStepArtifact(ctx, step, stepName, 1, "drift", string(encoded)); err != nil {
 		return err
 	}

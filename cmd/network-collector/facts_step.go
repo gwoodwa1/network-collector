@@ -132,10 +132,7 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 	if err != nil {
 		return fmt.Errorf("encode facts: %w", err)
 	}
-	writeSessionf(ctx.sessionLog, "\n[step:%s] facts output:\n%s\n", stepName, encoded)
-	if !ctx.jsonOut {
-		fmt.Printf("facts output for %s step=%s:\n%s\n", ctx.hostname, stepName, encoded)
-	}
+	writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] facts output:", stepName), string(encoded))
 	if register := strings.TrimSpace(step.Register); register != "" {
 		ctx.variables[register] = string(encoded)
 	}

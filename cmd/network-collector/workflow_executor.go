@@ -290,9 +290,9 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 		if err != nil {
 			return validationActionOutcome{}, fmt.Errorf("error rendering action message: %w", err)
 		}
-		writeSessionf(ctx.sessionLog, "[step:%s] action: %s\n", stepName, message)
+		writeSessionf(ctx.sessionLog, "[step:%s] action: %s\n", stepName, protectHumanOutput(message))
 		if !ctx.jsonOut {
-			fmt.Printf("device=%s step=%s action=%q\n", ctx.hostname, stepName, message)
+			fmt.Printf("device=%s step=%s action=%q\n", ctx.hostname, stepName, protectHumanOutput(message))
 		}
 	}
 
@@ -326,10 +326,7 @@ func executeValidationAction(ctx *stepExecutionContext, client **ssh.Client, act
 		if err != nil {
 			return validationActionOutcome{}, err
 		}
-		writeSessionf(ctx.sessionLog, "\n[step:%s] action command=%q\n%s\n", stepName, cmd, output)
-		if !ctx.jsonOut {
-			fmt.Printf("device=%s step=%s action_command=%q\n%s\n", ctx.hostname, stepName, cmd, output)
-		}
+		writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] action command=%q", stepName, cmd), output)
 		if err := saveStepArtifact(ctx, StepConfig{Output: action.Output}, stepName+"-action", 1, "raw", output); err != nil {
 			return validationActionOutcome{}, err
 		}
@@ -1176,7 +1173,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				*ctx.runFailed = true
 				stepExecutionFailed = true
 				slog.Error("error executing step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
-				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: %v\n%s", stepName, err, output)
+				writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] command error: %v", stepName, err), output)
 				recordStepFailure(ctx, stepName, fmt.Sprintf("command error: %v", err))
 				break
 			}
@@ -1189,10 +1186,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			} else if step.Ensure != nil {
 				commandKind = "ensure"
 			}
-			writeSessionf(ctx.sessionLog, "\n[step:%s] %s command=%q\n%s\n", stepName, commandKind, commandDisplay, output)
-			if !ctx.jsonOut {
-				fmt.Printf("device=%s step=%s %s_command=%q\n%s\n", ctx.hostname, stepName, commandKind, commandDisplay, output)
-			}
+			writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] %s command=%q", stepName, commandKind, commandDisplay), output)
 			if err := saveStepArtifact(ctx, step, stepName, attempt, "raw", output); err != nil {
 				*ctx.runFailed = true
 				slog.Error("error saving raw command output", "hostname", ctx.hostname, "step", stepName, "error", err)
@@ -1213,7 +1207,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 					break
 				}
 				validationOutput = parsedOutput
-				writeSessionf(ctx.sessionLog, "[step:%s] parser %q output:\n%s\n", stepName, step.Parser, parsedOutput)
+				writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] parser %q output:", stepName, step.Parser), parsedOutput)
 			}
 			if step.Enrich != nil {
 				enrichedOutput, err := enrichJSON(validationOutput, *step.Enrich, ctx.configBaseDir)
@@ -1225,7 +1219,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 					break
 				}
 				validationOutput = enrichedOutput
-				writeSessionf(ctx.sessionLog, "[step:%s] enriched output:\n%s\n", stepName, enrichedOutput)
+				writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] enriched output:", stepName), enrichedOutput)
 			}
 			if strings.TrimSpace(step.Parser) != "" || step.Enrich != nil {
 				if err := saveStepArtifact(ctx, step, stepName, attempt, "parsed", validationOutput); err != nil {
@@ -1233,12 +1227,12 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 					slog.Error("error saving structured command output", "hostname", ctx.hostname, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "[step:%s] output error: %v\n", stepName, err)
 				}
-				if !ctx.jsonOut {
-					fmt.Printf("structured output for %s step=%s:\n%s\n", ctx.hostname, stepName, validationOutput)
+				if !ctx.jsonOut && ctx.consoleOutput {
+					fmt.Printf("structured output for %s step=%s:\n%s\n", ctx.hostname, stepName, protectHumanOutput(validationOutput))
 				}
 			}
 			if registerParserOutput(ctx.variables, step, validationOutput) {
-				slog.Info("registered step output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "value", validationOutput)
+				slog.Info("registered step output", "hostname", ctx.hostname, "step", stepName, "variable", strings.TrimSpace(step.Register), "metadata", outputMetadata(validationOutput))
 			}
 			if step.Drift != nil {
 				if err := applyDriftCheck(ctx, step, stepName, validationOutput); err != nil {
@@ -1263,12 +1257,18 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			finalValidationResults = results
 
 			for idx, vres := range results {
-				if !ctx.jsonOut {
+				if !ctx.jsonOut && ctx.consoleOutput {
 					jb, _ := json.MarshalIndent(vres, "", "  ")
-					fmt.Printf("validation result for %s step=%s validation=%d:\n%s\n", ctx.hostname, stepName, idx+1, string(jb))
+					fmt.Printf("validation result for %s step=%s validation=%d:\n%s\n", ctx.hostname, stepName, idx+1, protectHumanOutput(string(jb)))
+				} else if !ctx.jsonOut {
+					fmt.Printf("validation result for %s step=%s validation=%d status=%s pass=%t\n", ctx.hostname, stepName, idx+1, vres.Status, vres.Pass)
 				}
 				jb, _ := json.MarshalIndent(vres, "", "  ")
-				writeSessionf(ctx.sessionLog, "[step:%s] validation result %d:\n%s\n", stepName, idx+1, string(jb))
+				if ctx.sessionOutput {
+					writeSessionf(ctx.sessionLog, "[step:%s] validation result %d:\n%s\n", stepName, idx+1, protectHumanOutput(string(jb)))
+				} else {
+					writeSessionf(ctx.sessionLog, "[step:%s] validation result %d status=%s pass=%t %s\n", stepName, idx+1, vres.Status, vres.Pass, outputMetadata(string(jb)))
+				}
 				*ctx.aggregated = append(*ctx.aggregated, deviceValidation{Hostname: ctx.hostname, IP: ctx.ip, Result: vres})
 				ctx.events.emit(lifecycleEvent{Type: "validation.completed", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"status": vres.Status, "pass": vres.Pass}})
 			}
@@ -1276,7 +1276,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			for _, vres := range results {
 				if step.Register != "" && vres.RawExtract != "" {
 					ctx.variables[step.Register] = vres.RawExtract
-					slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "value", vres.RawExtract)
+					slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "metadata", outputMetadata(vres.RawExtract))
 					break
 				}
 			}
@@ -1519,11 +1519,15 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 			ctx.events.emit(lifecycleEvent{
 				Type: "gnmi.triggered", Hostname: ctx.hostname, IP: ctx.ip, Step: name,
 				Data: map[string]interface{}{
-					"event": event.Type, "path": event.Path, "value": event.Value, "initial": event.Initial,
+					"event": event.Type, "path": event.Path, "value_metadata": outputMetadata(valueText), "initial": event.Initial,
 					"metric_value": metricValue, "baseline_value": baselineValue, "threshold_value": thresholdValue,
 				},
 			})
-			writeSessionf(ctx.sessionLog, "[gnmi:%s] event=%s path=%s value=%s metric=%s baseline=%s threshold=%s initial=%t\n", name, event.Type, event.Path, valueText, metricValue, baselineValue, thresholdValue, event.Initial)
+			eventValue := outputMetadata(valueText)
+			if ctx.sessionOutput {
+				eventValue = protectHumanOutput(valueText)
+			}
+			writeSessionf(ctx.sessionLog, "[gnmi:%s] event=%s path=%s value=%s metric=%s baseline=%s threshold=%s initial=%t\n", name, event.Type, event.Path, eventValue, metricValue, baselineValue, thresholdValue, event.Initial)
 			bindings := map[string]string{
 				"gnmi_event": string(eventJSON), "gnmi_event_type": event.Type,
 				"gnmi_event_path": event.Path, "gnmi_event_value": valueText,

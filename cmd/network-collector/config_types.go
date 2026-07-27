@@ -304,12 +304,14 @@ type ScheduleConfig struct {
 }
 
 type OutputConfig struct {
-	Directory   string            `mapstructure:"directory" yaml:"directory"`
-	SaveRaw     bool              `mapstructure:"save_raw" yaml:"save_raw"`
-	SaveParsed  bool              `mapstructure:"save_parsed" yaml:"save_parsed"`
-	SummaryFile string            `mapstructure:"summary_file" yaml:"summary_file"`
-	EventsFile  string            `mapstructure:"events_file" yaml:"events_file"`
-	EventSinks  []EventSinkConfig `mapstructure:"event_sinks" yaml:"event_sinks"`
+	Directory         string            `mapstructure:"directory" yaml:"directory"`
+	SaveRaw           bool              `mapstructure:"save_raw" yaml:"save_raw"`
+	SaveParsed        bool              `mapstructure:"save_parsed" yaml:"save_parsed"`
+	SessionTranscript bool              `mapstructure:"session_transcript" yaml:"session_transcript"`
+	ConsoleOutput     bool              `mapstructure:"console_output" yaml:"console_output"`
+	SummaryFile       string            `mapstructure:"summary_file" yaml:"summary_file"`
+	EventsFile        string            `mapstructure:"events_file" yaml:"events_file"`
+	EventSinks        []EventSinkConfig `mapstructure:"event_sinks" yaml:"event_sinks"`
 }
 
 type EventSinkConfig struct {
@@ -441,6 +443,8 @@ type stepExecutionContext struct {
 	password       string
 	opts           []ssh.Option
 	jsonOut        bool
+	consoleOutput  bool
+	sessionOutput  bool
 	sessionLog     io.Writer
 	failureLog     string
 	variables      map[string]string

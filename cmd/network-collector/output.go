@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -60,8 +62,11 @@ func prepareRunOutput(config OutputConfig, runID string) (string, error) {
 		directory = "artifacts"
 	}
 	runDir := filepath.Join(directory, runID)
-	if err := os.MkdirAll(runDir, 0755); err != nil {
+	if err := os.MkdirAll(runDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+	if err := os.Chmod(runDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to secure output directory: %w", err)
 	}
 	return runDir, nil
 }
@@ -74,7 +79,10 @@ func stepOutputEnabled(global bool, override *bool) bool {
 }
 
 func atomicWriteFile(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".network-collector-*")
@@ -83,6 +91,10 @@ func atomicWriteFile(path string, content []byte) error {
 	}
 	tempName := temp.Name()
 	defer os.Remove(tempName)
+	if err := temp.Chmod(0600); err != nil {
+		_ = temp.Close()
+		return err
+	}
 	if _, err := temp.Write(content); err != nil {
 		_ = temp.Close()
 		return err
@@ -194,8 +206,11 @@ func centerASCII(value string, width int) string {
 }
 
 func openSessionLog(hostname, playbookName string, started time.Time) (*os.File, string, error) {
-	if err := os.MkdirAll("session_logs", 0755); err != nil {
+	if err := os.MkdirAll("session_logs", 0700); err != nil {
 		return nil, "", fmt.Errorf("failed to create session log directory: %w", err)
+	}
+	if err := os.Chmod("session_logs", 0700); err != nil {
+		return nil, "", fmt.Errorf("failed to secure session log directory: %w", err)
 	}
 	if err := ensureFailureLog(failureLogPath()); err != nil {
 		return nil, "", err
@@ -203,7 +218,7 @@ func openSessionLog(hostname, playbookName string, started time.Time) (*os.File,
 
 	filename := fmt.Sprintf("%s_%s.log", sanitizeLogName(hostname), started.Format("20060102_150405"))
 	path := "session_logs/" + filename
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create session log file: %w", err)
 	}
@@ -224,7 +239,7 @@ func ensureFailureLog(path string) error {
 	if strings.TrimSpace(path) == "" {
 		path = failureLogPath()
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create failure log file: %w", err)
 	}
@@ -283,16 +298,19 @@ func appendFailureRecord(path, hostname, ip, stepName, status, message string, r
 		Message:   strings.TrimSpace(message),
 		Timestamp: time.Now(),
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("failed to create failure log directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("failed to secure failure log directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open failure log file: %w", err)
 	}
 	defer file.Close()
 
-	if _, err := file.WriteString(formatFailureRecord(hostname, ip, stepName, overall, results)); err != nil {
+	if _, err := file.WriteString(protectHumanOutput(formatFailureRecord(hostname, ip, stepName, overall, results))); err != nil {
 		return fmt.Errorf("failed to write failure log entry: %w", err)
 	}
 	return nil
@@ -323,6 +341,48 @@ func writeSessionf(writer io.Writer, format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(writer, format, args...)
 }
 
+var sensitiveLogPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(password|passwd|secret|community|token)\b(\s*[:=]\s*)([^\s,;]+)`),
+	regexp.MustCompile(`(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`),
+	regexp.MustCompile(`(?is)<(?:password|secret|community|token)(?:\s[^>]*)?>.*?</(?:password|secret|community|token)>`),
+}
+
+func protectHumanOutput(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || r >= 0x20 && r != 0x7f {
+			return r
+		}
+		return -1
+	}, value)
+	for _, pattern := range sensitiveLogPatterns {
+		value = pattern.ReplaceAllString(value, "$1$2[REDACTED]")
+	}
+	return value
+}
+
+func outputMetadata(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("[output omitted; bytes=%d sha256=%x]", len(value), digest)
+}
+
+func writeProtectedOutput(ctx *stepExecutionContext, header, value string) {
+	if ctx == nil {
+		return
+	}
+	display := outputMetadata(value)
+	if ctx.sessionOutput {
+		display = protectHumanOutput(value)
+	}
+	writeSessionf(ctx.sessionLog, "%s\n%s\n", protectHumanOutput(header), display)
+	if !ctx.jsonOut {
+		console := outputMetadata(value)
+		if ctx.consoleOutput {
+			console = protectHumanOutput(value)
+		}
+		fmt.Printf("%s\n%s\n", protectHumanOutput(header), console)
+	}
+}
+
 func logStepMessage(ctx *stepExecutionContext, stepName, messageTemplate string) error {
 	if strings.TrimSpace(messageTemplate) == "" {
 		return nil
@@ -331,9 +391,9 @@ func logStepMessage(ctx *stepExecutionContext, stepName, messageTemplate string)
 	if err != nil {
 		return err
 	}
-	writeSessionf(ctx.sessionLog, "[step:%s] message: %s\n", stepName, message)
+	writeSessionf(ctx.sessionLog, "[step:%s] message: %s\n", stepName, protectHumanOutput(message))
 	if !ctx.jsonOut {
-		fmt.Printf("device=%s step=%s message=%q\n", ctx.hostname, stepName, message)
+		fmt.Printf("device=%s step=%s message=%q\n", ctx.hostname, stepName, protectHumanOutput(message))
 	}
 	return nil
 }

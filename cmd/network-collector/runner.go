@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -64,9 +63,9 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	if rsaAuth != nil {
 		opts = append(opts, ssh.WithPasswordPattern(rsaPasscodePromptPattern))
 	}
-	channelLog := io.Writer(sessionLog)
-	if !jsonOut && !pretty {
-		channelLog = io.MultiWriter(os.Stdout, sessionLog)
+	channelLog := io.Discard
+	if config.Output.SessionTranscript {
+		channelLog = sessionLog
 	}
 	opts = append(opts, ssh.WithChannelLog(channelLog))
 
@@ -111,7 +110,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	}
 	ctx := stepExecutionContext{
 		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
-		opts: opts, jsonOut: jsonOut, sessionLog: sessionLog, failureLog: failureLogPath(),
+		opts: opts, jsonOut: jsonOut, consoleOutput: config.Output.ConsoleOutput,
+		sessionOutput: config.Output.SessionTranscript, sessionLog: sessionLog, failureLog: failureLogPath(),
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers, workflows: config.Workflows,
 		configBaseDir: config.baseDir,
 		output:        config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
