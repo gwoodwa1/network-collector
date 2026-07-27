@@ -286,6 +286,8 @@ type ReportConfig struct {
 	LogoFolder      string `mapstructure:"logo_folder" yaml:"logo_folder"`
 	HeaderLogo      string `mapstructure:"header_logo" yaml:"header_logo"`
 	FooterLogo      string `mapstructure:"footer_logo" yaml:"footer_logo"`
+	PDFOutput       string `mapstructure:"pdf_output" yaml:"pdf_output"`
+	PDFBrowser      string `mapstructure:"pdf_browser" yaml:"pdf_browser"`
 }
 
 type CredentialProviderConfig struct {

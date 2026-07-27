@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
+	"github.com/gwoodwa1/network-collector/internal/reporting"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
@@ -38,6 +39,8 @@ func main() {
 	var diffBeforeConfigPath, diffAfterConfigPath string
 	var captureRunningConfigEnabled bool
 	var showVersion bool
+	var reportFormat, reportOutput, reportTitle, changeReference string
+	var logoFolder, headerLogo, footerLogo, pdfOutput, pdfBrowser string
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "directory to write one <hostname>.jsonl file per device")
 	flag.StringVar(&parsersFile, "parsers", "", "path to an external parser module file; defaults to this binary's embedded parser definitions")
@@ -45,6 +48,15 @@ func main() {
 	flag.StringVar(&devicesFile, "devices", "", "optional YAML file listing hostname/vrf/interfaces/neighbors per device; credentials are still always prompted interactively")
 	flag.DurationVar(&passcodeReuseWindow, "passcode-reuse-window", 45*time.Second, "how long an entered RSA passcode may be offered for reuse on the next device, matching your ISE cache duration with a safety margin; 0 disables reuse")
 	flag.BoolVar(&captureRunningConfigEnabled, "capture-running-config", false, "also capture \"show running-config\" before and after the change window, as a separate <base>-running-config.txt file per label; off by default since it's a heavier capture")
+	flag.StringVar(&reportFormat, "report-format", "html", "post-run report format: html, pdf, both, or none")
+	flag.StringVar(&reportOutput, "report-output", "interface-traffic.html", "professional HTML report filename")
+	flag.StringVar(&reportTitle, "report-title", "IOS XR Change Monitoring Report", "professional report title")
+	flag.StringVar(&changeReference, "change-reference", "", "change/ticket reference shown in the report")
+	flag.StringVar(&logoFolder, "logo-folder", "", "directory containing optional PNG report branding")
+	flag.StringVar(&headerLogo, "header-logo", "", "PNG filename inside logo-folder (default: header.png when present)")
+	flag.StringVar(&footerLogo, "footer-logo", "", "PNG filename inside logo-folder (default: footer.png when present)")
+	flag.StringVar(&pdfOutput, "pdf-output", "interface-traffic.pdf", "PDF report filename")
+	flag.StringVar(&pdfBrowser, "pdf-browser", "", "Chrome/Chromium executable for PDF output")
 	flag.StringVar(&diffBeforePath, "diff-before", "", "path to a captured *-before.json snapshot; combine with -diff-after to print a route-level diff and exit, instead of connecting to any device")
 	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
 	flag.StringVar(&diffBeforeConfigPath, "diff-before-config", "", "path to a captured *-before-running-config.txt file; combine with -diff-after-config to print a running-config diff and exit, instead of connecting to any device")
@@ -55,7 +67,13 @@ func main() {
 		fmt.Printf("xr-routing-monitor %s\n", version)
 		return
 	}
-
+	reportFormat = strings.ToLower(strings.TrimSpace(reportFormat))
+	switch reportFormat {
+	case "none", "html", "pdf", "both":
+	default:
+		fmt.Fprintln(os.Stderr, "-report-format must be html, pdf, both, or none")
+		os.Exit(1)
+	}
 	snapshotDiffRequested := diffBeforePath != "" || diffAfterPath != ""
 	configDiffRequested := diffBeforeConfigPath != "" || diffAfterConfigPath != ""
 	if snapshotDiffRequested || configDiffRequested {
@@ -83,6 +101,20 @@ func main() {
 			}
 		}
 		return
+	}
+	if reportFormat != "none" {
+		if err := reporting.ValidateBranding(reporting.Config{
+			LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo,
+		}); err != nil {
+			slog.Error("invalid report branding", "error", err)
+			os.Exit(1)
+		}
+	}
+	if reportFormat == "pdf" || reportFormat == "both" {
+		if _, err := reporting.FindPDFBrowser(pdfBrowser); err != nil {
+			slog.Error("PDF reporting is unavailable", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// Tracked so an interval set at the top of a --devices file can be
@@ -256,10 +288,28 @@ func main() {
 		}(session)
 	}
 	wg.Wait()
-	if reportPath, err := monitorreport.GenerateInterfaceReport(outputDir, startedAt); err != nil {
-		slog.Warn("failed to write interface traffic report", "error", err)
-	} else if reportPath != "" {
-		fmt.Fprintf(snapshotOut, "interface traffic report written to %s\n", reportPath)
+	if reportFormat != "none" {
+		reportPath, reportErr := monitorreport.GenerateProfessionalInterfaceReport(outputDir, startedAt, monitorreport.ProfessionalReportConfig{
+			Output: reportOutput, Title: reportTitle, ChangeReference: changeReference,
+			LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo, CompletedAt: time.Now(),
+		})
+		if reportErr != nil {
+			slog.Warn("failed to write professional monitoring report", "error", reportErr)
+		} else if reportPath != "" {
+			fmt.Fprintf(snapshotOut, "professional monitoring report written to %s\n", reportPath)
+			if reportFormat == "pdf" || reportFormat == "both" {
+				target := pdfOutput
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(outputDir, target)
+				}
+				pdfPath, pdfErr := reporting.RenderPDF(reportPath, target, pdfBrowser)
+				if pdfErr != nil {
+					slog.Warn("failed to write PDF monitoring report", "error", pdfErr)
+				} else {
+					fmt.Fprintf(snapshotOut, "PDF monitoring report written to %s\n", pdfPath)
+				}
+			}
+		}
 	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")

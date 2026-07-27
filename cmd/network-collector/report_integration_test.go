@@ -15,6 +15,8 @@ report:
   format: html
   template: professional
   output: change-report.html
+  pdf_output: change-report.pdf
+  pdf_browser: /opt/chrome
   title: Core path change
   change_reference: CHG-42
   logo_folder: branding
@@ -30,6 +32,7 @@ report:
 	}
 	if !config.Report.Enabled || config.Report.Format != "html" ||
 		config.Report.Template != "professional" || config.Report.Output != "change-report.html" ||
+		config.Report.PDFOutput != "change-report.pdf" || config.Report.PDFBrowser != "/opt/chrome" ||
 		config.Report.Title != "Core path change" || config.Report.ChangeReference != "CHG-42" ||
 		config.Report.LogoFolder != "branding" || config.Report.HeaderLogo != "company-header.png" ||
 		config.Report.FooterLogo != "company-footer.png" {

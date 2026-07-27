@@ -87,8 +87,12 @@ func main() {
 	}
 	if config.Report.Enabled {
 		format := strings.ToLower(strings.TrimSpace(config.Report.Format))
-		if format != "" && format != "html" {
-			slog.Error("invalid report configuration", "error", "report.format currently supports only html")
+		if format == "" {
+			format = "html"
+			config.Report.Format = format
+		}
+		if format != "html" && format != "pdf" && format != "both" {
+			slog.Error("invalid report configuration", "error", "report.format must be html, pdf, or both")
 			os.Exit(1)
 		}
 		templateName := strings.ToLower(strings.TrimSpace(config.Report.Template))
@@ -107,6 +111,12 @@ func main() {
 		}); reportErr != nil {
 			slog.Error("invalid report branding", "error", reportErr)
 			os.Exit(1)
+		}
+		if format == "pdf" || format == "both" {
+			if _, reportErr := reporting.FindPDFBrowser(config.Report.PDFBrowser); reportErr != nil {
+				slog.Error("PDF reporting is unavailable", "error", reportErr)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -382,6 +392,23 @@ func main() {
 			slog.Error("error generating change report", "error", reportErr)
 		} else {
 			slog.Info("wrote change report", "path", reportPath)
+			format := strings.ToLower(strings.TrimSpace(config.Report.Format))
+			if format == "pdf" || format == "both" {
+				pdfOutput := strings.TrimSpace(config.Report.PDFOutput)
+				if pdfOutput == "" {
+					pdfOutput = "change-report.pdf"
+				}
+				if !filepath.IsAbs(pdfOutput) {
+					pdfOutput = filepath.Join(runDir, pdfOutput)
+				}
+				pdfPath, pdfErr := reporting.RenderPDF(reportPath, pdfOutput, config.Report.PDFBrowser)
+				if pdfErr != nil {
+					reportFailed = true
+					slog.Error("error generating PDF change report", "error", pdfErr)
+				} else {
+					slog.Info("wrote PDF change report", "path", pdfPath)
+				}
+			}
 		}
 	}
 
