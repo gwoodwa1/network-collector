@@ -1,0 +1,32 @@
+name_playbook: Declarative Nokia SR OS MD-CLI static route
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  route_prefix: 203.0.114.0/24
+  route_next_hop: 192.0.2.10
+  route_vprn: CUSTOMER-A
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: sros-cli-01
+    steps:
+      - name: authorize-sros-static-route
+        approval:
+          message: Install {{route_prefix}} via {{route_next_hop}} in VPRN {{route_vprn}}?
+          timeout_seconds: 300
+
+      - name: ensure-sros-static-route
+        ensure:
+          resource: static_route
+          prefix: "{{route_prefix}}"
+          next_hop: "{{route_next_hop}}"
+          vrf: "{{route_vprn}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+        register: route_plan

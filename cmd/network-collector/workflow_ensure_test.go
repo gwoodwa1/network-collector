@@ -926,6 +926,54 @@ func TestJunosStaticRouteAbsentPlanIsExact(t *testing.T) {
 	}
 }
 
+func TestSROSStaticRouteParsingAndEnsure(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "sros", "static-routes.txt")
+	customerRoute := parseSROSStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 ||
+		customerRoute.NextHops[0] != "192.0.2.10" ||
+		customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected SR OS VPRN route: %+v", customerRoute)
+	}
+	verified := fixture + "\n203.0.114.0/24  1  5 NH Y\n   192.0.2.10 to-core-1\n"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Committed", verified}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "nokia_sros"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != `/show router "CUSTOMER-A" static-route` ||
+		!strings.Contains(executor.commands[1], `/configure service vprn "CUSTOMER-A" static-routes route 203.0.114.0/24 route-type unicast next-hop 192.0.2.10 admin-state enable`) ||
+		!strings.Contains(executor.commands[1], "/commit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("SR OS route did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestSROSStaticRouteAbsentPlanIsExact(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "sros", "static-routes.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "nokia_sros"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `route 203.0.113.0/24 route-type unicast delete next-hop 192.0.2.10`) ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("SR OS route removal plan was not exact: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

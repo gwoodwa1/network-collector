@@ -60,6 +60,7 @@ easier to read.
 | `junos/44-junos-declarative-interface.yaml` | Junos SSH interface desired state with separate admin/link discovery, admin-down precondition, rollback-on-failure, verification, and `--check` |
 | `junos/45-junos-declarative-static-route.yaml` | Junos exact routing-instance/prefix/next-hop desired state with ECMP-safe removal, rollback-on-failure, verification, and `--check` |
 | `sros/46-nokia-sros-declarative-port.yaml` | Nokia SR OS MD-CLI port desired state with Admin/Oper distinction, admin-down precondition, rollback-on-failure, verification, and `--check` |
+| `sros/47-nokia-sros-declarative-static-route.yaml` | Nokia SR OS MD-CLI Base/VPRN exact static-route desired state with ECMP-safe removal, rollback-on-failure, verification, and `--check` |
 
 Run one example from the repository root:
 

@@ -1845,8 +1845,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 46 {
-		t.Fatalf("expected forty-six vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 47 {
+		t.Fatalf("expected forty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1865,8 +1865,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 46 {
-		t.Fatalf("expected forty-six loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 47 {
+		t.Fatalf("expected forty-seven loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1996,6 +1996,13 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		srosDesiredState[1].Ensure.RequireState != "disabled" ||
 		!srosDesiredState[1].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative SR OS port example is incomplete: %+v", srosDesiredState)
+	}
+	srosRouteState := loaded["47-nokia-sros-declarative-static-route.yaml"].SSH[0].Steps
+	if len(srosRouteState) != 2 || srosRouteState[0].Approval == nil ||
+		srosRouteState[1].Ensure == nil || srosRouteState[1].Ensure.Resource != "static_route" ||
+		srosRouteState[1].Ensure.Transport != "ssh" || srosRouteState[1].Ensure.Prefix == "" ||
+		srosRouteState[1].Ensure.NextHop == "" || !srosRouteState[1].Ensure.RollbackOnFailure {
+		t.Fatalf("declarative SR OS static-route example is incomplete: %+v", srosRouteState)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || !hardGate(recovery.Workflows["inspect-interface"].Steps[0]) || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 || !hardGate(recovery.SSH[0].Steps[2].Block.Steps[2]) {

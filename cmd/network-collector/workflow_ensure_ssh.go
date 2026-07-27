@@ -46,9 +46,9 @@ type sshInterfacePlatformAdapter struct {
 }
 
 type sshStaticRoutePlatformAdapter struct {
-	discoveryCommand string
-	parse            func(string, string, string) sshStaticRouteState
-	commands         func(string, string, string, bool) []string
+	discovery func(string, string) string
+	parse     func(string, string, string) sshStaticRouteState
+	commands  func(string, string, string, bool) []string
 }
 
 func executeSSHEnsureStep(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, config EnsureConfig) (string, string, error) {
@@ -471,7 +471,7 @@ func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCo
 		return "", "", err
 	}
 
-	discoveryCommand := adapter.discoveryCommand
+	discoveryCommand := adapter.discovery(prefix, vrf)
 	output, err := executor.Execute(discoveryCommand)
 	if err != nil {
 		return output, "ensure static route " + prefix, fmt.Errorf("discover static route %q over SSH: %w", prefix, err)
@@ -522,40 +522,50 @@ func sshStaticRouteAdapter(platform string) (sshStaticRoutePlatformAdapter, erro
 	switch platform {
 	case "cisco_iosxr":
 		return sshStaticRoutePlatformAdapter{
-			discoveryCommand: "show running-config router static",
-			parse:            parseIOSXRStaticRoutes,
-			commands:         iosXRStaticRouteCommands,
+			discovery: staticRouteDiscovery("show running-config router static"),
+			parse:     parseIOSXRStaticRoutes,
+			commands:  iosXRStaticRouteCommands,
 		}, nil
 	case "arista_eos":
 		return sshStaticRoutePlatformAdapter{
-			discoveryCommand: "show running-config | include ^ip route",
-			parse:            parseEOSStaticRoutes,
-			commands:         eosStaticRouteCommands,
+			discovery: staticRouteDiscovery("show running-config | include ^ip route"),
+			parse:     parseEOSStaticRoutes,
+			commands:  eosStaticRouteCommands,
 		}, nil
 	case "cisco_iosxe":
 		return sshStaticRoutePlatformAdapter{
-			discoveryCommand: "show running-config | include ^ip route",
-			parse:            parseIOSXEStaticRoutes,
-			commands:         iosXEStaticRouteCommands,
+			discovery: staticRouteDiscovery("show running-config | include ^ip route"),
+			parse:     parseIOSXEStaticRoutes,
+			commands:  iosXEStaticRouteCommands,
 		}, nil
 	case "cisco_nxos":
 		return sshStaticRoutePlatformAdapter{
-			discoveryCommand: "show running-config",
-			parse:            parseNXOSStaticRoutes,
-			commands:         nxOSStaticRouteCommands,
+			discovery: staticRouteDiscovery("show running-config"),
+			parse:     parseNXOSStaticRoutes,
+			commands:  nxOSStaticRouteCommands,
 		}, nil
 	case "juniper_junos":
 		return sshStaticRoutePlatformAdapter{
-			discoveryCommand: `show configuration | display set | match "static route"`,
-			parse:            parseJunosStaticRoutes,
-			commands:         junosStaticRouteCommands,
+			discovery: staticRouteDiscovery(`show configuration | display set | match "static route"`),
+			parse:     parseJunosStaticRoutes,
+			commands:  junosStaticRouteCommands,
+		}, nil
+	case "nokia_sros":
+		return sshStaticRoutePlatformAdapter{
+			discovery: srosStaticRouteDiscovery,
+			parse:     parseSROSStaticRoutes,
+			commands:  srosStaticRouteCommands,
 		}, nil
 	default:
 		return sshStaticRoutePlatformAdapter{}, fmt.Errorf(
-			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos",
+			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos, nokia_sros",
 			platform,
 		)
 	}
+}
+
+func staticRouteDiscovery(command string) func(string, string) string {
+	return func(string, string) string { return command }
 }
 
 func desiredRoutePresent(state string) (bool, error) {
@@ -834,6 +844,50 @@ func junosStaticRouteCommands(prefix, nextHop, vrf string, present bool) []strin
 		operation = "delete "
 	}
 	return []string{"configure", operation + hierarchy, "commit and-quit"}
+}
+
+func srosStaticRouteDiscovery(_, vrf string) string {
+	router := "Base"
+	if vrf != "" {
+		router = vrf
+	}
+	return `/show router "` + router + `" static-route`
+}
+
+func parseSROSStaticRoutes(output, wantedPrefix, wantedVRF string) sshStaticRouteState {
+	state := sshStaticRouteState{Prefix: wantedPrefix, VRF: wantedVRF, NextHops: []string{}}
+	currentPrefix := ""
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) == 0 {
+			continue
+		}
+		if _, network, err := net.ParseCIDR(fields[0]); err == nil {
+			currentPrefix = network.String()
+			continue
+		}
+		if currentPrefix != wantedPrefix {
+			continue
+		}
+		nextHop := fields[0]
+		if parsed := net.ParseIP(nextHop); parsed != nil && parsed.To4() != nil &&
+			!containsString(state.NextHops, nextHop) {
+			state.NextHops = append(state.NextHops, nextHop)
+		}
+	}
+	sort.Strings(state.NextHops)
+	return state
+}
+
+func srosStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string {
+	hierarchy := `/configure router "Base" static-routes route ` + prefix + ` route-type unicast`
+	if vrf != "" {
+		hierarchy = `/configure service vprn "` + vrf + `" static-routes route ` + prefix + ` route-type unicast`
+	}
+	if present {
+		return []string{hierarchy + " next-hop " + nextHop + " admin-state enable", "/commit"}
+	}
+	return []string{hierarchy + " delete next-hop " + nextHop, "/commit"}
 }
 
 func routeVRFLabel(vrf string) string {

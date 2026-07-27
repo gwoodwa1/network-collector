@@ -481,8 +481,7 @@ edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
 IOS XR, Arista EOS, Cisco IOS-XE, Cisco NX-OS, Junos, and Nokia SR OS support
-state-aware SSH `ensure` adapters for interfaces. All except SR OS currently
-also support exact static routes:
+state-aware SSH `ensure` adapters for interfaces and exact static routes:
 
 ```yaml
 ssh:
@@ -517,7 +516,9 @@ interface remains idempotent and sends no configuration. IOS XR uses commit
 semantics; EOS and IOS-XE exit configuration mode and save with `write
 memory`; NX-OS uses `copy running-config startup-config`; Junos reads the
 separate Admin and Link columns from `show interfaces terse`, applies `set` or
-`delete` configuration, and uses `commit and-quit`. See
+`delete` configuration, and uses `commit and-quit`; SR OS reads separate Admin
+and Oper fields and applies model-driven `/configure port` commands followed
+by `/commit`. See
 [`38-arista-eos-declarative-interface.yaml`](examples/workflow-operations/arista/38-arista-eos-declarative-interface.yaml)
 and
 [`40-cisco-iosxe-declarative-interface.yaml`](examples/workflow-operations/iosxe/40-cisco-iosxe-declarative-interface.yaml)
@@ -531,20 +532,22 @@ for those platform forms.
 
 The static-route adapters discover native configuration (`router static` on
 IOS XR, global `ip route` statements on EOS/IOS-XE, and global or `vrf
-context` route statements on NX-OS) and treat `vrf`, `prefix`, and `next_hop`
-as the resource identity. `state` is `present` or `absent`; removing one tuple
-preserves other next-hops for intentional ECMP. IPv4 is supported in this
-first adapter release. IOS-XE and NX-OS discovery accept CIDR or
-address/netmask running configuration; IOS-XE renders address/netmask form and
-NX-OS renders CIDR form. NX-OS uses the platform's documented `vrf context`
-configuration and `copy running-config startup-config` persistence. Junos
-uses `routing-options` or routing-instance `set`/`delete` statements and
-`commit and-quit`. See
+context` route statements on NX-OS) or bounded route state (SR OS), and treat
+`vrf`, `prefix`, and `next_hop` as the resource identity. `state` is `present`
+or `absent`; removing one tuple preserves other next-hops for intentional
+ECMP. IPv4 is supported in this first adapter release. IOS-XE and NX-OS
+discovery accept CIDR or address/netmask running configuration; IOS-XE renders
+address/netmask form and NX-OS renders CIDR form. NX-OS uses the platform's
+documented `vrf context` configuration and `copy running-config startup-config`
+persistence. Junos uses `routing-options` or routing-instance `set`/`delete`
+statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
+`static-routes` commands and `/commit`. See
 [`39-arista-eos-declarative-static-route.yaml`](examples/workflow-operations/arista/39-arista-eos-declarative-static-route.yaml),
 [`41-cisco-iosxe-declarative-static-route.yaml`](examples/workflow-operations/iosxe/41-cisco-iosxe-declarative-static-route.yaml),
 [`43-cisco-nxos-declarative-static-route.yaml`](examples/workflow-operations/nxos/43-cisco-nxos-declarative-static-route.yaml),
+[`45-junos-declarative-static-route.yaml`](examples/workflow-operations/junos/45-junos-declarative-static-route.yaml),
 and
-[`45-junos-declarative-static-route.yaml`](examples/workflow-operations/junos/45-junos-declarative-static-route.yaml).
+[`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,
