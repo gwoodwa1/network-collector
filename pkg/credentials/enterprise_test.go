@@ -152,6 +152,29 @@ func TestEnterpriseProviderEnvironmentFallbackAndYAMLPrecedence(t *testing.T) {
 	}
 }
 
+func TestMinimalEnvironmentDoesNotInheritUnrelatedSecrets(t *testing.T) {
+	t.Setenv("PATH", "/approved/bin")
+	t.Setenv("HOME", "/approved/home")
+	t.Setenv("NET_PASSWORD", "must-not-be-inherited")
+	t.Setenv("CI_TOKEN", "must-not-be-inherited")
+	t.Setenv("VAULT_TOKEN", "vault-token")
+
+	got := strings.Join(minimalEnvironment(
+		[]string{"PATH", "HOME", "VAULT_TOKEN"},
+		map[string]string{"VAULT_ADDR": "https://vault.example"},
+	), "\n")
+	for _, expected := range []string{"PATH=/approved/bin", "HOME=/approved/home", "VAULT_TOKEN=vault-token", "VAULT_ADDR=https://vault.example"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %q in minimal environment: %s", expected, got)
+		}
+	}
+	for _, forbidden := range []string{"NET_PASSWORD", "CI_TOKEN", "must-not-be-inherited"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("minimal environment leaked %q: %s", forbidden, got)
+		}
+	}
+}
+
 func TestCyberArkProviderRequiresHTTPSAndCertificatePair(t *testing.T) {
 	base := CyberArkConfig{URL: "http://ccp.example/AIMWebService/api/Accounts", AppID: "app", Safe: "safe"}
 	if _, err := newCyberArkProvider(base, time.Second); err == nil || !strings.Contains(err.Error(), "HTTPS") {
