@@ -1385,6 +1385,7 @@ func newControlTestContext(t *testing.T, log *bytes.Buffer, variables map[string
 		hostname: "router-01", ip: "192.0.2.10", jsonOut: true, sessionLog: log,
 		failureLog: filepath.Join(t.TempDir(), "failures.txt"), variables: variables,
 		aggregated: &aggregated, runFailed: &failed, workflows: map[string]WorkflowConfig{},
+		sshCommand: echoCommandExecutor{},
 	}
 	return ctx, &failed
 }
