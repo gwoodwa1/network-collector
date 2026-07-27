@@ -15,7 +15,8 @@ import (
 
 type testGNMIServer struct {
 	gnmipb.UnimplementedGNMIServer
-	t *testing.T
+	t             *testing.T
+	responseValue string
 }
 
 func (s *testGNMIServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
@@ -36,7 +37,11 @@ func (s *testGNMIServer) Get(_ context.Context, request *gnmipb.GetRequest) (*gn
 	if len(request.Path) != 1 {
 		s.t.Errorf("unexpected paths: %+v", request.Path)
 	}
-	return &gnmipb.GetResponse{Notification: []*gnmipb.Notification{{Timestamp: 1, Update: []*gnmipb.Update{{Path: request.Path[0], Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "interface-up"}}}}}}}, nil
+	value := s.responseValue
+	if value == "" {
+		value = "interface-up"
+	}
+	return &gnmipb.GetResponse{Notification: []*gnmipb.Notification{{Timestamp: 1, Update: []*gnmipb.Update{{Path: request.Path[0], Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: value}}}}}}}, nil
 }
 
 func TestConnectExecuteCloseAgainstLocalServer(t *testing.T) {
@@ -103,6 +108,29 @@ func TestValidationErrors(t *testing.T) {
 		if _, err := client.Subscribe(context.Background(), config); err == nil {
 			t.Fatalf("oversized subscription budget accepted: %+v", config)
 		}
+	}
+}
+
+func TestGetRejectsResponseAtGRPCReceiveBoundary(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	gnmipb.RegisterGNMIServer(server, &testGNMIServer{
+		t:             t,
+		responseValue: strings.Repeat("x", MaxSubscriptionResponseBytes+1),
+	})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := &GNMIClient{}
+	if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Execute("/interfaces"); err == nil || !strings.Contains(err.Error(), "larger than max") {
+		t.Fatalf("oversized gRPC response was not rejected at receive boundary: %v", err)
 	}
 }
 

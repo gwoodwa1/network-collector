@@ -16,6 +16,7 @@ import (
 	"github.com/openconfig/gnmic/pkg/api/target"
 	"github.com/openconfig/gnmic/pkg/api/types"
 	"github.com/openconfig/gnmic/pkg/formatters"
+	"google.golang.org/grpc"
 )
 
 type Subscription struct {
@@ -153,7 +154,10 @@ func (g *GNMIClient) Connect(address, username, password string, opts ...Option)
 	defer cancel()
 
 	gnmiTarget := target.NewTarget(tc)
-	if err := gnmiTarget.CreateGNMIClient(ctx); err != nil {
+	if err := gnmiTarget.CreateGNMIClient(
+		ctx,
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxSubscriptionResponseBytes)),
+	); err != nil {
 		return fmt.Errorf("failed to create gNMI client: %w", err)
 	}
 
