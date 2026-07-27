@@ -62,3 +62,24 @@ func TestOpenFileRejectsSymlink(t *testing.T) {
 		t.Fatal("symlink artifact was accepted")
 	}
 }
+
+func TestRejectsSymlinkDirectoryComponent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges")
+	}
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(dir, "linked")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenFile(filepath.Join(linkDir, "artifact"), os.O_CREATE|os.O_WRONLY); err == nil {
+		t.Fatal("symlink directory component was accepted for a file")
+	}
+	if err := EnsureDir(filepath.Join(linkDir, "nested")); err == nil {
+		t.Fatal("symlink directory component was accepted for a directory")
+	}
+}
