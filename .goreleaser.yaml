@@ -59,6 +59,7 @@ archives:
       - inventory.yaml
       - parsers.yaml
       - parser_templates/**/*
+      - sbom.cdx.json
       - examples/modular/*
       - examples/credentials.example.yaml
       - examples/workflow-operations/**/*

@@ -404,7 +404,7 @@ func writeSessionf(writer io.Writer, format string, args ...interface{}) {
 }
 
 var sensitiveLogPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(password|passwd|secret|community|token)\b(\s*[:=]\s*)([^\s,;]+)`),
+	regexp.MustCompile(`(?i)\b(password|passwd|secret|community|token)\b(\s+(?:[0579]\s+)?|\s*[:=]\s*)([^\s,;]+)`),
 	regexp.MustCompile(`(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`),
 	regexp.MustCompile(`(?is)<(?:password|secret|community|token)(?:\s[^>]*)?>.*?</(?:password|secret|community|token)>`),
 }
