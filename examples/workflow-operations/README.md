@@ -58,6 +58,7 @@ easier to read.
 | `nxos/42-cisco-nxos-declarative-interface.yaml` | Cisco NX-OS SSH interface desired state with admin-down precondition, rollback-on-failure, verification, and `--check` |
 | `nxos/43-cisco-nxos-declarative-static-route.yaml` | Cisco NX-OS exact VRF/prefix/next-hop desired state with ECMP preservation, rollback-on-failure, verification, and `--check` |
 | `junos/44-junos-declarative-interface.yaml` | Junos SSH interface desired state with separate admin/link discovery, admin-down precondition, rollback-on-failure, verification, and `--check` |
+| `junos/45-junos-declarative-static-route.yaml` | Junos exact routing-instance/prefix/next-hop desired state with ECMP-safe removal, rollback-on-failure, verification, and `--check` |
 
 Run one example from the repository root:
 

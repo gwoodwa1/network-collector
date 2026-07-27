@@ -495,9 +495,15 @@ func sshStaticRouteAdapter(platform string) (sshStaticRoutePlatformAdapter, erro
 			parse:            parseNXOSStaticRoutes,
 			commands:         nxOSStaticRouteCommands,
 		}, nil
+	case "juniper_junos":
+		return sshStaticRoutePlatformAdapter{
+			discoveryCommand: `show configuration | display set | match "static route"`,
+			parse:            parseJunosStaticRoutes,
+			commands:         junosStaticRouteCommands,
+		}, nil
 	default:
 		return sshStaticRoutePlatformAdapter{}, fmt.Errorf(
-			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos",
+			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos",
 			platform,
 		)
 	}
@@ -740,6 +746,45 @@ func nxOSStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string
 		commands = append(commands, route)
 	}
 	return append(commands, "end", "copy running-config startup-config")
+}
+
+func parseJunosStaticRoutes(output, wantedPrefix, wantedVRF string) sshStaticRouteState {
+	state := sshStaticRouteState{Prefix: wantedPrefix, VRF: wantedVRF, NextHops: []string{}}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimSpace(raw))
+		prefixIndex := -1
+		routeVRF := ""
+		if len(fields) >= 7 && fields[0] == "set" && fields[1] == "routing-options" &&
+			fields[2] == "static" && fields[3] == "route" {
+			prefixIndex = 4
+		} else if len(fields) >= 9 && fields[0] == "set" && fields[1] == "routing-instances" &&
+			fields[3] == "routing-options" && fields[4] == "static" && fields[5] == "route" {
+			routeVRF = fields[2]
+			prefixIndex = 6
+		}
+		if prefixIndex < 0 || routeVRF != wantedVRF || fields[prefixIndex] != wantedPrefix ||
+			prefixIndex+2 >= len(fields) || fields[prefixIndex+1] != "next-hop" {
+			continue
+		}
+		nextHop := fields[prefixIndex+2]
+		if net.ParseIP(nextHop) != nil && !containsString(state.NextHops, nextHop) {
+			state.NextHops = append(state.NextHops, nextHop)
+		}
+	}
+	sort.Strings(state.NextHops)
+	return state
+}
+
+func junosStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string {
+	hierarchy := "routing-options static route " + prefix + " next-hop " + nextHop
+	if vrf != "" {
+		hierarchy = "routing-instances " + vrf + " " + hierarchy
+	}
+	operation := "set "
+	if !present {
+		operation = "delete "
+	}
+	return []string{"configure", operation + hierarchy, "commit and-quit"}
 }
 
 func routeVRFLabel(vrf string) string {

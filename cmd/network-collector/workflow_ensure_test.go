@@ -842,6 +842,53 @@ func TestNXOSStaticRouteAbsentPlanIsExact(t *testing.T) {
 	}
 }
 
+func TestJunosStaticRouteParsingAndEnsure(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "junos", "static-routes.txt")
+	customerRoute := parseJunosStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 ||
+		customerRoute.NextHops[0] != "192.0.2.10" ||
+		customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected Junos VRF route: %+v", customerRoute)
+	}
+	verified := fixture + "set routing-instances CUSTOMER-A routing-options static route 203.0.114.0/24 next-hop 192.0.2.10\n"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "commit complete", verified}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "set routing-instances CUSTOMER-A routing-options static route 203.0.114.0/24 next-hop 192.0.2.10") ||
+		!strings.Contains(executor.commands[1], "commit and-quit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("Junos route did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestJunosStaticRouteAbsentPlanIsExact(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "junos", "static-routes.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, "delete routing-instances CUSTOMER-A routing-options static route 203.0.113.0/24 next-hop 192.0.2.10") ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("Junos route removal plan was not exact: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
