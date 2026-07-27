@@ -174,12 +174,20 @@ func isPrivateDestination(ip net.IP) bool {
 
 func secureWebhookDialer(allowPrivate bool) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return secureWebhookDialerWith(allowPrivate, net.DefaultResolver.LookupIPAddr, dialer.DialContext)
+}
+
+func secureWebhookDialerWith(
+	allowPrivate bool,
+	lookup func(context.Context, string) ([]net.IPAddr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
 		}
-		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		addresses, err := lookup(ctx, host)
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +199,22 @@ func secureWebhookDialer(allowPrivate bool) func(context.Context, string, string
 		if len(addresses) == 0 {
 			return nil, fmt.Errorf("webhook host %q resolved to no addresses", host)
 		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(addresses[0].IP.String(), port))
+		selected := addresses[0].IP
+		conn, err := dial(ctx, network, net.JoinHostPort(selected.String(), port))
+		if err != nil {
+			return nil, err
+		}
+		remoteHost, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+		remoteIP := net.ParseIP(strings.Trim(remoteHost, "[]"))
+		if err != nil || remoteIP == nil || !remoteIP.Equal(selected) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("webhook connected peer %q does not match verified address %s", conn.RemoteAddr(), selected)
+		}
+		if !allowPrivate && isPrivateDestination(remoteIP) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("webhook connected to private or local address %s", remoteIP)
+		}
+		return conn, nil
 	}
 }
 
