@@ -200,7 +200,7 @@ func main() {
 			}
 		}
 		provider, providerErr := credentials.NewProvider(credentials.ProviderConfig{
-			Type: providerType, File: credentialFile, Command: config.Credentials.Command,
+			Type: providerType, File: credentialFile,
 			TimeoutSeconds: config.Credentials.TimeoutSeconds,
 			Hashicorp:      hashicorpConfig, OnePassword: config.Credentials.OnePassword,
 			CyberArk: cyberArkConfig,

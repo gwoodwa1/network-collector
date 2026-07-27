@@ -2,11 +2,9 @@ package credentials
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -23,7 +21,6 @@ type Provider interface {
 }
 type ProviderConfig struct {
 	Type, File     string
-	Command        []string
 	TimeoutSeconds int
 	Hashicorp      HashicorpConfig
 	OnePassword    OnePasswordConfig
@@ -39,7 +36,7 @@ type HashicorpConfig struct {
 	CAFile        string `mapstructure:"ca_file" yaml:"ca_file"`
 	CertFile      string `mapstructure:"cert_file" yaml:"cert_file"`
 	KeyFile       string `mapstructure:"key_file" yaml:"key_file"`
-	Binary        string `mapstructure:"binary" yaml:"binary"`
+	RemovedBinary interface{} `mapstructure:"binary" yaml:"binary"`
 }
 type OnePasswordConfig struct {
 	Account       string `mapstructure:"account" yaml:"account"`
@@ -47,7 +44,7 @@ type OnePasswordConfig struct {
 	ItemPrefix    string `mapstructure:"item_prefix" yaml:"item_prefix"`
 	UsernameField string `mapstructure:"username_field" yaml:"username_field"`
 	PasswordField string `mapstructure:"password_field" yaml:"password_field"`
-	Binary        string `mapstructure:"binary" yaml:"binary"`
+	RemovedBinary interface{} `mapstructure:"binary" yaml:"binary"`
 }
 type CyberArkConfig struct {
 	URL          string `mapstructure:"url" yaml:"url"`
@@ -73,17 +70,7 @@ func NewProvider(config ProviderConfig, input io.Reader, output io.Writer) (Prov
 	case "file":
 		return NewFileProvider(config.File)
 	case "command", "exec":
-		if len(config.Command) == 0 || strings.TrimSpace(config.Command[0]) == "" {
-			return nil, fmt.Errorf("credential command cannot be empty")
-		}
-		timeout := 30 * time.Second
-		if config.TimeoutSeconds != 0 {
-			if config.TimeoutSeconds < 1 || config.TimeoutSeconds > 300 {
-				return nil, fmt.Errorf("credential command timeout_seconds must be between 1 and 300")
-			}
-			timeout = time.Duration(config.TimeoutSeconds) * time.Second
-		}
-		return CommandProvider{Command: append([]string(nil), config.Command...), Timeout: timeout}, nil
+		return nil, fmt.Errorf("credential command provider is unsupported: workbook-controlled process execution has been removed")
 	case "hashicorp", "vault", "hashicorp-vault":
 		return newHashicorpProvider(config.Hashicorp, providerTimeout(config.TimeoutSeconds))
 	case "1password", "onepassword", "op":
@@ -164,31 +151,6 @@ func (p *FileProvider) Resolve(_ context.Context, target Target) (Credentials, e
 		if !ok {
 			return Credentials{}, fmt.Errorf("credential profile %q not found for %s", profile, target.Hostname)
 		}
-	}
-	return validate(c, target)
-}
-
-type CommandProvider struct {
-	Command []string
-	Timeout time.Duration
-}
-
-func (p CommandProvider) Resolve(ctx context.Context, target Target) (Credentials, error) {
-	timeout := p.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, p.Command[0], p.Command[1:]...)
-	cmd.Env = append(os.Environ(), "NET_TARGET_HOSTNAME="+target.Hostname, "NET_TARGET_IP="+target.IP, "NET_CREDENTIAL_PROFILE="+target.Profile)
-	output, err := cmd.Output()
-	if err != nil {
-		return Credentials{}, fmt.Errorf("credential command failed: %w", err)
-	}
-	var c Credentials
-	if err := json.Unmarshal(output, &c); err != nil {
-		return Credentials{}, fmt.Errorf("credential command returned invalid JSON: %w", err)
 	}
 	return validate(c, target)
 }

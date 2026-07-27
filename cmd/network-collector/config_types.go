@@ -284,7 +284,7 @@ type ReportConfig struct {
 type CredentialProviderConfig struct {
 	Provider       string                        `mapstructure:"provider" yaml:"provider"`
 	File           string                        `mapstructure:"file" yaml:"file"`
-	Command        []string                      `mapstructure:"command" yaml:"command"`
+	RemovedCommand interface{}                   `mapstructure:"command" yaml:"command"`
 	TimeoutSeconds int                           `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
 	RSAToken       bool                          `mapstructure:"rsa_token" yaml:"rsa_token"`
 	Hashicorp      credentials.HashicorpConfig   `mapstructure:"hashicorp" yaml:"hashicorp"`

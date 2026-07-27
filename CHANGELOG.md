@@ -4,6 +4,10 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Removed workbook-controlled local process execution. Step-level `local` and
+  top-level `local_steps` now fail configuration loading, including nested
+  workflow and gNMI-trigger actions; required processing remains in registered
+  Go implementations.
 - Added an audited, embedded `compact` HTML report template for shorter
   operational summaries while retaining `professional` as the default.
 - Report template selection now fails closed to the two compiled-in templates;

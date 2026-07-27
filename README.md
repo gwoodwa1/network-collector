@@ -145,7 +145,8 @@ docker run --rm \
   network-collector:local --fail-on-fail
 ```
 
-The container uses `/workspace` as its working directory. Local workflow steps can execute only programs installed in the image; build a derived runtime image when additional local tools are required.
+The container uses `/workspace` as its working directory. Workbooks cannot
+execute programs on the collector host.
 
 ## Package usage
 
@@ -235,7 +236,7 @@ Example: preview a workbook without applying changes
 ./network-collector --config change.yaml --check
 ```
 
-Check mode never sends generic SSH commands, local commands, gNMI subscriptions,
+Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
 operations. A supported SSH `ensure` adapter may run only its predefined
 read-only discovery command and emits exact apply and rollback command lists;
@@ -854,7 +855,7 @@ schedule:
   interval_seconds: 900
 ```
 
-`count` defaults to one and is limited to 1000. Multiple occurrences require an interval of at least one second. The first starts immediately; registered per-device variables persist between occurrences, artifacts are uniquely prefixed, and `local_steps` run once after the schedule. A stopped occurrence ends the schedule. Continue using cron, systemd, CI, or Kubernetes CronJobs for indefinite calendar scheduling.
+`count` defaults to one and is limited to 1000. Multiple occurrences require an interval of at least one second. The first starts immediately, registered per-device variables persist between occurrences, and artifacts are uniquely prefixed. A stopped occurrence ends the schedule. Continue using cron, systemd, CI, or Kubernetes CronJobs for indefinite calendar scheduling.
 
 For the example above, the canary runs first. If it succeeds, another device may start immediately when the canary took longer than two minutes; subsequent starts remain two minutes apart, with no more than three active devices. A failed canary stops the main stage regardless of `failure_threshold`.
 
@@ -1051,11 +1052,11 @@ ssh:
 
 The bundled SSH facts registry covers IOS-XR (`system`, `platform`, `interfaces`, `lldp`, `bgp`, `isis`, and `ldp`) plus Arista EOS and Juniper Junos (`system`, `platform`, `interfaces`, `lldp`, and `bgp`). Unsupported subsets can still use OpenConfig NETCONF; SSH fallback deliberately requires a tested command and parser mapping rather than guessing CLI syntax.
 
-`facts` steps currently register and store their collected JSON through a dedicated execution path. They do not currently apply `enrich` or step validation, so do not attach `enrich` to a `facts` step. To derive a summary today, enrich JSON from a command/parser step or a local JSON-producing step. A future facts integration should apply enrichment before registration, drift checks, and parsed artifact storage, matching normal structured steps.
+`facts` steps currently register and store their collected JSON through a dedicated execution path. They do not currently apply `enrich` or step validation, so do not attach `enrich` to a `facts` step. To derive a summary today, enrich JSON from a command/parser step. A future facts integration should apply enrichment before registration, drift checks, and parsed artifact storage, matching normal structured steps.
 
 ### Structured drift detection
 
-Attach `drift` to a command or local step that produces JSON directly or through a parser:
+Attach `drift` to a device command that produces JSON directly or through a parser:
 
 ```yaml
 - name: platform-drift
@@ -1445,7 +1446,7 @@ Add `triggers` to react immediately to individual updates or deletes while the s
 
 Trigger `event` is `update` (the default) or `delete`. Match an exact canonical path with `path`, or use `path_regex`; updates may also match an exact `value` or `value_regex`. Initial values sent before the first gNMI sync response are ignored by default, preventing an already-UP interface from looking like a new transition. Set `include_initial: true` when the initial state should trigger, and `once: true` when a rule should run only on its first match.
 
-Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, local commands, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
+Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, registered Go functionality, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
 
 For numeric telemetry such as CPU, add `condition` and `threshold`. Supported conditions are `gt`, `gte`, `lt`, `lte`, `eq`, and `neq`:
 
@@ -1801,10 +1802,10 @@ blank or whitespace-only strings, empty lists/maps, and empty values nested
 inside lists or maps are rejected with their variable path. Boolean `false`
 and numeric `0` are valid because they are explicit values.
 
-Before credentials are resolved or any device/local step starts, a per-device
+Before credentials are resolved or any device step starts, a per-device
 variable preflight walks the complete workflow. It rejects undefined or empty
-references in commands, messages, validations, approvals, local commands,
-NETCONF operations, declarative ensure resources, drift paths, workflow
+references in commands, messages, validations, approvals, NETCONF operations,
+declarative ensure resources, drift paths, workflow
 arguments, loops, blocks, parallel branches, and gNMI trigger actions. The
 check uses the effective variables for each host, including its inventory
 overrides, and understands variables introduced by earlier `register` steps,
@@ -1816,70 +1817,19 @@ prove that the producer exists before the reference, but cannot know whether
 the device will return empty output. Normal execution and validation remain
 responsible for the content of those dynamic values.
 
-### Running local tools
+### Local execution is intentionally unsupported
 
-A step can run an installed local CLI with `local`. Commands are executed directly as an argument list, without a shell. This avoids shell expansion and quoting surprises. Local commands default to a 30-second timeout, and their output can be registered, parsed, validated, and saved like SSH command output.
+Workbooks cannot execute host programs. Both step-level `local` and top-level
+`local_steps` are rejected while loading configuration, including when nested
+inside workflows, blocks, loops, parallel branches, validation actions, or
+gNMI triggers. The collector does not invoke `sh`, `python`, `jq`, `curl`, or
+another executable on behalf of YAML.
 
-This example captures Junos routing XML before and after a change, materializes both registered values as temporary files, and passes those files to [route-compare](https://github.com/gwoodwa1/route-compare):
-
-```yaml
-ssh:
-  - host: junos-router-01
-    steps:
-      - name: routes-before
-        cmd: show route | display xml
-        register: routes_before
-
-      # Perform and validate the network change here.
-
-      - name: routes-after
-        cmd: show route | display xml
-        register: routes_after
-
-      - name: compare-routes
-        local:
-          command: routecompare
-          args:
-            - -pre
-            - "{{pre_file}}"
-            - -post
-            - "{{post_file}}"
-            - -vrf
-            - ALL
-          inputs:
-            pre_file: "{{routes_before}}"
-            post_file: "{{routes_after}}"
-          timeout_seconds: 60
-        register: route_comparison
-        output:
-          save_raw: true
-```
-
-Each `inputs` key becomes a template variable containing the path to a private temporary file. Its value is the file content. Temporary inputs are removed when the program exits. The executable must already be installed and discoverable through `PATH`, or `command` must contain its path. A missing executable, timeout, or non-zero exit marks the device run as failed. Shell operators such as pipes and redirects are intentionally unsupported; call a script explicitly when orchestration is needed.
-
-For commands that should run once after every device workflow has completed, use the top-level `local_steps` phase:
-
-```yaml
-local_steps:
-  - name: summarize-results
-    local:
-      command: jq
-      args:
-        - .
-        - "{{results_file}}"
-      inputs:
-        results_file: '{"status":"complete"}'
-      timeout_seconds: 10
-    register: summary
-    validation:
-      extractor: gjson
-      json_path: status
-      condition: eq
-      expected: complete
-      expected_type: string
-```
-
-Top-level local steps execute sequentially and share registered variables with later top-level local steps. They run once per playbook, even when the playbook contains many devices, and also work in local-only playbooks without SSH credentials. Per-device registered variables are deliberately not merged into this phase because concurrent devices may use the same variable names; pass data through saved artifacts or a purpose-built local command instead. Top-level entries support `local`, `register`, `parser`, `validation`/`validations`, `retry`, and `output`.
+Required transformations should use the existing parsers, validation,
+enrichment, drift, facts, ensure, NETCONF, or other registered Go
+implementations. A new external-tool mechanism should be introduced only for
+a concrete requirement and would need an administrator-controlled,
+versioned allowlist rather than workbook-supplied executable names.
 
 ### Validation semantics
 

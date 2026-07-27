@@ -408,6 +408,10 @@ func loadConfig(configFile string) (Config, bool, error) {
 }
 
 func rejectRemovedLocalExecution(config Config) error {
+	provider := strings.ToLower(strings.TrimSpace(config.Credentials.Provider))
+	if config.Credentials.RemovedCommand != nil || provider == "command" || provider == "exec" {
+		return fmt.Errorf("credentials.command is unsupported: workbook-controlled process execution has been removed")
+	}
 	if config.RemovedLocalSteps != nil {
 		return fmt.Errorf("local_steps is unsupported: arbitrary local execution has been removed; use a Go-native processor")
 	}

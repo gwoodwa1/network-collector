@@ -733,7 +733,7 @@ schedule:
 
 - Omitted or zero `count` means one occurrence; the maximum is 1000.
 - Multiple occurrences require an interval of at least one second.
-- Per-device variables persist, artifacts are occurrence-prefixed, and `local_steps` run once afterward.
+- Per-device variables persist and artifacts are occurrence-prefixed.
 - Use an external scheduler for indefinite or calendar-based operation.
 
 ## Bounded Repeat

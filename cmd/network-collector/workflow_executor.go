@@ -698,9 +698,9 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 			}
 			branchCtx.netconf = branchNETCONF
 			var client *ssh.Client
-			needsSSH := stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{})
+			needsSSH := ctx.sshCommand == nil && stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{})
 			if ctx.checkMode {
-				needsSSH = stepsNeedSSHInCheck([]StepConfig{branch}, ctx.workflows, map[string]bool{})
+				needsSSH = ctx.sshCommand == nil && stepsNeedSSHInCheck([]StepConfig{branch}, ctx.workflows, map[string]bool{})
 			}
 			if needsSSH {
 				client = ssh.NewClient(ctx.opts...)

@@ -30,7 +30,9 @@ func newHashicorpProvider(config HashicorpConfig, timeout time.Duration) (*Hashi
 	config.CAFile = configuredValue(config.CAFile, "VAULT_CACERT")
 	config.CertFile = configuredValue(config.CertFile, "VAULT_CLIENT_CERT")
 	config.KeyFile = configuredValue(config.KeyFile, "VAULT_CLIENT_KEY")
-	config.Binary = defaultValue(config.Binary, "vault")
+	if config.RemovedBinary != nil {
+		return nil, fmt.Errorf("hashicorp.binary is unsupported: executable selection is fixed to the approved vault CLI")
+	}
 	if config.Mount == "" {
 		return nil, fmt.Errorf("hashicorp.mount or VAULT_KV_MOUNT is required")
 	}
@@ -58,7 +60,7 @@ func (provider *HashicorpProvider) Resolve(ctx context.Context, target Target) (
 	defer cancel()
 	secretPath := cleanSecretPath(provider.Config.PathPrefix, selector)
 	command := exec.CommandContext(
-		ctx, provider.Config.Binary, "kv", "get", "-format=json",
+		ctx, "vault", "kv", "get", "-format=json",
 		"-mount="+provider.Config.Mount, secretPath,
 	)
 	command.Env = environmentWith(os.Environ(), map[string]string{
@@ -99,7 +101,9 @@ func newOnePasswordProvider(config OnePasswordConfig, timeout time.Duration) (*O
 	config.ItemPrefix = configuredValue(config.ItemPrefix, "OP_ITEM_PREFIX")
 	config.UsernameField = defaultValue(config.UsernameField, "username")
 	config.PasswordField = defaultValue(config.PasswordField, "password")
-	config.Binary = defaultValue(config.Binary, "op")
+	if config.RemovedBinary != nil {
+		return nil, fmt.Errorf("onepassword.binary is unsupported: executable selection is fixed to the approved op CLI")
+	}
 	if config.Vault == "" {
 		return nil, fmt.Errorf("onepassword.vault or OP_VAULT is required")
 	}
@@ -116,7 +120,7 @@ func (provider *OnePasswordProvider) Resolve(ctx context.Context, target Target)
 	item := provider.Config.ItemPrefix + selector
 	read := func(field string) (string, error) {
 		reference := fmt.Sprintf("op://%s/%s/%s", provider.Config.Vault, item, field)
-		command := exec.CommandContext(ctx, provider.Config.Binary, "read", reference)
+		command := exec.CommandContext(ctx, "op", "read", reference)
 		command.Env = environmentWith(os.Environ(), map[string]string{"OP_ACCOUNT": provider.Config.Account})
 		output, commandErr := command.Output()
 		if commandErr != nil {

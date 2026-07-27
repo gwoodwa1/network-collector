@@ -1979,7 +1979,7 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("expected fifty-eight loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
-	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
+	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[3].Foreach == nil || conditions[4].Repeat == nil {
 		t.Fatalf("conditions example is missing workflow operations: %+v", conditions)
 	}
 	gnmiEvents := loaded["27-gnmi-event-actions.yaml"].SSH[0].Steps[0].GNMISubscribe
