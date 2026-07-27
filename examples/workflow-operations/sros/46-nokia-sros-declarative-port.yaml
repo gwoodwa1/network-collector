@@ -1,0 +1,31 @@
+name_playbook: Declarative Nokia SR OS MD-CLI port
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  port_id: 1/1/c1/1
+  port_description: Example declarative customer handoff
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: sros-cli-01
+    steps:
+      - name: authorize-sros-port
+        approval:
+          message: Enable {{port_id}} with description "{{port_description}}"?
+          timeout_seconds: 300
+
+      - name: ensure-sros-port
+        ensure:
+          resource: interface
+          name: "{{port_id}}"
+          state: enabled
+          require_state: disabled
+          description: "{{port_description}}"
+          transport: ssh
+          rollback_on_failure: true
+        register: port_plan

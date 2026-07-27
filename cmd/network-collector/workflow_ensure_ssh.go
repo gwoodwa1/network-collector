@@ -91,8 +91,10 @@ func normalizeSSHEnsurePlatform(platform string) (string, error) {
 		return "cisco_nxos", nil
 	case "juniper_junos", "junos", "juniper":
 		return "juniper_junos", nil
+	case "nokia_sros", "sros", "sr-os", "nokia":
+		return "nokia_sros", nil
 	default:
-		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos", platform)
+		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos, nokia_sros", platform)
 	}
 }
 
@@ -214,6 +216,8 @@ func sshInterfaceAdapter(platform string) (sshInterfacePlatformAdapter, error) {
 		return sshInterfacePlatformAdapter{discovery: standardInterfaceDiscovery, parse: parseNXOSInterfaceState, commands: nxOSInterfaceCommands}, nil
 	case "juniper_junos":
 		return sshInterfacePlatformAdapter{discovery: junosInterfaceDiscovery, parse: parseJunosInterfaceState, commands: junosInterfaceCommands}, nil
+	case "nokia_sros":
+		return sshInterfacePlatformAdapter{discovery: srosInterfaceDiscovery, parse: parseSROSInterfaceState, commands: srosInterfaceCommands}, nil
 	default:
 		return sshInterfacePlatformAdapter{}, fmt.Errorf("SSH interface ensure is not supported for platform %q", platform)
 	}
@@ -225,6 +229,10 @@ func standardInterfaceDiscovery(name string) string {
 
 func junosInterfaceDiscovery(name string) string {
 	return "show interfaces " + name + " terse\nshow configuration interfaces " + name + " | display set"
+}
+
+func srosInterfaceDiscovery(name string) string {
+	return "/show port " + name + " detail"
 }
 
 func parseIOSXRInterfaceState(output, name string) (sshInterfaceState, error) {
@@ -269,6 +277,30 @@ func parseJunosInterfaceState(output, name string) (sshInterfaceState, error) {
 	}
 	if !state.Exists || state.Enabled == nil {
 		return sshInterfaceState{}, fmt.Errorf("interface %q was not found in Junos show output", name)
+	}
+	return state, nil
+}
+
+func parseSROSInterfaceState(output, name string) (sshInterfaceState, error) {
+	portPattern := regexp.MustCompile(`(?mi)^\s*Port ID\s*:\s*` + regexp.QuoteMeta(name) + `\s*$`)
+	if !portPattern.MatchString(output) {
+		return sshInterfaceState{}, fmt.Errorf("port %q was not found in SR OS show output", name)
+	}
+	adminPattern := regexp.MustCompile(`(?mi)^\s*Admin(?:istrative)? State\s*:\s*(up|down|enable|disable|enabled|disabled)\s*$`)
+	admin := adminPattern.FindStringSubmatch(output)
+	if len(admin) != 2 {
+		return sshInterfaceState{}, fmt.Errorf("port %q administrative state was not found in SR OS show output", name)
+	}
+	enabled := strings.EqualFold(admin[1], "up") ||
+		strings.EqualFold(admin[1], "enable") ||
+		strings.EqualFold(admin[1], "enabled")
+	state := sshInterfaceState{Exists: true, Enabled: &enabled}
+	descriptionPattern := regexp.MustCompile(`(?mi)^\s*Description\s*:\s*(.*?)\s*$`)
+	if match := descriptionPattern.FindStringSubmatch(output); len(match) == 2 {
+		description := strings.TrimSpace(match[1])
+		if description != "" && description != "(Not Specified)" {
+			state.Description = &description
+		}
 	}
 	return state, nil
 }
@@ -379,6 +411,23 @@ func junosInterfaceCommands(name string, enabled bool, description *string) []st
 		commands = append(commands, "set interfaces "+name+" disable")
 	}
 	return append(commands, "commit and-quit")
+}
+
+func srosInterfaceCommands(name string, enabled bool, description *string) []string {
+	commands := []string{}
+	if description != nil {
+		if *description == "" {
+			commands = append(commands, "/configure port "+name+" delete description")
+		} else {
+			commands = append(commands, "/configure port "+name+" description "+strconv.Quote(*description))
+		}
+	}
+	adminState := "disable"
+	if enabled {
+		adminState = "enable"
+	}
+	commands = append(commands, "/configure port "+name+" admin-state "+adminState)
+	return append(commands, "/commit")
 }
 
 func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {

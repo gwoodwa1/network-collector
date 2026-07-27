@@ -558,6 +558,43 @@ func TestJunosInterfaceFixturesAndEnsure(t *testing.T) {
 	}
 }
 
+func TestSROSInterfaceFixturesAndEnsure(t *testing.T) {
+	disabled := readPlatformEnsureFixture(t, "sros", "interface-administratively-down.txt")
+	state, err := parseSROSInterfaceState(disabled, "1/1/c1/1")
+	if err != nil || state.Enabled == nil || *state.Enabled || state.Description == nil ||
+		*state.Description != "Example customer handoff" {
+		t.Fatalf("unexpected SR OS disabled state: state=%+v error=%v", state, err)
+	}
+	enabledFixture := strings.Replace(disabled, "Example customer handoff", "new customer handoff", 1)
+	enabledFixture = strings.Replace(enabledFixture, "Admin State                    : down", "Admin State                    : up", 1)
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{disabled, "MINOR: CLI #2050: Committed", enabledFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "nokia_sros"
+	description := "new customer handoff"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "1/1/c1/1", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != "/show port 1/1/c1/1 detail" ||
+		!strings.Contains(executor.commands[1], `/configure port 1/1/c1/1 description "new customer handoff"`) ||
+		!strings.Contains(executor.commands[1], "/configure port 1/1/c1/1 admin-state enable") ||
+		!strings.Contains(executor.commands[1], "/commit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("SR OS ensure did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+	upNoDescription, err := parseSROSInterfaceState(
+		readPlatformEnsureFixture(t, "sros", "interface-up-no-description.txt"),
+		"1/1/c1/1",
+	)
+	if err != nil || upNoDescription.Enabled == nil || !*upNoDescription.Enabled || upNoDescription.Description != nil {
+		t.Fatalf("unexpected SR OS enabled state: state=%+v error=%v", upNoDescription, err)
+	}
+}
+
 func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
 	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
@@ -895,7 +932,7 @@ func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	ctx.deviceType = "unsupported_os"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
 		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
-	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos") {
+	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos, nokia_sros") {
 		t.Fatalf("unsupported platform was accepted: %v", err)
 	}
 	ctx.deviceType = "cisco_iosxr"

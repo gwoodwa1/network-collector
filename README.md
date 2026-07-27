@@ -480,8 +480,9 @@ device is already compliant. With `--check`, the discovery still runs but the
 edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
-IOS XR, Arista EOS, Cisco IOS-XE, Cisco NX-OS, and Junos support state-aware
-SSH `ensure` adapters for interfaces and exact static routes:
+IOS XR, Arista EOS, Cisco IOS-XE, Cisco NX-OS, Junos, and Nokia SR OS support
+state-aware SSH `ensure` adapters for interfaces. All except SR OS currently
+also support exact static routes:
 
 ```yaml
 ssh:
@@ -524,6 +525,8 @@ and
 [`42-cisco-nxos-declarative-interface.yaml`](examples/workflow-operations/nxos/42-cisco-nxos-declarative-interface.yaml)
 and
 [`44-junos-declarative-interface.yaml`](examples/workflow-operations/junos/44-junos-declarative-interface.yaml)
+and
+[`46-nokia-sros-declarative-port.yaml`](examples/workflow-operations/sros/46-nokia-sros-declarative-port.yaml)
 for those platform forms.
 
 The static-route adapters discover native configuration (`router static` on
