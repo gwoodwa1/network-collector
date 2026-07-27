@@ -2,9 +2,17 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest release and the current `main`
-branch. Older releases may contain known weaknesses and should be upgraded
-before deployment.
+| Version | Supported |
+| --- | --- |
+| 2.0.x | Yes |
+| Earlier than 2.0.0 | No |
+
+Releases earlier than v2.0.0 are retired and must not be used or deployed.
+They may contain known security weaknesses and do not receive security fixes.
+Upgrade to the latest v2.0.x release before deployment.
+
+Security fixes are applied to the latest v2.0.x release and the current `main`
+branch.
 
 ## Reporting a vulnerability
 

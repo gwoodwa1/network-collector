@@ -14,6 +14,8 @@ All notable changes to Network Collector are documented here.
   explicit maximum-device opt-in capped at 25.
 - Updated the supported Go toolchain to 1.25.12, corrected insecure/stale
   examples, and added a coordinated vulnerability-disclosure policy.
+- Retired all releases earlier than v2.0.0; they must not be used or deployed
+  and no longer receive security fixes.
 
 ## [2.0.0] - 2026-07-27
 
