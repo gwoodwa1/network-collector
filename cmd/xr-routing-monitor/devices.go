@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/gwoodwa1/network-collector/internal/safeyaml"
 )
 
 // deviceSpec is one entry from an optional --devices YAML file. It only
@@ -142,12 +142,12 @@ func validateCommandTemplate(path, field, value string) error {
 // exclude_interface_prefixes, signaling the caller should fall back to
 // defaultExcludeInterfacePrefixes.
 func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, gatewayPrefix string, commands commandOverrides, excludeInterfacePrefixes []string, hubTopInterfaces *int, err error) {
-	b, err := os.ReadFile(path)
+	b, err := safeyaml.ReadFile(path)
 	if err != nil {
 		return nil, 0, "", commandOverrides{}, nil, nil, err
 	}
 	var doc devicesDocument
-	if err := yaml.Unmarshal(b, &doc); err != nil {
+	if err := safeyaml.Unmarshal(b, &doc); err != nil {
 		return nil, 0, "", commandOverrides{}, nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	// Collected across every device rather than returning on the first hit,

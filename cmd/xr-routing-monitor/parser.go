@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gwoodwa1/network-collector/internal/safeyaml"
 	"github.com/gwoodwa1/network-collector/pkg/textfsm"
-	"gopkg.in/yaml.v3"
 )
 
 // embeddedFS bundles this binary's own parsers.yaml and TextFSM templates
@@ -53,7 +53,7 @@ func loadDefaultParsers() (map[string]parserModule, error) {
 		return nil, fmt.Errorf("read embedded parsers.yaml: %w", err)
 	}
 	var parsed parsersDocument
-	if err := yaml.Unmarshal(b, &parsed); err != nil {
+	if err := safeyaml.Unmarshal(b, &parsed); err != nil {
 		return nil, fmt.Errorf("parse embedded parsers.yaml: %w", err)
 	}
 	for name, module := range parsed.Parsers {
@@ -70,7 +70,7 @@ func loadDefaultParsers() (map[string]parserModule, error) {
 // is not an error: it returns an empty set, so this tool still runs (falling
 // back to raw output) if the path is wrong.
 func loadParsers(path string) (map[string]parserModule, error) {
-	b, err := os.ReadFile(path)
+	b, err := safeyaml.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]parserModule{}, nil
@@ -78,7 +78,7 @@ func loadParsers(path string) (map[string]parserModule, error) {
 		return nil, err
 	}
 	var parsed parsersDocument
-	if err := yaml.Unmarshal(b, &parsed); err != nil {
+	if err := safeyaml.Unmarshal(b, &parsed); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	baseDir := filepath.Dir(path)
