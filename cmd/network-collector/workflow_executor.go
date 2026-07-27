@@ -680,6 +680,10 @@ type parallelBranchResult struct {
 	log             string
 }
 
+func newParallelNETCONFExecutor(ctx *stepExecutionContext) *lazyNETCONFExecutor {
+	return newLazyNETCONFExecutor(ctx.ip, ctx.username, ctx.password, ctx.netconfPolicy)
+}
+
 func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName string, depth int) bool {
 	if depth > maxWorkflowDepth {
 		*ctx.runFailed = true
@@ -719,7 +723,7 @@ func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName 
 			branchCtx.sessionLog = &log
 			branchCtx.artifactSeq = 0
 			branchCtx.artifactPrefix = fmt.Sprintf("parallel-%02d", index+1)
-			branchNETCONF := newLazyNETCONFExecutor(ctx.ip, ctx.username, ctx.password, ctx.netconfPolicy)
+			branchNETCONF := newParallelNETCONFExecutor(ctx)
 			branchCtx.netconf = branchNETCONF
 			var client *ssh.Client
 			needsSSH := ctx.sshCommand == nil && stepsNeedSSH([]StepConfig{branch}, ctx.workflows, map[string]bool{})

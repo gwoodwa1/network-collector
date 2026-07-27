@@ -12,6 +12,19 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/orchestrator"
 )
 
+func effectiveNETCONFPolicy(global SSHSecurityConfig, device DeviceConfig) netconfConnectionPolicy {
+	timeout := 30 * time.Second
+	if device.OperationTimeout > 0 {
+		timeout = time.Duration(device.OperationTimeout) * time.Second
+	}
+	security := effectiveSSHSecurity(global, device.SSHSecurity)
+	return netconfConnectionPolicy{
+		timeout:        timeout,
+		hostKeyPolicy:  security.HostKeyPolicy,
+		knownHostsFile: security.KnownHostsFile,
+	}
+}
+
 func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, rsaAuth *rsaTokenAuth, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
 	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
