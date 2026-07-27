@@ -1091,6 +1091,66 @@ func TestIOSXRVRFEnsureApplyAndVerify(t *testing.T) {
 	}
 }
 
+func TestEOSVRFParsingFindsBGPAttributesAndDependencies(t *testing.T) {
+	state := parseEOSVRFState(readPlatformEnsureFixture(t, "eos", "vrfs.txt"), "CUSTOMER-A")
+	if !state.Exists || !state.ControlPlaneExists || state.PlatformContext != "65000" ||
+		state.RouteDistinguisher != "65000:100" ||
+		len(state.ImportRouteTargets) != 1 || state.ImportRouteTargets[0] != "65000:100" ||
+		len(state.ExportRouteTargets) != 1 || state.ExportRouteTargets[0] != "65000:100" ||
+		len(state.Dependencies) != 3 ||
+		state.Dependencies[0] != "interface Ethernet3" ||
+		state.Dependencies[1] != "ip route vrf CUSTOMER-A" ||
+		state.Dependencies[2] != "router bgp 65000 vrf CUSTOMER-A" {
+		t.Fatalf("unexpected EOS VRF state: %+v", state)
+	}
+}
+
+func TestEOSVRFCheckModePlansBGPReplacementAndInverse(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "eos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:100", "65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `"action": "would-change"`) ||
+		!strings.Contains(output, `"  rd 65000:110"`) ||
+		!strings.Contains(output, `"  no route-target import vpn-ipv4 65000:101"`) ||
+		!strings.Contains(output, `"  no route-target export vpn-ipv4 65000:100"`) ||
+		!strings.Contains(output, `"  rd 65000:100"`) ||
+		!strings.Contains(output, `"  route-target import vpn-ipv4 65000:101"`) {
+		t.Fatalf("EOS VRF replacement or inverse plan is incomplete: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestEOSVRFDeletionRefusesDependencies(t *testing.T) {
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{readPlatformEnsureFixture(t, "eos", "vrfs.txt")}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	_, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interface Ethernet3") ||
+		!strings.Contains(err.Error(), "ip route vrf CUSTOMER-A") ||
+		!strings.Contains(err.Error(), "router bgp 65000 vrf CUSTOMER-A") {
+		t.Fatalf("dependent EOS VRF deletion was not refused clearly: %v", err)
+	}
+	if len(executor.commands) != 1 {
+		t.Fatalf("EOS VRF dependency refusal sent a mutation: %+v", executor.commands)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

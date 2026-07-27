@@ -1,0 +1,9 @@
+vrf instance CUSTOMER-A
+!
+router bgp 65000
+   vrf CUSTOMER-A
+      rd 65000:100
+      route-target import vpn-ipv4 65000:100
+      route-target import vpn-ipv4 65000:101
+      route-target export vpn-ipv4 65000:100
+!

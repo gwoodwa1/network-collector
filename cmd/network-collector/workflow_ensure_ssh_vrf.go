@@ -11,10 +11,17 @@ import (
 
 type sshVRFState struct {
 	Exists             bool     `json:"exists"`
+	ControlPlaneExists bool     `json:"control_plane_exists,omitempty"`
+	PlatformContext    string   `json:"platform_context,omitempty"`
 	RouteDistinguisher string   `json:"route_distinguisher,omitempty"`
 	ImportRouteTargets []string `json:"import_route_targets"`
 	ExportRouteTargets []string `json:"export_route_targets"`
 	Dependencies       []string `json:"dependencies,omitempty"`
+}
+
+type sshVRFPlatformAdapter struct {
+	parse    func(string, string) sshVRFState
+	commands func(string, sshVRFState, sshVRFState) []string
 }
 
 func executeSSHVRFEnsure(
@@ -23,8 +30,9 @@ func executeSSHVRFEnsure(
 	platform string,
 	config EnsureConfig,
 ) (string, string, error) {
-	if platform != "cisco_iosxr" {
-		return "", "", fmt.Errorf("SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr", platform)
+	adapter, err := sshVRFAdapter(platform)
+	if err != nil {
+		return "", "", err
 	}
 	name := strings.TrimSpace(config.Name)
 	if err := validateCLIIdentifier(name, "ensure.name"); err != nil {
@@ -65,7 +73,14 @@ func executeSSHVRFEnsure(
 	if err != nil {
 		return output, display, fmt.Errorf("discover VRF %q over SSH: %w", name, err)
 	}
-	current := parseIOSXRVRFState(output, name)
+	current := adapter.parse(output, name)
+	desired.PlatformContext = current.PlatformContext
+	if platform == "arista_eos" && present {
+		desired.ControlPlaneExists = true
+		if current.PlatformContext == "" {
+			return output, display, fmt.Errorf("EOS VRF %q requires an existing router bgp instance for RD and route targets", name)
+		}
+	}
 	if !present && current.Exists && len(current.Dependencies) > 0 {
 		return output, display, fmt.Errorf(
 			"VRF %q has dependent configuration (%s); refusing deletion",
@@ -73,8 +88,8 @@ func executeSSHVRFEnsure(
 		)
 	}
 	changed := !sshVRFMatches(current, desired)
-	apply := iosXRVRFCommands(name, current, desired)
-	rollback := iosXRVRFCommands(name, desired, current)
+	apply := adapter.commands(name, current, desired)
+	rollback := adapter.commands(name, desired, current)
 	if !changed {
 		apply, rollback = nil, nil
 	}
@@ -98,7 +113,8 @@ func executeSSHVRFEnsure(
 	if err != nil {
 		return failSSHEnsure(executor, plan, display, verifyOutput, fmt.Errorf("verify VRF %q over SSH: %w", name, err))
 	}
-	verified := parseIOSXRVRFState(verifyOutput, name)
+	verified := adapter.parse(verifyOutput, name)
+	verified.PlatformContext = desired.PlatformContext
 	if !sshVRFMatches(verified, desired) {
 		return failSSHEnsure(
 			executor,
@@ -111,6 +127,20 @@ func executeSSHVRFEnsure(
 	plan.Action = "changed"
 	plan.Verified = verified
 	return marshalSSHEnsurePlan(plan), display, nil
+}
+
+func sshVRFAdapter(platform string) (sshVRFPlatformAdapter, error) {
+	switch platform {
+	case "cisco_iosxr":
+		return sshVRFPlatformAdapter{parse: parseIOSXRVRFState, commands: iosXRVRFCommands}, nil
+	case "arista_eos":
+		return sshVRFPlatformAdapter{parse: parseEOSVRFState, commands: eosVRFCommands}, nil
+	default:
+		return sshVRFPlatformAdapter{}, fmt.Errorf(
+			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos",
+			platform,
+		)
+	}
 }
 
 func desiredVRFPresent(state string) (bool, error) {
@@ -227,6 +257,70 @@ func parseIOSXRVRFState(output, name string) sshVRFState {
 	return state
 }
 
+func parseEOSVRFState(output, name string) sshVRFState {
+	state := sshVRFState{ImportRouteTargets: []string{}, ExportRouteTargets: []string{}}
+	inBGPVRF := false
+	bgpVRFIndent := -1
+	topLevel := ""
+	dependencies := map[string]struct{}{}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		indent := leadingSpaces(raw)
+		if indent == 0 && trimmed != "!" {
+			topLevel = trimmed
+			if strings.HasPrefix(trimmed, "router bgp ") {
+				state.PlatformContext = strings.TrimSpace(strings.TrimPrefix(trimmed, "router bgp "))
+			}
+		}
+		if indent == 0 && trimmed == "vrf instance "+name {
+			state.Exists = true
+		}
+		if strings.HasPrefix(trimmed, "ip route vrf "+name+" ") {
+			dependencies["ip route vrf "+name] = struct{}{}
+		}
+		if indent > 0 && trimmed == "vrf "+name && strings.HasPrefix(topLevel, "router bgp ") {
+			inBGPVRF = true
+			bgpVRFIndent = indent
+			state.Exists = true
+			state.ControlPlaneExists = true
+			continue
+		}
+		if inBGPVRF {
+			if indent <= bgpVRFIndent {
+				inBGPVRF = false
+			} else {
+				fields := strings.Fields(trimmed)
+				switch {
+				case len(fields) == 2 && fields[0] == "rd":
+					state.RouteDistinguisher = fields[1]
+				case len(fields) == 4 && fields[0] == "route-target" &&
+					fields[1] == "import" && fields[2] == "vpn-ipv4":
+					state.ImportRouteTargets = append(state.ImportRouteTargets, fields[3])
+				case len(fields) == 4 && fields[0] == "route-target" &&
+					fields[1] == "export" && fields[2] == "vpn-ipv4":
+					state.ExportRouteTargets = append(state.ExportRouteTargets, fields[3])
+				case trimmed != "!":
+					dependencies["router bgp "+state.PlatformContext+" vrf "+name] = struct{}{}
+				}
+				continue
+			}
+		}
+		if indent > 0 && trimmed == "vrf "+name && strings.HasPrefix(topLevel, "interface ") {
+			dependencies[topLevel] = struct{}{}
+		}
+	}
+	state.ImportRouteTargets = normalizedRouteTargets(state.ImportRouteTargets)
+	state.ExportRouteTargets = normalizedRouteTargets(state.ExportRouteTargets)
+	for dependency := range dependencies {
+		state.Dependencies = append(state.Dependencies, dependency)
+	}
+	sort.Strings(state.Dependencies)
+	return state
+}
+
 func sshVRFMatches(current, desired sshVRFState) bool {
 	if current.Exists != desired.Exists {
 		return false
@@ -235,6 +329,7 @@ func sshVRFMatches(current, desired sshVRFState) bool {
 		return true
 	}
 	return current.RouteDistinguisher == desired.RouteDistinguisher &&
+		current.ControlPlaneExists == desired.ControlPlaneExists &&
 		stringSlicesEqual(current.ImportRouteTargets, desired.ImportRouteTargets) &&
 		stringSlicesEqual(current.ExportRouteTargets, desired.ExportRouteTargets)
 }
@@ -286,6 +381,61 @@ func iosXRVRFCommands(name string, current, desired sshVRFState) []string {
 		commands = append(commands, "  !")
 	}
 	return append(commands, "commit", "end")
+}
+
+func eosVRFCommands(name string, current, desired sshVRFState) []string {
+	asn := desired.PlatformContext
+	if asn == "" {
+		asn = current.PlatformContext
+	}
+	if current.Exists && !desired.Exists {
+		commands := []string{"configure terminal"}
+		if current.ControlPlaneExists {
+			commands = append(commands, "router bgp "+asn, " no vrf "+name, "exit")
+		}
+		return append(commands, "no vrf instance "+name, "end", "write memory")
+	}
+	if !desired.Exists {
+		return nil
+	}
+	commands := []string{"configure terminal"}
+	if !current.Exists {
+		commands = append(commands, "vrf instance "+name, "exit")
+	}
+	if current.ControlPlaneExists && !desired.ControlPlaneExists {
+		commands = append(commands, "router bgp "+asn, " no vrf "+name)
+		return append(commands, "end", "write memory")
+	}
+	commands = append(commands, "router bgp "+asn, " vrf "+name)
+	if current.RouteDistinguisher != desired.RouteDistinguisher {
+		if desired.RouteDistinguisher == "" {
+			commands = append(commands, "  no rd")
+		} else {
+			commands = append(commands, "  rd "+desired.RouteDistinguisher)
+		}
+	}
+	for _, change := range eosRouteTargetChanges("import", current.ImportRouteTargets, desired.ImportRouteTargets) {
+		commands = append(commands, "  "+change)
+	}
+	for _, change := range eosRouteTargetChanges("export", current.ExportRouteTargets, desired.ExportRouteTargets) {
+		commands = append(commands, "  "+change)
+	}
+	return append(commands, "end", "write memory")
+}
+
+func eosRouteTargetChanges(direction string, current, desired []string) []string {
+	changes := []string{}
+	for _, target := range current {
+		if !containsString(desired, target) {
+			changes = append(changes, "no route-target "+direction+" vpn-ipv4 "+target)
+		}
+	}
+	for _, target := range desired {
+		if !containsString(current, target) {
+			changes = append(changes, "route-target "+direction+" vpn-ipv4 "+target)
+		}
+	}
+	return changes
 }
 
 func iosXRRouteTargetChanges(current, desired []string) []string {

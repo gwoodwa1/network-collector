@@ -1,0 +1,38 @@
+name_playbook: Declarative Arista EOS SSH VRF
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  vrf_name: CUSTOMER-C
+  route_distinguisher: 65000:300
+  route_target: 65000:300
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: eos-cli-01
+    steps:
+      - name: authorize-eos-vrf
+        approval:
+          message: >-
+            Ensure VRF {{vrf_name}} uses RD {{route_distinguisher}} and
+            VPN-IPv4 route target {{route_target}}?
+          timeout_seconds: 300
+
+      - name: ensure-eos-vrf
+        ensure:
+          resource: vrf
+          name: "{{vrf_name}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+          attributes:
+            route_distinguisher: "{{route_distinguisher}}"
+            import_route_targets:
+              - "{{route_target}}"
+            export_route_targets:
+              - "{{route_target}}"
+        register: vrf_plan

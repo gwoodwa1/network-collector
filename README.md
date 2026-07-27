@@ -549,7 +549,7 @@ statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
 and
 [`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
-IOS XR also supports declarative SSH VRFs:
+IOS XR and Arista EOS also support declarative SSH VRFs:
 
 ```yaml
 ensure:
@@ -566,11 +566,16 @@ ensure:
 
 RD and IPv4-unicast import/export route targets are compared explicitly.
 Changes produce ordered forward and inverse plans while leaving other address
-families and policies untouched. `state: absent` first scans the running
-configuration and refuses deletion if an interface, static route, or other
-configuration hierarchy references the VRF. `cascade: true` is intentionally
-rejected until dependency removal can be planned without broad deletion. See
-[`48-declarative-ssh-vrf.yaml`](examples/workflow-operations/iosxr/48-declarative-ssh-vrf.yaml).
+families and policies untouched. EOS keeps `vrf instance` separate from its
+`router bgp` VRF and discovers the existing local BGP ASN rather than asking
+the workbook to duplicate it. `state: absent` first scans the running
+configuration and refuses deletion if an interface, static route, BGP
+neighbor/policy, or other configuration hierarchy references the VRF.
+`cascade: true` is intentionally rejected until dependency removal can be
+planned without broad deletion. See
+[`48-declarative-ssh-vrf.yaml`](examples/workflow-operations/iosxr/48-declarative-ssh-vrf.yaml)
+and
+[`49-arista-eos-declarative-vrf.yaml`](examples/workflow-operations/arista/49-arista-eos-declarative-vrf.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,
