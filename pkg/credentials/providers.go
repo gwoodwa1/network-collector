@@ -22,8 +22,9 @@ type Provider interface {
 	Resolve(context.Context, Target) (Credentials, error)
 }
 type ProviderConfig struct {
-	Type, File string
-	Command    []string
+	Type, File     string
+	Command        []string
+	TimeoutSeconds int
 }
 
 func NewProvider(config ProviderConfig, input io.Reader, output io.Writer) (Provider, error) {
@@ -38,7 +39,14 @@ func NewProvider(config ProviderConfig, input io.Reader, output io.Writer) (Prov
 		if len(config.Command) == 0 || strings.TrimSpace(config.Command[0]) == "" {
 			return nil, fmt.Errorf("credential command cannot be empty")
 		}
-		return CommandProvider{Command: append([]string(nil), config.Command...)}, nil
+		timeout := 30 * time.Second
+		if config.TimeoutSeconds != 0 {
+			if config.TimeoutSeconds < 1 || config.TimeoutSeconds > 300 {
+				return nil, fmt.Errorf("credential command timeout_seconds must be between 1 and 300")
+			}
+			timeout = time.Duration(config.TimeoutSeconds) * time.Second
+		}
+		return CommandProvider{Command: append([]string(nil), config.Command...), Timeout: timeout}, nil
 	default:
 		return nil, fmt.Errorf("unsupported credential provider %q", config.Type)
 	}
@@ -103,10 +111,17 @@ func (p *FileProvider) Resolve(_ context.Context, target Target) (Credentials, e
 	return validate(c, target)
 }
 
-type CommandProvider struct{ Command []string }
+type CommandProvider struct {
+	Command []string
+	Timeout time.Duration
+}
 
 func (p CommandProvider) Resolve(ctx context.Context, target Target) (Credentials, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := p.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.Command[0], p.Command[1:]...)
 	cmd.Env = append(os.Environ(), "NET_TARGET_HOSTNAME="+target.Hostname, "NET_TARGET_IP="+target.IP, "NET_CREDENTIAL_PROFILE="+target.Profile)

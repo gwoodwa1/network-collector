@@ -1,0 +1,12 @@
+credentials:
+  provider: command
+  command: [examples/credential-providers/vault.sh]
+  timeout_seconds: 30
+
+# Export VAULT_ADDR and an authenticated VAULT_TOKEN (or use the configured
+# Vault token helper), then select the KV mount and parent path:
+#   VAULT_KV_MOUNT=network
+#   VAULT_KV_PREFIX=devices
+#
+# Inventory credential_profile values select children such as:
+#   network/devices/datacenter

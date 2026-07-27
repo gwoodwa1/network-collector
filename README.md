@@ -100,9 +100,20 @@ Assign a profile to an inventory host with `credential_profile: datacenter`. The
 credentials:
   provider: command
   command: [/usr/local/bin/read-network-secret, --format, json]
+  timeout_seconds: 30
 ```
 
 This command contract can wrap Vault, AWS Secrets Manager, an OS keyring, or another organization-specific secret broker without storing secrets in playbooks. Provider commands time out after 30 seconds. Never commit populated credential files or print secrets from provider commands.
+
+`timeout_seconds` can be set from 1 to 300 seconds. The helper receives
+`NET_TARGET_HOSTNAME`, `NET_TARGET_IP`, and `NET_CREDENTIAL_PROFILE`; only its
+stdout is decoded, so diagnostics should go to stderr. Complete adapters and
+configuration fragments are included for
+[HashiCorp Vault](examples/credential-providers/vault.yaml),
+[1Password](examples/credential-providers/onepassword.yaml), and
+[CyberArk CCP](examples/credential-providers/cyberark.yaml). See the
+[credential-provider guide](examples/credential-providers/README.md) for
+least-privilege setup and required variables.
 
 ### Docker
 
@@ -194,6 +205,7 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--fail-on-fail`: exit with non-zero status if any validation returns `fail` or `error`, or if a device/step cannot run successfully
 - `--creds_input`: securely prompt for credentials instead of using `NET_USER` and `NET_PASSWORD`
 - `--rsa-token`: recognize RSA `PASSCODE:` challenges, cache the startup token across devices, and require fresh human input before reconnecting
+- `--check` / `--dry-run`: discover declarative state and preview changes without applying configuration
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
@@ -208,6 +220,24 @@ Example: run validations and exit non-zero if any check fails
 ```bash
 ./network-collector --fail-on-fail
 ```
+
+Example: preview a workbook without applying changes
+
+```bash
+./network-collector --config change.yaml --check
+```
+
+Check mode never sends generic SSH commands, local commands, gNMI subscriptions,
+SSH probes, approval gates, waits, facts collection, or mutating NETCONF
+operations. NETCONF RPC payloads whose top-level operation is `get` or
+`get-config` still run because they are unambiguously read-only; arbitrary
+vendor RPCs are previewed but skipped. Declarative `ensure` steps perform their
+discovery read and emit a JSON current/desired diff plus the exact OpenConfig
+XML that would be applied.
+This intentionally treats arbitrary imperative commands as unsafe instead of
+guessing whether a vendor command is read-only. A separate post-change RPC in
+an imperative workbook can still validate the current state and fail; use an
+`ensure` step when the preview needs state-aware change planning.
 
 ## XR Routing Monitor
 
@@ -387,6 +417,39 @@ paths are resolved from the directory containing the main playbook. File
 contents are loaded and then rendered with the same `{{variable}}` values as
 inline payloads, which keeps large XML artifacts separate without losing
 workflow parameterization.
+
+### Declarative interface state
+
+Use `ensure` when the workbook should express the desired state rather than an
+imperative command followed by a regular-expression check. The first supported
+resource is an OpenConfig interface over NETCONF:
+
+```yaml
+netconf:
+  - host: eos-netconf-01
+    steps:
+      - name: ensure-customer-handoff
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          description: "{{interface_description}}"
+          transport: netconf
+          target: running
+```
+
+`state` accepts `enabled` or `disabled` (`up` and `down` are aliases).
+`transport` defaults to `netconf`, and `target` defaults to `running`; other
+transports and candidate-datastore commits are rejected rather than silently
+approximated. `description` is optional, so omitting it leaves the existing
+description unmanaged.
+
+The step reads the interface's OpenConfig `config` state, changes it only when
+the requested fields differ, and reads it again after `edit-config` to verify
+the desired state. It therefore reports success without a write when the
+device is already compliant. With `--check`, the discovery still runs but the
+edit and verification write path do not. See
+[`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
 Do not include the outer `<rpc>` element in either payload form; the NETCONF
 driver adds the protocol envelope and message ID. Junos accepts either native
@@ -586,6 +649,10 @@ For the example above, the canary runs first. If it succeeds, another device may
 Validation failures, connection errors, step errors, and session setup or shutdown errors count as device failures. Results are aggregated in inventory order even though devices may complete in a different order. Each device continues to write its own session log; live terminal output from simultaneously active devices may be interleaved.
 
 Separate SSH entries targeting the same hostname/IP remain serialized and share their registered variables. This preserves playbooks that capture a value in one entry and consume it in a later entry.
+
+For fleet sizing, nested-session calculations, serial and wave patterns,
+secret-provider pressure, host limits, and gNMI monitoring guidance, see
+[Scaling Network Collector across large fleets](docs/scaling.md).
 
 ### Pluggable parser modules
 

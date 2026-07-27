@@ -48,6 +48,7 @@ easier to read.
 | `multivendor/32-gnmi-guarded-new-path-provision.yaml` | parallel new-path provisioning while two different production interfaces are baselined and protected, with immediate rollback |
 | `multivendor/33-gnmi-all-interface-light-level-guard.yaml` | per-interface and per-channel RX/TX optical baselines with an absolute 1 dB drop guard |
 | `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process monitor combining optics, discards, errors, and IS-IS/LDP/BGP neighbor state |
+| `multivendor/35-declarative-interface-ensure.yaml` | idempotent OpenConfig interface state with NETCONF discovery, diff, apply, verification, and `--check` preview |
 
 Run one example from the repository root:
 

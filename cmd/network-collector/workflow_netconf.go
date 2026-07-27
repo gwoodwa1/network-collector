@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +111,44 @@ func executeNETCONFStep(ctx *stepExecutionContext, config NETCONFStepConfig) (st
 	if rendered.Target != "" {
 		display += " target=" + rendered.Target
 	}
+	if ctx.checkMode && netconfCheckSkips(operation, rendered.Payload) {
+		message := fmt.Sprintf("[check] would execute %s", display)
+		if rendered.Payload != "" {
+			message += "\n" + rendered.Payload
+		}
+		return message, display, nil
+	}
 	output, err := ctx.netconf.ExecuteNETCONF(rendered)
 	return output, display, err
+}
+
+func netconfCheckSkips(operation, payload string) bool {
+	if netconfOperationMutates(operation) {
+		return true
+	}
+	if operation != "rpc" {
+		return false
+	}
+	decoder := xml.NewDecoder(strings.NewReader(payload))
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return true
+		}
+		if err != nil {
+			return true
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			return start.Name.Local != "get" && start.Name.Local != "get-config"
+		}
+	}
+}
+
+func netconfOperationMutates(operation string) bool {
+	switch strings.ToLower(strings.TrimSpace(operation)) {
+	case "edit-config", "edit_config", "commit", "discard", "discard-changes", "discard_changes":
+		return true
+	default:
+		return false
+	}
 }

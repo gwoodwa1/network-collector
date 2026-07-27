@@ -26,6 +26,7 @@ func main() {
 	var cliRSAToken bool
 	var prettyOut bool
 	var approveAll bool
+	var checkMode bool
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -47,6 +48,8 @@ func main() {
 	flag.BoolVar(&cliRSAToken, "rsa-token", false, "use an interactive RSA passcode, reuse it for startup connections, and prompt again before reconnecting")
 	flag.BoolVar(&prettyOut, "pretty", false, "show a coloured human-readable run summary")
 	flag.BoolVar(&approveAll, "approve-all", false, "approve all manual workflow gates non-interactively")
+	flag.BoolVar(&checkMode, "check", false, "preview changes without applying them")
+	flag.BoolVar(&checkMode, "dry-run", false, "alias for --check")
 	flag.Parse()
 	if jsonOut {
 		prettyOut = false
@@ -61,6 +64,7 @@ func main() {
 		slog.Error("error reading config", "config_file", configFile, "error", err)
 		os.Exit(1)
 	}
+	config.checkMode = checkMode
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "fail-on-fail" {
 			failOnFail = cliFailOnFail
@@ -129,7 +133,10 @@ func main() {
 		if credentialFile != "" && !filepath.IsAbs(credentialFile) {
 			credentialFile = filepath.Join(filepath.Dir(configFile), credentialFile)
 		}
-		provider, providerErr := credentials.NewProvider(credentials.ProviderConfig{Type: providerType, File: credentialFile, Command: config.Credentials.Command}, os.Stdin, os.Stderr)
+		provider, providerErr := credentials.NewProvider(credentials.ProviderConfig{
+			Type: providerType, File: credentialFile, Command: config.Credentials.Command,
+			TimeoutSeconds: config.Credentials.TimeoutSeconds,
+		}, os.Stdin, os.Stderr)
 		if providerErr != nil {
 			slog.Error("error configuring credential provider", "error", providerErr)
 			os.Exit(1)

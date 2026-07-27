@@ -1,0 +1,8 @@
+credentials:
+  provider: command
+  command: [examples/credential-providers/cyberark.sh]
+  timeout_seconds: 30
+
+# Point CYBERARK_CCP_URL at the HTTPS AIMWebService/api/Accounts endpoint and
+# configure CYBERARK_APP_ID, CYBERARK_SAFE, and (when required) client
+# certificate variables. credential_profile selects the CyberArk object name.

@@ -69,6 +69,16 @@ type StepConfig struct {
 	Drift          *DriftConfig            `mapstructure:"drift" yaml:"drift"`
 	GNMISubscribe  *GNMISubscribeConfig    `mapstructure:"gnmi_subscribe" yaml:"gnmi_subscribe"`
 	NETCONF        *NETCONFStepConfig      `mapstructure:"netconf" yaml:"netconf"`
+	Ensure         *EnsureConfig           `mapstructure:"ensure" yaml:"ensure"`
+}
+
+type EnsureConfig struct {
+	Resource    string  `mapstructure:"resource" yaml:"resource"`
+	Name        string  `mapstructure:"name" yaml:"name"`
+	State       string  `mapstructure:"state" yaml:"state"`
+	Description *string `mapstructure:"description" yaml:"description"`
+	Transport   string  `mapstructure:"transport" yaml:"transport"`
+	Target      string  `mapstructure:"target" yaml:"target"`
 }
 
 type NETCONFStepConfig struct {
@@ -244,13 +254,15 @@ type Config struct {
 	Facts         FactsDefaultsConfig       `mapstructure:"facts" yaml:"facts"`
 	Credentials   CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
 	baseDir       string
+	checkMode     bool
 }
 
 type CredentialProviderConfig struct {
-	Provider string   `mapstructure:"provider" yaml:"provider"`
-	File     string   `mapstructure:"file" yaml:"file"`
-	Command  []string `mapstructure:"command" yaml:"command"`
-	RSAToken bool     `mapstructure:"rsa_token" yaml:"rsa_token"`
+	Provider       string   `mapstructure:"provider" yaml:"provider"`
+	File           string   `mapstructure:"file" yaml:"file"`
+	Command        []string `mapstructure:"command" yaml:"command"`
+	TimeoutSeconds int      `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
+	RSAToken       bool     `mapstructure:"rsa_token" yaml:"rsa_token"`
 }
 
 type FactsDefaultsConfig struct {
@@ -423,6 +435,7 @@ type stepExecutionContext struct {
 	reauthenticate func() (string, string, error)
 	netconf        netconfStepExecutor
 	gnmi           *GNMIConnectionConfig
+	checkMode      bool
 }
 
 type approvalAnswer struct {

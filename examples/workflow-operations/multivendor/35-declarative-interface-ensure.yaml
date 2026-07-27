@@ -1,0 +1,31 @@
+name_playbook: Declarative OpenConfig interface state
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+vars:
+  interface: Ethernet4
+  interface_description: Declaratively managed customer handoff
+
+netconf:
+  - host: eos-netconf-01
+    steps:
+      - name: authorize-interface-state
+        approval:
+          message: Ensure {{interface}} is enabled with the managed description?
+          timeout_seconds: 300
+
+      - name: ensure-interface-enabled
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          description: "{{interface_description}}"
+          transport: netconf
+          target: running
+        output:
+          save_raw: true

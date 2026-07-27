@@ -82,7 +82,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		}
 	}
 	var client *ssh.Client
-	if stepsNeedSSH(steps, config.Workflows, map[string]bool{}) {
+	if !config.checkMode && stepsNeedSSH(steps, config.Workflows, map[string]bool{}) {
 		client = ssh.NewClient(opts...)
 		if err := client.Connect(ip, username, password, deviceType); err != nil {
 			result.failed = true
@@ -115,6 +115,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		events:         events,
 		netconf:        netconfExecutor,
 		gnmi:           device.GNMI,
+		checkMode:      config.checkMode,
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt
@@ -208,7 +209,8 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
 		configBaseDir: config.baseDir,
 		output:        config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
-		events: events,
+		events:    events,
+		checkMode: config.checkMode,
 	}
 
 	for _, step := range steps {
@@ -231,6 +233,13 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 		attempt := 0
 		for {
 			attempt++
+			if config.checkMode {
+				commandDisplay := strings.TrimSpace(step.Local.Command) + " " + strings.Join(step.Local.Args, " ")
+				if !jsonOut {
+					fmt.Printf("device=local_steps step=%s [check] skipped local command %q\n", stepName, strings.TrimSpace(commandDisplay))
+				}
+				break
+			}
 			output, commandDisplay, err := executeLocalCommand(*step.Local, variables)
 			if err != nil {
 				result.failed = true

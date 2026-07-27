@@ -1808,8 +1808,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 34 {
-		t.Fatalf("expected thirty-four vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 35 {
+		t.Fatalf("expected thirty-five vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1825,8 +1825,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 34 {
-		t.Fatalf("expected thirty-four loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 35 {
+		t.Fatalf("expected thirty-five loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1864,6 +1864,10 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	if neighborMonitor == nil || neighborMonitor.StreamMode != "on_change" || len(neighborMonitor.Paths) != 3 || len(neighborMonitor.Triggers) != 6 || neighborMonitor.Triggers[0].ValueNot != "UP" || neighborMonitor.Triggers[1].ValueNot != "OPERATIONAL" || neighborMonitor.Triggers[2].ValueNot != "ESTABLISHED" || !neighborMonitor.Triggers[0].IncludeInitial || neighborMonitor.Triggers[3].Event != "delete" {
 		t.Fatalf("routing-neighbor gNMI change monitor is incomplete: %+v", neighborMonitor)
+	}
+	declarativeEnsure := loaded["35-declarative-interface-ensure.yaml"].NETCONF[0].Steps[1].Ensure
+	if declarativeEnsure == nil || declarativeEnsure.Resource != "interface" || declarativeEnsure.State != "enabled" || declarativeEnsure.Transport != "netconf" || declarativeEnsure.Description == nil {
+		t.Fatalf("declarative interface ensure example is incomplete: %+v", declarativeEnsure)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {
