@@ -48,6 +48,7 @@ type StepConfig struct {
 	Validations    []ValidationConfig      `mapstructure:"validations" yaml:"validations"`
 	Retry          *RetryConfig            `mapstructure:"retry" yaml:"retry"`
 	Register       string                  `mapstructure:"register" yaml:"register"`
+	MaxOutputBytes int                     `mapstructure:"max_output_bytes" yaml:"max_output_bytes"`
 	OnPass         *ValidationActionConfig `mapstructure:"on_pass" yaml:"on_pass"`
 	OnFail         *ValidationActionConfig `mapstructure:"on_fail" yaml:"on_fail"`
 	Output         *StepOutputConfig       `mapstructure:"output" yaml:"output"`

@@ -48,6 +48,28 @@ func stepValidations(step StepConfig) []ValidationConfig {
 	return validations
 }
 
+const (
+	defaultDeviceOutputBytes = 10 * 1024 * 1024
+	maxDeviceOutputBytes     = 64 * 1024 * 1024
+)
+
+func deviceOutputLimit(configured int) (int, error) {
+	if configured == 0 {
+		return defaultDeviceOutputBytes, nil
+	}
+	if configured < 1 || configured > maxDeviceOutputBytes {
+		return 0, fmt.Errorf("max_output_bytes must be between 1 and %d", maxDeviceOutputBytes)
+	}
+	return configured, nil
+}
+
+func enforceDeviceOutputLimit(output string, limit int) error {
+	if len(output) > limit {
+		return fmt.Errorf("device response exceeds the %d-byte step output limit", limit)
+	}
+	return nil
+}
+
 func registerParserOutput(vars map[string]string, step StepConfig, parsedOutput string) bool {
 	name := strings.TrimSpace(step.Register)
 	if name == "" {
@@ -953,6 +975,11 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				writeSessionf(ctx.sessionLog, "[step:%s] [check] facts collection skipped\n", stepName)
 				continue
 			}
+			if _, err := deviceOutputLimit(step.MaxOutputBytes); err != nil {
+				*ctx.runFailed = true
+				recordStepFailure(ctx, stepName, err.Error())
+				continue
+			}
 			if err := executeFactsStep(ctx, client, step, stepName); err != nil {
 				*ctx.runFailed = true
 				recordStepFailure(ctx, stepName, err.Error())
@@ -1121,6 +1148,12 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				previewOnly = netconfCheckSkips(operation, renderedNETCONF.Payload)
 			}
 		}
+		outputLimit, limitErr := deviceOutputLimit(step.MaxOutputBytes)
+		if limitErr != nil {
+			*ctx.runFailed = true
+			recordStepFailure(ctx, stepName, limitErr.Error())
+			continue
+		}
 		attempt := 0
 		stepExecutionFailed := false
 		for {
@@ -1151,6 +1184,10 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			} else {
 				commandDisplay = cmd
 				output, err = sshExecutor.Execute(cmd)
+			}
+			if limitErr := enforceDeviceOutputLimit(output, outputLimit); limitErr != nil {
+				output = ""
+				err = limitErr
 			}
 			if err != nil {
 				if step.Ensure != nil && ctx.reportEnabled && strings.TrimSpace(output) != "" {

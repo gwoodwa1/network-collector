@@ -93,6 +93,25 @@ func (executor sshFactsExecutor) Execute(command string) (string, error) {
 	return (*executor.client).Execute(command)
 }
 
+type boundedFactsExecutor struct {
+	executor internalfacts.Executor
+	limit    int
+}
+
+func (executor boundedFactsExecutor) Execute(command string) (string, error) {
+	if executor.executor == nil {
+		return "", fmt.Errorf("facts transport is unavailable")
+	}
+	output, err := executor.executor.Execute(command)
+	if err != nil {
+		return "", err
+	}
+	if err := enforceDeviceOutputLimit(output, executor.limit); err != nil {
+		return "", err
+	}
+	return output, nil
+}
+
 func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepConfig, stepName string) error {
 	format := strings.TrimSpace(step.Facts.Format)
 	if format == "" {
@@ -107,10 +126,14 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 		transports = ctx.factsDefaults.DefaultTransports
 	}
 	config := internalfacts.Config{Format: internalfacts.Format(strings.ToLower(format)), Subsets: subsets, Transports: transports}
+	outputLimit, err := deviceOutputLimit(step.MaxOutputBytes)
+	if err != nil {
+		return err
+	}
 	collector := internalfacts.Collector{
 		Platform: ctx.deviceType,
-		NETCONF:  ctx.netconf,
-		SSH:      sshFactsExecutor{client: client},
+		NETCONF:  boundedFactsExecutor{executor: ctx.netconf, limit: outputLimit},
+		SSH:      boundedFactsExecutor{executor: sshFactsExecutor{client: client}, limit: outputLimit},
 		Parse: func(output, parser string) (json.RawMessage, error) {
 			parsed, err := parseOutputWithModule(output, parser, ctx.parsers)
 			return json.RawMessage(parsed), err
@@ -122,6 +145,9 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
+		return fmt.Errorf("encode facts: %w", err)
+	}
+	if err := enforceDeviceOutputLimit(string(encoded), outputLimit); err != nil {
 		return fmt.Errorf("encode facts: %w", err)
 	}
 	writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] facts output:", stepName), string(encoded))
