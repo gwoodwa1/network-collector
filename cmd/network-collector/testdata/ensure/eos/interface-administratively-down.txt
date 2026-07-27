@@ -1,0 +1,4 @@
+Ethernet3 is administratively down, line protocol is down (disabled)
+  Hardware is Ethernet, address is 0011.2233.4455
+  Description: Example customer handoff
+  Internet address is unassigned

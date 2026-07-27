@@ -1,0 +1,31 @@
+name_playbook: Declarative Arista EOS SSH interface
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  interface: Ethernet3
+  interface_description: Example declarative customer handoff
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: eos-cli-01
+    steps:
+      - name: authorize-eos-interface
+        approval:
+          message: Enable {{interface}} with description "{{interface_description}}"?
+          timeout_seconds: 300
+
+      - name: ensure-eos-interface
+        ensure:
+          resource: interface
+          name: "{{interface}}"
+          state: enabled
+          require_state: disabled
+          description: "{{interface_description}}"
+          transport: ssh
+          rollback_on_failure: true
+        register: interface_plan

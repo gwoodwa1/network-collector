@@ -1,0 +1,3 @@
+Ethernet3 is up, line protocol is up (connected)
+  Hardware is Ethernet, address is 0011.2233.4455
+  Internet address is unassigned

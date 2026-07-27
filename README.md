@@ -481,7 +481,7 @@ edit and verification write path do not. See
 [`35-declarative-interface-ensure.yaml`](examples/workflow-operations/multivendor/35-declarative-interface-ensure.yaml).
 
 IOS XR supports state-aware SSH `ensure` adapters for interfaces and exact
-static routes:
+static routes. Arista EOS supports the same interface resource schema:
 
 ```yaml
 ssh:
@@ -512,7 +512,10 @@ The interface adapter discovers state with `show interfaces`, changes only
 managed fields, and verifies after applying. `require_state: disabled` is a
 precondition whenever a mutation is required: selecting an active port with
 different desired configuration fails before any write. An already compliant
-interface remains idempotent and sends no configuration.
+interface remains idempotent and sends no configuration. IOS XR uses commit
+semantics; EOS exits configuration mode and saves with `write memory`. See
+[`38-arista-eos-declarative-interface.yaml`](examples/workflow-operations/arista/38-arista-eos-declarative-interface.yaml)
+for the EOS form.
 
 The static-route adapter discovers `router static` configuration and treats
 `vrf`, `prefix`, and `next_hop` as the resource identity. `state` is `present`

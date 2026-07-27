@@ -162,7 +162,12 @@ func iosXRInterfaceOutput(name, state, description string) string {
 
 func readEnsureFixture(t *testing.T, name string) string {
 	t.Helper()
-	payload, err := os.ReadFile(filepath.Join("testdata", "ensure", "iosxr", name))
+	return readPlatformEnsureFixture(t, "iosxr", name)
+}
+
+func readPlatformEnsureFixture(t *testing.T, platform, name string) string {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("testdata", "ensure", platform, name))
 	if err != nil {
 		t.Fatalf("read ensure fixture %s: %v", name, err)
 	}
@@ -388,6 +393,59 @@ func TestParseIOSXRInterfaceFixtures(t *testing.T) {
 	}
 }
 
+func TestEOSInterfaceFixturesAndCommands(t *testing.T) {
+	disabled, err := parseEOSInterfaceState(
+		readPlatformEnsureFixture(t, "eos", "interface-administratively-down.txt"),
+		"Ethernet3",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Enabled == nil || *disabled.Enabled || disabled.Description == nil || *disabled.Description != "Example customer handoff" {
+		t.Fatalf("unexpected disabled EOS interface: %+v", disabled)
+	}
+	enabled, err := parseEOSInterfaceState(
+		readPlatformEnsureFixture(t, "eos", "interface-up-no-description.txt"),
+		"Ethernet3",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Enabled == nil || !*enabled.Enabled || enabled.Description != nil {
+		t.Fatalf("unexpected enabled EOS interface: %+v", enabled)
+	}
+	description := "new customer handoff"
+	commands := eosInterfaceCommands("Ethernet3", true, &description)
+	joined := strings.Join(commands, "\n")
+	if !strings.Contains(joined, "description new customer handoff") ||
+		!strings.Contains(joined, "no shutdown") ||
+		strings.Contains(joined, "commit") ||
+		commands[len(commands)-1] != "write memory" {
+		t.Fatalf("unexpected EOS interface commands: %+v", commands)
+	}
+}
+
+func TestEOSInterfaceEnsureCheckAndApply(t *testing.T) {
+	disabled := readPlatformEnsureFixture(t, "eos", "interface-administratively-down.txt")
+	enabled := strings.Replace(disabled, "is administratively down, line protocol is down (disabled)", "is up, line protocol is up (connected)", 1)
+	enabled = strings.Replace(enabled, "Example customer handoff", "new customer handoff", 1)
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{disabled, "Copy completed successfully", enabled}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "arista_eos"
+	description := "new customer handoff"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "interface", Name: "Ethernet3", State: "enabled",
+		RequireState: "disabled", Description: &description, Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 || !strings.Contains(executor.commands[1], "write memory") ||
+		strings.Contains(executor.commands[1], "commit") || !strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("EOS ensure did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestParseIOSXRStaticRoutesSeparatesVRFs(t *testing.T) {
 	iosXRStaticRouteFixture := readEnsureFixture(t, "static-routes.txt")
 	defaultRoute := parseIOSXRStaticRoutes(iosXRStaticRouteFixture, "198.51.100.0/24", "")
@@ -496,11 +554,17 @@ func TestSSHEnsureStaticRouteAppliesAndVerifies(t *testing.T) {
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
-	ctx.deviceType = "arista_eos"
+	ctx.deviceType = "cisco_iosxe"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
 		Resource: "interface", Name: "Ethernet1", State: "enabled", Transport: "ssh",
-	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr") {
+	}); err == nil || !strings.Contains(err.Error(), "currently supported: cisco_iosxr, arista_eos") {
 		t.Fatalf("unsupported platform was accepted: %v", err)
+	}
+	ctx.deviceType = "arista_eos"
+	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "192.0.2.0/24", NextHop: "198.51.100.1", State: "present", Transport: "ssh",
+	}); err == nil || !strings.Contains(err.Error(), "static_route") {
+		t.Fatalf("unsupported EOS route adapter was accepted: %v", err)
 	}
 	ctx.deviceType = "cisco_iosxr"
 	if _, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{

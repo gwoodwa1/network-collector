@@ -38,6 +38,11 @@ type sshStaticRouteState struct {
 	NextHops []string `json:"next_hops"`
 }
 
+type sshInterfacePlatformAdapter struct {
+	parse    func(string, string) (sshInterfaceState, error)
+	commands func(string, bool, *string) []string
+}
+
 func executeSSHEnsureStep(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, config EnsureConfig) (string, string, error) {
 	if executor == nil {
 		return "", "", fmt.Errorf("SSH executor is not configured")
@@ -70,12 +75,18 @@ func normalizeSSHEnsurePlatform(platform string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "cisco_iosxr", "iosxr", "ios-xr":
 		return "cisco_iosxr", nil
+	case "arista_eos", "eos", "arista":
+		return "arista_eos", nil
 	default:
-		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr", platform)
+		return "", fmt.Errorf("SSH declarative ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos", platform)
 	}
 }
 
 func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {
+	adapter, err := sshInterfaceAdapter(platform)
+	if err != nil {
+		return "", "", err
+	}
 	name := strings.TrimSpace(config.Name)
 	if err := validateCLIIdentifier(name, "ensure.name"); err != nil {
 		return "", "", err
@@ -98,7 +109,7 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 	if err != nil {
 		return output, "ensure interface " + name, fmt.Errorf("discover interface %q over SSH: %w", name, err)
 	}
-	current, err := parseIOSXRInterfaceState(output, name)
+	current, err := adapter.parse(output, name)
 	if err != nil {
 		return output, "ensure interface " + name, err
 	}
@@ -120,13 +131,13 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 			)
 		}
 	}
-	apply := iosXRInterfaceCommands(name, desiredEnabled, config.Description)
+	apply := adapter.commands(name, desiredEnabled, config.Description)
 	rollbackDescription := current.Description
 	if config.Description != nil && rollbackDescription == nil {
 		empty := ""
 		rollbackDescription = &empty
 	}
-	rollback := iosXRInterfaceCommands(name, boolValue(current.Enabled), rollbackDescription)
+	rollback := adapter.commands(name, boolValue(current.Enabled), rollbackDescription)
 	if !changed {
 		apply, rollback = nil, nil
 	}
@@ -153,7 +164,7 @@ func executeSSHInterfaceEnsure(ctx *stepExecutionContext, executor sshEnsureComm
 		cause := fmt.Errorf("verify interface %q over SSH: %w", name, err)
 		return failSSHEnsure(executor, plan, display, verifyOutput, cause)
 	}
-	verified, err := parseIOSXRInterfaceState(verifyOutput, name)
+	verified, err := adapter.parse(verifyOutput, name)
 	if err != nil {
 		return failSSHEnsure(executor, plan, display, verifyOutput, err)
 	}
@@ -177,11 +188,30 @@ func desiredInterfaceEnabled(state string) (bool, error) {
 	}
 }
 
+func sshInterfaceAdapter(platform string) (sshInterfacePlatformAdapter, error) {
+	switch platform {
+	case "cisco_iosxr":
+		return sshInterfacePlatformAdapter{parse: parseIOSXRInterfaceState, commands: iosXRInterfaceCommands}, nil
+	case "arista_eos":
+		return sshInterfacePlatformAdapter{parse: parseEOSInterfaceState, commands: eosInterfaceCommands}, nil
+	default:
+		return sshInterfacePlatformAdapter{}, fmt.Errorf("SSH interface ensure is not supported for platform %q", platform)
+	}
+}
+
 func parseIOSXRInterfaceState(output, name string) (sshInterfaceState, error) {
+	return parseCLIInterfaceState(output, name, "IOS XR")
+}
+
+func parseEOSInterfaceState(output, name string) (sshInterfaceState, error) {
+	return parseCLIInterfaceState(output, name, "EOS")
+}
+
+func parseCLIInterfaceState(output, name, platform string) (sshInterfaceState, error) {
 	linePattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` is (.*?), line protocol is .*?\r?$`)
 	match := linePattern.FindStringSubmatch(output)
 	if len(match) != 2 {
-		return sshInterfaceState{}, fmt.Errorf("interface %q was not found in IOS XR show output", name)
+		return sshInterfaceState{}, fmt.Errorf("interface %q was not found in %s show output", name, platform)
 	}
 	enabled := !strings.EqualFold(strings.TrimSpace(match[1]), "administratively down")
 	state := sshInterfaceState{Exists: true, Enabled: &enabled}
@@ -217,7 +247,27 @@ func iosXRInterfaceCommands(name string, enabled bool, description *string) []st
 	return append(commands, "commit", "end")
 }
 
+func eosInterfaceCommands(name string, enabled bool, description *string) []string {
+	commands := []string{"configure terminal", "interface " + name}
+	if description != nil {
+		if *description == "" {
+			commands = append(commands, " no description")
+		} else {
+			commands = append(commands, " description "+*description)
+		}
+	}
+	if enabled {
+		commands = append(commands, " no shutdown")
+	} else {
+		commands = append(commands, " shutdown")
+	}
+	return append(commands, "end", "write memory")
+}
+
 func executeSSHStaticRouteEnsure(ctx *stepExecutionContext, executor sshEnsureCommandExecutor, platform string, config EnsureConfig) (string, string, error) {
+	if platform != "cisco_iosxr" {
+		return "", "", fmt.Errorf("SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr", platform)
+	}
 	prefix := strings.TrimSpace(config.Prefix)
 	if prefix == "" {
 		prefix = strings.TrimSpace(config.Name)
