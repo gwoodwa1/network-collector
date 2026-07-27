@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/reporting"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 	"golang.org/x/term"
 )
@@ -79,6 +80,34 @@ func main() {
 	}
 	if strings.TrimSpace(eventsFile) != "" {
 		config.Output.EventsFile = eventsFile
+	}
+	reportLogoFolder := strings.TrimSpace(config.Report.LogoFolder)
+	if reportLogoFolder != "" && !filepath.IsAbs(reportLogoFolder) {
+		reportLogoFolder = filepath.Join(config.baseDir, reportLogoFolder)
+	}
+	if config.Report.Enabled {
+		format := strings.ToLower(strings.TrimSpace(config.Report.Format))
+		if format != "" && format != "html" {
+			slog.Error("invalid report configuration", "error", "report.format currently supports only html")
+			os.Exit(1)
+		}
+		templateName := strings.ToLower(strings.TrimSpace(config.Report.Template))
+		if templateName != "" && templateName != "professional" {
+			slog.Error("invalid report configuration", "error", "report.template currently supports only professional")
+			os.Exit(1)
+		}
+		if strings.TrimSpace(config.Output.SummaryFile) == "" {
+			config.Output.SummaryFile = "results.json"
+		}
+		if strings.TrimSpace(config.Output.EventsFile) == "" {
+			config.Output.EventsFile = "events.jsonl"
+		}
+		if reportErr := reporting.ValidateBranding(reporting.Config{
+			LogoFolder: reportLogoFolder, HeaderLogo: config.Report.HeaderLogo, FooterLogo: config.Report.FooterLogo,
+		}); reportErr != nil {
+			slog.Error("invalid report branding", "error", reportErr)
+			os.Exit(1)
+		}
 	}
 
 	inventory, err := loadOptionalInventory(config.InventoryFile, configFile)
@@ -241,8 +270,9 @@ func main() {
 		slog.Info("recording structured output", "run_id", runID, "directory", runDir)
 	}
 	events := &eventDispatcher{runID: runID}
+	eventPath := ""
 	if configured := strings.TrimSpace(config.Output.EventsFile); configured != "" {
-		eventPath := configured
+		eventPath = configured
 		if !filepath.IsAbs(eventPath) && runDir != "" {
 			eventPath = filepath.Join(runDir, eventPath)
 		}
@@ -323,8 +353,9 @@ func main() {
 			outcomes = append(outcomes, deviceOutcome{Hostname: result.hostname, IP: result.ip, Failed: result.failed, Duration: result.duration})
 		}
 	}
+	summaryPath := ""
 	if runDir != "" {
-		summaryPath, err := writeRunSummary(config.Output, runDir, runSummary{
+		summaryPath, err = writeRunSummary(config.Output, runDir, runSummary{
 			RunID: runID, Playbook: config.NamePlaybook, StartedAt: runStarted, CompletedAt: time.Now(),
 			Failed: runFailed, Validations: aggregated, Artifacts: artifacts, Devices: outcomes,
 		})
@@ -338,6 +369,21 @@ func main() {
 	failed := runFailed
 	events.emit(lifecycleEvent{Type: "run.completed", Failed: &failed, Data: map[string]interface{}{"duration_ns": time.Since(runStarted).Nanoseconds(), "device_results": len(deviceResults)}})
 	events.close()
+	reportFailed := false
+	if config.Report.Enabled {
+		reportPath, reportErr := reporting.Generate(reporting.Config{
+			RunDir: runDir, SummaryFile: summaryPath, EventsFile: eventPath,
+			Output: config.Report.Output, Title: config.Report.Title,
+			ChangeReference: config.Report.ChangeReference, LogoFolder: reportLogoFolder,
+			HeaderLogo: config.Report.HeaderLogo, FooterLogo: config.Report.FooterLogo,
+		})
+		if reportErr != nil {
+			reportFailed = true
+			slog.Error("error generating change report", "error", reportErr)
+		} else {
+			slog.Info("wrote change report", "path", reportPath)
+		}
+	}
 
 	// Emit aggregated JSON if requested
 	if jsonOut {
@@ -348,6 +394,9 @@ func main() {
 	}
 
 	// Exit non-zero if any validation failed or errored and flag set
+	if reportFailed {
+		os.Exit(1)
+	}
 	if failOnFail {
 		if runFailed {
 			os.Exit(2)

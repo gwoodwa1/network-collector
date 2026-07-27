@@ -145,3 +145,10 @@ output:
   save_parsed: true
   summary_file: results.json
   events_file: events.jsonl
+
+report:
+  enabled: true
+  format: html
+  template: professional
+  output: guarded-new-path-change-report.html
+  title: Guarded new path provisioning

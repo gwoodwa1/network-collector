@@ -262,6 +262,7 @@ type Config struct {
 	ParsersFile   string                    `mapstructure:"parsers_file" yaml:"parsers_file"`
 	Execution     ExecutionConfig           `mapstructure:"execution" yaml:"execution"`
 	Output        OutputConfig              `mapstructure:"output" yaml:"output"`
+	Report        ReportConfig              `mapstructure:"report" yaml:"report"`
 	SSH           []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
 	NETCONF       []DeviceConfig            `mapstructure:"netconf" yaml:"netconf"`
 	LocalSteps    []StepConfig              `mapstructure:"local_steps" yaml:"local_steps"`
@@ -273,6 +274,18 @@ type Config struct {
 	Credentials   CredentialProviderConfig  `mapstructure:"credentials" yaml:"credentials"`
 	baseDir       string
 	checkMode     bool
+}
+
+type ReportConfig struct {
+	Enabled         bool   `mapstructure:"enabled" yaml:"enabled"`
+	Format          string `mapstructure:"format" yaml:"format"`
+	Template        string `mapstructure:"template" yaml:"template"`
+	Output          string `mapstructure:"output" yaml:"output"`
+	Title           string `mapstructure:"title" yaml:"title"`
+	ChangeReference string `mapstructure:"change_reference" yaml:"change_reference"`
+	LogoFolder      string `mapstructure:"logo_folder" yaml:"logo_folder"`
+	HeaderLogo      string `mapstructure:"header_logo" yaml:"header_logo"`
+	FooterLogo      string `mapstructure:"footer_logo" yaml:"footer_logo"`
 }
 
 type CredentialProviderConfig struct {
@@ -459,6 +472,7 @@ type stepExecutionContext struct {
 	sshEnsure      sshEnsureCommandExecutor
 	gnmi           *GNMIConnectionConfig
 	checkMode      bool
+	reportEnabled  bool
 }
 
 type approvalAnswer struct {

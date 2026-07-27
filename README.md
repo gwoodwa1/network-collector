@@ -1572,6 +1572,69 @@ When `events_file` is set, lifecycle events are appended as JSON Lines. Relative
 
 `event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.
 
+### Professional HTML change reports
+
+Enable the post-run reporter directly from a workbook:
+
+```yaml
+report:
+  enabled: true
+  format: html
+  template: professional
+  output: change-report.html
+  title: Core path change
+  change_reference: CHG-2026-0042
+  logo_folder: branding
+  header_logo: company-header.png
+  footer_logo: company-footer.png
+```
+
+The report is generated only after `results.json` and the final lifecycle
+event have been written. Enabling it automatically enables those two evidence
+files when their names are not configured. Declarative `ensure` plans are
+retained as structured report evidence even when global `save_raw` is false;
+this does not enable capture of unrelated raw command output.
+
+The built-in `professional` template is colourful, responsive,
+print-friendly, and self-contained. It selects structured run outcomes,
+device results, desired-state plans, validation failures and recovery, gNMI
+guard triggers, timelines, and artifact references. Device content is HTML
+escaped, and optional evidence that cannot be decoded appears as a report
+warning rather than aborting the report.
+
+`logo_folder` resolves relative to the workbook. Logos must be PNG filenames
+directly inside that folder, may not use absolute paths or `..`, and are
+limited to 2 MiB and 4096×4096 pixels each. They are embedded as data URLs, so the resulting HTML
+does not depend on the branding directory after generation. If
+`header_logo`/`footer_logo` are omitted, the reporter uses `header.png` and
+`footer.png` when those files exist. The same company image can be used in
+both positions:
+
+```yaml
+report:
+  enabled: true
+  logo_folder: branding
+  header_logo: company.png
+  footer_logo: company.png
+```
+
+The same engine is available as an independent command for regenerating a
+report without contacting devices:
+
+```bash
+go run ./cmd/reporter \
+  --run-dir artifacts/run-20260727T120000 \
+  --output change-report.html \
+  --title "Core path change" \
+  --change-reference CHG-2026-0042 \
+  --logo-folder ./branding \
+  --header-logo company.png \
+  --footer-logo company.png
+```
+
+The reporter reads only the supplied run bundle. Artifact references outside
+the run directory are not opened.
+
 ### Reusable orchestration package
 
 The CLI's inventory targeting and device scheduling are available to other Go programs through `pkg/orchestrator`. The package provides:

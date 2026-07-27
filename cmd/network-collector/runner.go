@@ -120,6 +120,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		netconf:        netconfExecutor,
 		gnmi:           device.GNMI,
 		checkMode:      config.checkMode,
+		reportEnabled:  config.Report.Enabled,
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt
@@ -213,8 +214,9 @@ func runPlaybookLocalSteps(steps []StepConfig, config Config, jsonOut bool, pars
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers,
 		configBaseDir: config.baseDir,
 		output:        config.Output, runDir: runDir, deviceIndex: index, artifacts: &result.artifacts,
-		events:    events,
-		checkMode: config.checkMode,
+		events:        events,
+		checkMode:     config.checkMode,
+		reportEnabled: config.Report.Enabled,
 	}
 
 	for _, step := range steps {

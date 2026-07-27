@@ -104,6 +104,7 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 	}
 	enabled := ctx.output.SaveRaw
 	extension := "raw.txt"
+	artifactKind := kind
 	var override *bool
 	if step.Output != nil {
 		override = step.Output.SaveRaw
@@ -118,6 +119,12 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 	if kind == "drift" {
 		enabled = true
 		extension = "drift.json"
+		override = nil
+	}
+	if kind == "raw" && step.Ensure != nil && ctx.reportEnabled {
+		enabled = true
+		extension = "plan.json"
+		artifactKind = "plan"
 		override = nil
 	}
 	if !stepOutputEnabled(enabled, override) {
@@ -137,10 +144,10 @@ func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName strin
 	}
 	if ctx.artifacts != nil {
 		*ctx.artifacts = append(*ctx.artifacts, outputArtifact{
-			Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Attempt: attempt, Kind: kind, Path: path,
+			Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Attempt: attempt, Kind: artifactKind, Path: path,
 		})
 	}
-	ctx.events.emit(lifecycleEvent{Type: "artifact.written", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"attempt": attempt, "kind": kind, "path": path}})
+	ctx.events.emit(lifecycleEvent{Type: "artifact.written", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Data: map[string]interface{}{"attempt": attempt, "kind": artifactKind, "path": path}})
 	return nil
 }
 

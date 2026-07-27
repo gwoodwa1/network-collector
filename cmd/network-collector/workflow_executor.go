@@ -1153,6 +1153,13 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				output, err = (*client).Execute(cmd)
 			}
 			if err != nil {
+				if step.Ensure != nil && ctx.reportEnabled && strings.TrimSpace(output) != "" {
+					if artifactErr := saveStepArtifact(ctx, step, stepName, attempt, "raw", output); artifactErr != nil {
+						*ctx.runFailed = true
+						slog.Error("error saving failed ensure plan", "hostname", ctx.hostname, "step", stepName, "error", artifactErr)
+						writeSessionf(ctx.sessionLog, "[step:%s] report evidence error: %v\n", stepName, artifactErr)
+					}
+				}
 				if step.Local == nil && step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
 					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
