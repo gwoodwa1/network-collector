@@ -61,7 +61,10 @@ func prepareRunOutput(config OutputConfig, runID string) (string, error) {
 	if directory == "" {
 		directory = "artifacts"
 	}
-	runDir := filepath.Join(directory, runID)
+	runDir, err := resolveWriteWithin(".", filepath.Join(directory, runID))
+	if err != nil {
+		return "", fmt.Errorf("resolve output directory: %w", err)
+	}
 	if err := os.MkdirAll(runDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
@@ -163,9 +166,9 @@ func writeRunSummary(config OutputConfig, runDir string, summary runSummary) (st
 	if filename == "" {
 		return "", nil
 	}
-	path := filename
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(runDir, path)
+	path, err := resolveWriteWithin(runDir, filename)
+	if err != nil {
+		return "", fmt.Errorf("resolve summary output: %w", err)
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

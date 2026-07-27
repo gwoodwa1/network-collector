@@ -268,9 +268,10 @@ func main() {
 	events := &eventDispatcher{runID: runID}
 	eventPath := ""
 	if configured := strings.TrimSpace(config.Output.EventsFile); configured != "" {
-		eventPath = configured
-		if !filepath.IsAbs(eventPath) && runDir != "" {
-			eventPath = filepath.Join(runDir, eventPath)
+		eventPath, err = resolveWriteWithin(runDir, configured)
+		if err != nil {
+			slog.Error("error resolving lifecycle event output", "path", configured, "error", err)
+			os.Exit(1)
 		}
 		sink, sinkErr := newJSONLEventSink(eventPath)
 		if sinkErr != nil {

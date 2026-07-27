@@ -371,6 +371,17 @@ func applyDriftCheck(ctx *stepExecutionContext, step StepConfig, stepName, curre
 		baselinePath = filepath.Join(directory, ".baselines", sanitizeLogName(ctx.hostname), sanitizeLogName(stepName)+".json")
 		updateBaseline = true
 	}
+	resolvedBaseline, resolveErr := resolveReadWithin(ctx.configBaseDir, baselinePath)
+	if resolveErr != nil && !os.IsNotExist(resolveErr) {
+		return fmt.Errorf("resolve drift baseline: %w", resolveErr)
+	}
+	if resolveErr != nil && updateBaseline {
+		resolvedBaseline, resolveErr = resolveWriteWithin(ctx.configBaseDir, baselinePath)
+	}
+	if resolveErr != nil {
+		return fmt.Errorf("resolve drift baseline: %w", resolveErr)
+	}
+	baselinePath = resolvedBaseline
 	baseline, err := os.ReadFile(baselinePath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read drift baseline: %w", err)

@@ -33,8 +33,9 @@ func enrichmentExpression(config EnrichmentConfig, baseDir string) (string, erro
 	if file == "" {
 		return "", fmt.Errorf("enrich requires expression or expression_file")
 	}
-	if !filepath.IsAbs(file) && strings.TrimSpace(baseDir) != "" {
-		file = filepath.Join(baseDir, file)
+	file, err := resolveReadWithin(baseDir, file)
+	if err != nil {
+		return "", fmt.Errorf("resolve enrichment expression %q: %w", config.ExpressionFile, err)
 	}
 	info, err := os.Stat(file)
 	if err != nil {

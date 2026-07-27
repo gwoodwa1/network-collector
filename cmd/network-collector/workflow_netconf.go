@@ -43,9 +43,9 @@ func renderNETCONFStep(config NETCONFStepConfig, vars map[string]string, baseDir
 		return NETCONFStepConfig{}, fmt.Errorf("netconf.payload and netconf.payload_file are mutually exclusive")
 	}
 	if config.PayloadFile != "" {
-		path := config.PayloadFile
-		if !filepath.IsAbs(path) && strings.TrimSpace(baseDir) != "" {
-			path = filepath.Join(baseDir, path)
+		path, pathErr := resolveReadWithin(baseDir, config.PayloadFile)
+		if pathErr != nil {
+			return NETCONFStepConfig{}, fmt.Errorf("resolve NETCONF payload_file %q: %w", config.PayloadFile, pathErr)
 		}
 		payload, readErr := os.ReadFile(path)
 		if readErr != nil {
