@@ -1808,8 +1808,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 27 {
-		t.Fatalf("expected twenty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 34 {
+		t.Fatalf("expected thirty-four vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1825,8 +1825,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 27 {
-		t.Fatalf("expected twenty-seven loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 34 {
+		t.Fatalf("expected thirty-four loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -1835,6 +1835,27 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	gnmiEvents := loaded["27-gnmi-event-actions.yaml"].SSH[0].Steps[0].GNMISubscribe
 	if gnmiEvents == nil || len(gnmiEvents.Triggers) != 2 || gnmiEvents.Triggers[0].Event != "update" || gnmiEvents.Triggers[1].Event != "delete" {
 		t.Fatalf("gNMI event example is incomplete: %+v", gnmiEvents)
+	}
+	trafficGuard := loaded["29-gnmi-interface-traffic-guard.yaml"].SSH[0].Steps[0].GNMISubscribe
+	if trafficGuard == nil || len(trafficGuard.Triggers) != 2 || !trafficGuard.Triggers[0].CounterRate || trafficGuard.Triggers[0].BaselineSamples != 3 || trafficGuard.Triggers[0].MaxDropPercent != 10 || !trafficGuard.Triggers[0].Fail {
+		t.Fatalf("gNMI traffic guard example is incomplete: %+v", trafficGuard)
+	}
+	cpuMonitor := loaded["30-gnmi-cpu-monitor.yaml"].SSH[0].Steps[0].GNMISubscribe
+	if cpuMonitor == nil || len(cpuMonitor.Triggers) != 1 || cpuMonitor.Triggers[0].Threshold == nil || *cpuMonitor.Triggers[0].Threshold != 80 || cpuMonitor.Triggers[0].Condition != "gte" {
+		t.Fatalf("gNMI CPU monitor example is incomplete: %+v", cpuMonitor)
+	}
+	guardedProvision := loaded["32-gnmi-guarded-new-path-provision.yaml"]
+	guardedParallel := guardedProvision.SSH[0].Steps[1].Parallel
+	if guardedParallel == nil || len(guardedParallel.Steps) != 2 || guardedParallel.Steps[0].GNMISubscribe == nil || len(guardedParallel.Steps[0].GNMISubscribe.Triggers) != 4 || guardedParallel.Steps[1].Block == nil || guardedParallel.Steps[1].Block.Steps[0].WaitSeconds != 40 || len(guardedProvision.Workflows["emergency-new-path-rollback"].Steps) != 2 {
+		t.Fatalf("guarded new-path provisioning example is incomplete: %+v", guardedProvision)
+	}
+	opticsGuard := loaded["33-gnmi-all-interface-light-level-guard.yaml"].SSH[0].Steps[0].GNMISubscribe
+	if opticsGuard == nil || len(opticsGuard.Triggers) != 2 || opticsGuard.Triggers[0].MaxDrop == nil || *opticsGuard.Triggers[0].MaxDrop != 1 || opticsGuard.Triggers[0].BaselineSamples != 3 || !opticsGuard.Triggers[0].Once || !opticsGuard.Triggers[0].Fail {
+		t.Fatalf("gNMI optics guard example is incomplete: %+v", opticsGuard)
+	}
+	changeMonitor := loaded["34-gnmi-change-health-monitor.yaml"].SSH[0].Steps[0].GNMISubscribe
+	if changeMonitor == nil || len(changeMonitor.Paths) != 6 || len(changeMonitor.Triggers) != 4 || !changeMonitor.Triggers[2].CounterRate || changeMonitor.Triggers[2].Threshold == nil || *changeMonitor.Triggers[2].Threshold != 0 || changeMonitor.Triggers[2].Condition != "gt" || !changeMonitor.Triggers[3].Fail {
+		t.Fatalf("combined gNMI change monitor example is incomplete: %+v", changeMonitor)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {

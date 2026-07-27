@@ -1,0 +1,46 @@
+name_playbook: gnmi-new-path-turnup
+inventory_file: ../inventory/gnmi-events.yaml
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: wait-for-new-path
+        message: Monitor only the newly provisioned uplink and verify routing as soon as it becomes operational. Example 32 adds protection for existing traffic-bearing paths during provisioning.
+        gnmi_subscribe:
+          paths:
+            - /interfaces/interface[name=FourHundredGigE0/0/0/10]/state/oper-status
+            - /network-instances/network-instance[name=default]/afts/ipv4-unicast
+          mode: stream
+          stream_mode: on_change
+          duration_seconds: 600
+          max_updates: 1000
+          triggers:
+            - name: new-uplink-is-up
+              event: update
+              path: /interfaces/interface[name=FourHundredGigE0/0/0/10]/state/oper-status
+              value_regex: '^(UP|up)$'
+              once: true
+              steps:
+                - name: verify-new-uplink-over-ssh
+                  cmd: show interfaces FourHundredGigE0/0/0/10
+                - name: verify-routing-over-netconf
+                  netconf:
+                    operation: get
+                    payload: |
+                      <filter type="subtree">
+                        <network-instances xmlns="http://openconfig.net/yang/network-instance"/>
+                      </filter>
+
+            - name: expected-prefix-installed
+              event: update
+              path_regex: '/ipv4-entry\[prefix=203\.0\.113\.0/24\]'
+              once: true
+              steps:
+                - name: test-forwarding-over-ssh
+                  cmd: ping 203.0.113.1 count 5
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl

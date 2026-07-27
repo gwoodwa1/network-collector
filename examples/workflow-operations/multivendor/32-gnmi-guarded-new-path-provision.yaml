@@ -1,0 +1,144 @@
+name_playbook: gnmi-guarded-new-path-provision
+inventory_file: ../inventory/gnmi-events.yaml
+fail_on_fail: true
+
+# The new path and the protected production paths are deliberately different.
+vars:
+  new_interface: FourHundredGigE0/0/0/10
+  protected_interface_a: FourHundredGigE0/0/0/0
+  protected_interface_b: FourHundredGigE0/0/0/1
+
+workflows:
+  emergency-new-path-rollback:
+    steps:
+      - name: immediately-disable-new-interface
+        message: "Protected traffic or CPU breached its guard; disabling {{new_interface}} immediately."
+        cmd: |
+          configure terminal
+          interface {{new_interface}}
+          shutdown
+          commit
+          end
+
+      - name: collect-protected-path-diagnostics
+        cmd: |
+          show interfaces {{protected_interface_a}}
+          show interfaces {{protected_interface_b}}
+          show processes cpu
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: authorize-guarded-new-path
+        approval:
+          message: Provision {{new_interface}} while protecting {{protected_interface_a}} and {{protected_interface_b}}?
+          timeout_seconds: 300
+
+      - name: monitor-existing-paths-while-provisioning-new-one
+        parallel:
+          max_parallel: 2
+          steps:
+            # Branch 1 remains active throughout the change. It watches
+            # traffic on two EXISTING production interfaces, not the new
+            # interface being provisioned by branch 2.
+            - name: protect-existing-production-paths
+              gnmi_subscribe:
+                paths:
+                  - /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+                  - /interfaces/interface[name=FourHundredGigE0/0/0/1]/state/counters/in-octets
+                  - /components/component[name=CPU0]/cpu/utilization/state/instant
+                  - /interfaces/interface[name=FourHundredGigE0/0/0/10]/state/oper-status
+                mode: stream
+                stream_mode: sample
+                sample_interval_seconds: 10
+                duration_seconds: 180
+                max_updates: 2000
+                triggers:
+                  - name: protected-interface-a-dropped-by-10-percent
+                    event: update
+                    path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+                    counter_rate: true
+                    baseline_samples: 3
+                    max_drop_percent: 10
+                    once: true
+                    fail: true
+                    steps:
+                      - name: rollback-new-path-for-interface-a
+                        use: emergency-new-path-rollback
+
+                  - name: protected-interface-b-dropped-by-10-percent
+                    event: update
+                    path: /interfaces/interface[name=FourHundredGigE0/0/0/1]/state/counters/in-octets
+                    counter_rate: true
+                    baseline_samples: 3
+                    max_drop_percent: 10
+                    once: true
+                    fail: true
+                    steps:
+                      - name: rollback-new-path-for-interface-b
+                        use: emergency-new-path-rollback
+
+                  - name: cpu-exceeded-85-percent
+                    event: update
+                    path: /components/component[name=CPU0]/cpu/utilization/state/instant
+                    condition: gt
+                    threshold: 85
+                    once: true
+                    fail: true
+                    steps:
+                      - name: rollback-new-path-for-cpu
+                        use: emergency-new-path-rollback
+
+                  - name: new-interface-became-up
+                    event: update
+                    path: /interfaces/interface[name=FourHundredGigE0/0/0/10]/state/oper-status
+                    value_regex: '^(UP|up)$'
+                    once: true
+                    steps:
+                      - name: verify-new-interface
+                        cmd: show interfaces {{new_interface}}
+
+            # Branch 2 waits long enough for the monitor to receive one
+            # starting counter plus three 10-second rate samples. It then
+            # provisions the distinct new interface.
+            - name: provision-new-path-after-baseline
+              block:
+                steps:
+                  - name: establish-protected-traffic-baselines
+                    wait_seconds: 40
+
+                  - name: enable-new-interface
+                    cmd: |
+                      configure terminal
+                      interface {{new_interface}}
+                      description guarded-new-path
+                      no shutdown
+                      commit
+                      end
+
+                  - name: allow-new-path-to-converge
+                    wait_seconds: 20
+
+                  - name: verify-new-path-routing
+                    cmd: show route 203.0.113.0/24
+                    validation:
+                      extractor: regex
+                      pattern: '203\.0\.113\.0/24'
+                      condition: contains
+                      expected: 203.0.113.0/24
+
+                rollback:
+                  - name: disable-new-interface-after-provisioning-failure
+                    cmd: |
+                      configure terminal
+                      interface {{new_interface}}
+                      shutdown
+                      commit
+                      end
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl

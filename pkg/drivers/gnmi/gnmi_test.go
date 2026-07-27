@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/openconfig/gnmic/pkg/api/path"
 	"github.com/openconfig/gnmic/pkg/api/target"
 	"google.golang.org/grpc"
 )
@@ -123,5 +124,16 @@ func TestTLSOptionsKeepPlaintextAndSkipVerifySeparate(t *testing.T) {
 	}
 	if client.CAFile != "ca.pem" || client.CertFile != "client.pem" || client.KeyFile != "client-key.pem" || client.ServerName != "router.example.net" {
 		t.Fatalf("unexpected TLS credentials: %+v", client.TLSConfig)
+	}
+}
+
+func TestWildcardOpticalSubscriptionPathsParse(t *testing.T) {
+	for _, value := range []string{
+		"/components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/input-power/instant",
+		"/components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/output-power/instant",
+	} {
+		if _, err := path.ParsePath(value); err != nil {
+			t.Fatalf("failed to parse wildcard optical path %q: %v", value, err)
+		}
 	}
 }

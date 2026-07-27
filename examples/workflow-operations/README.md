@@ -41,6 +41,13 @@ easier to read.
 | `sros/25-nokia-sros-cli-port.yaml` | SR OS model-driven CLI port turn-up, commit, verification, rollback |
 | `sros/26-nokia-sros-netconf-port.yaml` | SR OS native YANG candidate edit, commit, verification, rollback |
 | `multivendor/27-gnmi-event-actions.yaml` | gNMI on-change update/delete triggers with immediate nested SSH and NETCONF actions |
+| `multivendor/28-gnmi-new-path-turnup.yaml` | new-interface and route turn-up events with SSH and NETCONF verification |
+| `multivendor/29-gnmi-interface-traffic-guard.yaml` | sampled interface counters converted to rates with a three-sample baseline and 10% drop guard |
+| `multivendor/30-gnmi-cpu-monitor.yaml` | sampled CPU telemetry with a numeric alarm threshold and SSH diagnostics |
+| `multivendor/31-gnmi-combined-change-monitor.yaml` | one bounded change-window monitor for link state, traffic-rate degradation, and CPU |
+| `multivendor/32-gnmi-guarded-new-path-provision.yaml` | parallel new-path provisioning while two different production interfaces are baselined and protected, with immediate rollback |
+| `multivendor/33-gnmi-all-interface-light-level-guard.yaml` | per-interface and per-channel RX/TX optical baselines with an absolute 1 dB drop guard |
+| `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process change monitor combining all-channel optics, packet discards, and interface errors |
 
 Run one example from the repository root:
 
@@ -108,6 +115,10 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 `11-reload-and-reconnect.yaml` is intentionally a lab-only template. It demonstrates a command that disconnects before returning to the prompt, bounded TCP/SSH probing, a post-port-open boot delay, reconnection, post-reload validation, and nested `on_pass` steps. Replace and independently test the reload command before using it on real equipment.
 
 `12-multivendor-facts.yaml` uses a separate EOS/Junos inventory. The same five fact subsets are normalized into the existing OpenConfig-shaped result while preserving the complete native TextFSM records. NETCONF remains first in the transport order and each unsupported or absent model falls back independently to the vendor CLI parser.
+
+The gNMI monitoring examples use OpenConfig-style paths and documentation-only targets. Start the traffic guard before the change and allow one counter interval plus all configured `baseline_samples` to complete before changing the network. With the supplied 10-second interval and three baseline rates, allow roughly 40 seconds. Numeric baselines are maintained independently for every canonical event path, allowing the optics example to use a regular expression across all returned components and channels. Example 32 makes the intended topology explicit: interfaces `0/0/0/0` and `0/0/0/1` are existing production paths being protected while the distinct interface `0/0/0/10` is provisioned. CPU component names, operational and optical paths, CLI diagnostics, and the spelling/case of interface status values vary by platform and must be adjusted for the target.
+
+Example 34 is deliberately independent of the change itself. Start it in one terminal, allow about 40 seconds for optical baselines and counter starting values, then run any routine-change workbook in another terminal. The monitoring process exits non-zero when `--fail-on-fail` is used or `fail_on_fail: true` remains configured and any optical, discard, or error guard fires.
 
 `13-structured-drift.yaml` shows both baseline modes. `baseline: previous` maintains rolling state automatically; a normal path points to an explicitly approved JSON baseline. Drift compares parsed JSON rather than unstable CLI formatting and always writes a `drift.json` artifact. `fail_on_change` decides whether detected changes fail the device run.
 

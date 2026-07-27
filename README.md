@@ -1138,7 +1138,85 @@ Trigger `event` is `update` (the default) or `delete`. Match an exact canonical 
 
 Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, local commands, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
 
+For numeric telemetry such as CPU, add `condition` and `threshold`. Supported conditions are `gt`, `gte`, `lt`, `lte`, `eq`, and `neq`:
+
+```yaml
+- name: cpu-high
+  event: update
+  path: /components/component[name=CPU0]/cpu/utilization/state/instant
+  condition: gte
+  threshold: 80
+  once: true
+  fail: true
+  steps:
+    - name: collect-cpu-detail
+      cmd: show processes cpu
+```
+
+Interface octet values are counters rather than utilization rates. Set `counter_rate: true` to calculate the change per second from consecutive gNMI timestamps. `baseline_samples` then averages the first rates, and `max_drop_percent` fires when a later rate falls below that baseline by more than the configured percentage:
+
+```yaml
+- name: ingress-dropped-more-than-10-percent
+  event: update
+  path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+  counter_rate: true
+  baseline_samples: 3
+  max_drop_percent: 10
+  once: true
+  fail: true
+  steps:
+    - name: capture-interface
+      message: "Rate {{gnmi_metric_value}} octets/s is below {{gnmi_threshold_value}}; baseline {{gnmi_baseline_value}}."
+      cmd: show interfaces FourHundredGigE0/0/0/0
+```
+
+The first counter sample establishes the starting counter; the following `baseline_samples` rates establish the baseline. Counter resets are ignored and restart rate measurement. Every canonical event path has independent rate, baseline, and `once` state, whether selected with an exact path or regular expression. Setting `fail: true` records the alarm as a workbook failure while still running its diagnostic steps. Numeric actions additionally receive `{{gnmi_metric_value}}`, `{{gnmi_baseline_value}}`, and `{{gnmi_threshold_value}}`.
+
+For optical power in dBm, use `max_drop` rather than `max_drop_percent`. dBm is logarithmic and commonly negative, so this example fires when any matched channel falls more than 1 dB below its own three-sample baseline:
+
+```yaml
+- name: receive-light-dropped
+  event: update
+  path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/input-power/instant$'
+  baseline_samples: 3
+  max_drop: 1.0
+  once: true
+  fail: true
+  steps:
+    - name: collect-optics
+      message: "{{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm."
+      cmd: show controllers optics
+```
+
+Baselines and `once` state are maintained independently for every canonical event path. A regular-expression trigger can therefore cover all returned interfaces and channels without combining their readings.
+
 Streaming modes are `target_defined`, `on_change`, and `sample`. For `sample`, also set `sample_interval_seconds`. Use `mode: once` for a synchronized snapshot without a duration. See [`examples/workflow-operations/multivendor/27-gnmi-event-actions.yaml`](examples/workflow-operations/multivendor/27-gnmi-event-actions.yaml) for a complete mixed-transport example.
+
+Additional monitoring examples:
+
+- [`28-gnmi-new-path-turnup.yaml`](examples/workflow-operations/multivendor/28-gnmi-new-path-turnup.yaml) waits for a new uplink and expected route, then verifies them over SSH and NETCONF.
+- [`29-gnmi-interface-traffic-guard.yaml`](examples/workflow-operations/multivendor/29-gnmi-interface-traffic-guard.yaml) protects ingress and egress traffic against a 10% rate drop.
+- [`30-gnmi-cpu-monitor.yaml`](examples/workflow-operations/multivendor/30-gnmi-cpu-monitor.yaml) alarms on an 80% CPU threshold.
+- [`31-gnmi-combined-change-monitor.yaml`](examples/workflow-operations/multivendor/31-gnmi-combined-change-monitor.yaml) monitors interface state, traffic, and CPU together during one bounded change window.
+- [`32-gnmi-guarded-new-path-provision.yaml`](examples/workflow-operations/multivendor/32-gnmi-guarded-new-path-provision.yaml) provisions interface `0/0/0/10` in parallel while protecting existing interfaces `0/0/0/0` and `0/0/0/1`, and immediately disables the new interface if a guard fires.
+- [`33-gnmi-all-interface-light-level-guard.yaml`](examples/workflow-operations/multivendor/33-gnmi-all-interface-light-level-guard.yaml) establishes independent RX/TX light baselines for every returned optical channel and alarms on a 1 dB drop.
+- [`34-gnmi-change-health-monitor.yaml`](examples/workflow-operations/multivendor/34-gnmi-change-health-monitor.yaml) combines all-channel optics, packet discards, and interface errors as a standalone monitor for a separate routine-change run.
+
+To monitor an unrelated routine-change workbook, use two collector processes. Start the monitor first:
+
+```bash
+go run ./cmd/network-collector \
+  --config examples/workflow-operations/multivendor/34-gnmi-change-health-monitor.yaml \
+  --fail-on-fail
+```
+
+Allow approximately 40 seconds for the first counters and three optical baseline samples, then start the normal change from another terminal:
+
+```bash
+go run ./cmd/network-collector --config path/to/routine-change.yaml
+```
+
+The monitor runs for its configured `duration_seconds` independently of the change process. It fails if any RX/TX channel falls more than `max_drop` dB, any interface discard counter increases, or any interface error counter increases. Each canonical path alarms independently and writes its own diagnostic event and session output.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 

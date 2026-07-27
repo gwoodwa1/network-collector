@@ -1272,8 +1272,9 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 	}
 	pathPatterns := make([]*regexp.Regexp, len(triggers))
 	valuePatterns := make([]*regexp.Regexp, len(triggers))
-	numericStates := make([]gnmiNumericTriggerState, len(triggers))
+	numericStates := make([]map[string]*gnmiNumericTriggerState, len(triggers))
 	for index, trigger := range triggers {
+		numericStates[index] = map[string]*gnmiNumericTriggerState{}
 		if len(trigger.Steps) == 0 && !trigger.Fail {
 			return nil, fmt.Errorf("gNMI trigger %q must contain at least one step", trigger.Name)
 		}
@@ -1300,6 +1301,12 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 		if trigger.MaxDropPercent > 0 && condition != "" {
 			return nil, fmt.Errorf("gNMI trigger %q cannot combine max_drop_percent with condition", trigger.Name)
 		}
+		if trigger.MaxDrop != nil && *trigger.MaxDrop <= 0 {
+			return nil, fmt.Errorf("gNMI trigger %q max_drop must be greater than 0", trigger.Name)
+		}
+		if trigger.MaxDrop != nil && (trigger.MaxDropPercent > 0 || condition != "") {
+			return nil, fmt.Errorf("gNMI trigger %q cannot combine max_drop with max_drop_percent or condition", trigger.Name)
+		}
 		if trigger.BaselineSamples < 0 {
 			return nil, fmt.Errorf("gNMI trigger %q baseline_samples cannot be negative", trigger.Name)
 		}
@@ -1321,10 +1328,13 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 		}
 	}
 
-	fired := make([]bool, len(triggers))
+	fired := make([]map[string]bool, len(triggers))
+	for index := range fired {
+		fired[index] = map[string]bool{}
+	}
 	return func(event gnmidriver.Event) error {
 		for index, trigger := range triggers {
-			if trigger.Once && fired[index] {
+			if trigger.Once && fired[index][event.Path] {
 				continue
 			}
 			if event.Initial && !trigger.IncludeInitial {
@@ -1350,7 +1360,12 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 			if valuePatterns[index] != nil && !valuePatterns[index].MatchString(valueText) {
 				continue
 			}
-			metricValue, baselineValue, thresholdValue, ready, err := numericStates[index].match(trigger, event, valueText)
+			state := numericStates[index][event.Path]
+			if state == nil {
+				state = &gnmiNumericTriggerState{}
+				numericStates[index][event.Path] = state
+			}
+			metricValue, baselineValue, thresholdValue, ready, err := state.match(trigger, event, valueText)
 			if err != nil {
 				return fmt.Errorf("gNMI trigger %q: %w", trigger.Name, err)
 			}
@@ -1358,7 +1373,7 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 				continue
 			}
 
-			fired[index] = true
+			fired[index][event.Path] = true
 			eventJSON, err := json.Marshal(event)
 			if err != nil {
 				return err
@@ -1403,7 +1418,7 @@ type gnmiNumericTriggerState struct {
 }
 
 func (state *gnmiNumericTriggerState) match(config GNMITriggerConfig, event gnmidriver.Event, valueText string) (metric, baseline, threshold string, ready bool, err error) {
-	numeric := config.CounterRate || config.MaxDropPercent > 0 || strings.TrimSpace(config.Condition) != ""
+	numeric := config.CounterRate || config.MaxDropPercent > 0 || config.MaxDrop != nil || strings.TrimSpace(config.Condition) != ""
 	if !numeric {
 		return valueText, "", "", true, nil
 	}
@@ -1433,7 +1448,7 @@ func (state *gnmiNumericTriggerState) match(config GNMITriggerConfig, event gnmi
 	}
 	metric = strconv.FormatFloat(metricValue, 'f', 2, 64)
 
-	if config.MaxDropPercent > 0 {
+	if config.MaxDropPercent > 0 || config.MaxDrop != nil {
 		samples := config.BaselineSamples
 		if samples == 0 {
 			samples = 3
@@ -1446,7 +1461,12 @@ func (state *gnmiNumericTriggerState) match(config GNMITriggerConfig, event gnmi
 			}
 			return metric, strconv.FormatFloat(state.baseline, 'f', 2, 64), "", false, nil
 		}
-		limit := state.baseline * (1 - config.MaxDropPercent/100)
+		limit := state.baseline
+		if config.MaxDrop != nil {
+			limit -= *config.MaxDrop
+		} else {
+			limit *= 1 - config.MaxDropPercent/100
+		}
 		baseline = strconv.FormatFloat(state.baseline, 'f', 2, 64)
 		threshold = strconv.FormatFloat(limit, 'f', 2, 64)
 		return metric, baseline, threshold, metricValue < limit, nil

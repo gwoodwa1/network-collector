@@ -1,0 +1,49 @@
+name_playbook: gnmi-interface-traffic-guard
+inventory_file: ../inventory/gnmi-events.yaml
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: protect-critical-interface-traffic
+        message: Protect the existing traffic-bearing interface FourHundredGigE0/0/0/0 while a separate new path is changed. Build a three-sample baseline and fail if ingress or egress drops by more than 10 percent.
+        gnmi_subscribe:
+          paths:
+            - /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+            - /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/out-octets
+          mode: stream
+          stream_mode: sample
+          sample_interval_seconds: 10
+          duration_seconds: 600
+          max_updates: 1000
+          triggers:
+            - name: ingress-rate-dropped
+              event: update
+              path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+              counter_rate: true
+              baseline_samples: 3
+              max_drop_percent: 10
+              once: true
+              fail: true
+              steps:
+                - name: capture-interface-after-ingress-drop
+                  message: "Ingress rate {{gnmi_metric_value}} octets/s is below {{gnmi_threshold_value}}; baseline was {{gnmi_baseline_value}}."
+                  cmd: show interfaces FourHundredGigE0/0/0/0
+
+            - name: egress-rate-dropped
+              event: update
+              path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/out-octets
+              counter_rate: true
+              baseline_samples: 3
+              max_drop_percent: 10
+              once: true
+              fail: true
+              steps:
+                - name: capture-interface-after-egress-drop
+                  message: "Egress rate {{gnmi_metric_value}} octets/s is below {{gnmi_threshold_value}}; baseline was {{gnmi_baseline_value}}."
+                  cmd: show interfaces FourHundredGigE0/0/0/0
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl

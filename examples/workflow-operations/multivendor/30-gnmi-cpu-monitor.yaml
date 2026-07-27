@@ -1,0 +1,34 @@
+name_playbook: gnmi-cpu-monitor
+inventory_file: ../inventory/gnmi-events.yaml
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: monitor-control-plane-cpu
+        gnmi_subscribe:
+          # Adjust the component key and CPU path for the target platform.
+          paths:
+            - /components/component[name=CPU0]/cpu/utilization/state/instant
+          mode: stream
+          stream_mode: sample
+          sample_interval_seconds: 10
+          duration_seconds: 600
+          max_updates: 1000
+          triggers:
+            - name: cpu-at-or-above-80-percent
+              event: update
+              path: /components/component[name=CPU0]/cpu/utilization/state/instant
+              condition: gte
+              threshold: 80
+              once: true
+              fail: true
+              steps:
+                - name: collect-cpu-diagnostics-over-ssh
+                  message: "CPU utilization reached {{gnmi_metric_value}} percent; threshold is {{gnmi_threshold_value}}."
+                  cmd: show processes cpu
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl

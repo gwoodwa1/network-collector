@@ -1,0 +1,84 @@
+name_playbook: gnmi-change-health-monitor
+inventory_file: ../inventory/gnmi-events.yaml
+fail_on_fail: true
+
+# Run this monitoring workbook in a separate collector process. Let it build
+# its baselines, then start the routine-change workbook from another terminal.
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: monitor-optics-drops-and-interface-errors
+        message: Monitor all optical channels and interface counters for the complete change window.
+        gnmi_subscribe:
+          paths:
+            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/input-power/instant
+            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/output-power/instant
+            - /interfaces/interface[name=*]/state/counters/in-discards
+            - /interfaces/interface[name=*]/state/counters/out-discards
+            - /interfaces/interface[name=*]/state/counters/in-errors
+            - /interfaces/interface[name=*]/state/counters/out-errors
+          mode: stream
+          stream_mode: sample
+          sample_interval_seconds: 10
+          duration_seconds: 900
+          max_updates: 20000
+          triggers:
+            - name: receive-light-dropped
+              event: update
+              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/input-power/instant$'
+              baseline_samples: 3
+              max_drop: 1.0
+              once: true
+              fail: true
+              steps:
+                - name: collect-receive-optics
+                  message: "FAIL: RX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                  cmd: show controllers optics
+
+            - name: transmit-light-dropped
+              event: update
+              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/output-power/instant$'
+              baseline_samples: 3
+              max_drop: 1.0
+              once: true
+              fail: true
+              steps:
+                - name: collect-transmit-optics
+                  message: "FAIL: TX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                  cmd: show controllers optics
+
+            # Discards are monotonic counters. Converting them to a rate and
+            # testing for > 0 means any new packet discard fails the monitor.
+            - name: packet-discard-counter-increased
+              event: update
+              path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-discards$'
+              counter_rate: true
+              condition: gt
+              threshold: 0
+              once: true
+              fail: true
+              steps:
+                - name: collect-packet-drop-diagnostics
+                  message: "FAIL: packet discards increased on {{gnmi_event_path}} at {{gnmi_metric_value}} packets/s."
+                  cmd: show interfaces accounting
+
+            # Input/output error counters use the same any-increment policy.
+            - name: interface-error-counter-increased
+              event: update
+              path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-errors$'
+              counter_rate: true
+              condition: gt
+              threshold: 0
+              once: true
+              fail: true
+              steps:
+                - name: collect-interface-error-diagnostics
+                  message: "FAIL: interface errors increased on {{gnmi_event_path}} at {{gnmi_metric_value}} errors/s."
+                  cmd: show interfaces
+
+output:
+  directory: artifacts
+  save_raw: true
+  save_parsed: true
+  summary_file: results.json
+  events_file: events.jsonl

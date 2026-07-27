@@ -103,21 +103,22 @@ type GNMISubscribeConfig struct {
 }
 
 type GNMITriggerConfig struct {
-	Name           string       `mapstructure:"name" yaml:"name"`
-	Event          string       `mapstructure:"event" yaml:"event"`
-	Path           string       `mapstructure:"path" yaml:"path"`
-	PathRegex      string       `mapstructure:"path_regex" yaml:"path_regex"`
-	Value          string       `mapstructure:"value" yaml:"value"`
-	ValueRegex     string       `mapstructure:"value_regex" yaml:"value_regex"`
-	IncludeInitial bool         `mapstructure:"include_initial" yaml:"include_initial"`
-	Once           bool         `mapstructure:"once" yaml:"once"`
-	Condition      string       `mapstructure:"condition" yaml:"condition"`
-	Threshold      *float64     `mapstructure:"threshold" yaml:"threshold"`
-	CounterRate    bool         `mapstructure:"counter_rate" yaml:"counter_rate"`
-	BaselineSamples int         `mapstructure:"baseline_samples" yaml:"baseline_samples"`
-	MaxDropPercent float64      `mapstructure:"max_drop_percent" yaml:"max_drop_percent"`
-	Fail           bool         `mapstructure:"fail" yaml:"fail"`
-	Steps          []StepConfig `mapstructure:"steps" yaml:"steps"`
+	Name            string       `mapstructure:"name" yaml:"name"`
+	Event           string       `mapstructure:"event" yaml:"event"`
+	Path            string       `mapstructure:"path" yaml:"path"`
+	PathRegex       string       `mapstructure:"path_regex" yaml:"path_regex"`
+	Value           string       `mapstructure:"value" yaml:"value"`
+	ValueRegex      string       `mapstructure:"value_regex" yaml:"value_regex"`
+	IncludeInitial  bool         `mapstructure:"include_initial" yaml:"include_initial"`
+	Once            bool         `mapstructure:"once" yaml:"once"`
+	Condition       string       `mapstructure:"condition" yaml:"condition"`
+	Threshold       *float64     `mapstructure:"threshold" yaml:"threshold"`
+	CounterRate     bool         `mapstructure:"counter_rate" yaml:"counter_rate"`
+	BaselineSamples int          `mapstructure:"baseline_samples" yaml:"baseline_samples"`
+	MaxDropPercent  float64      `mapstructure:"max_drop_percent" yaml:"max_drop_percent"`
+	MaxDrop         *float64     `mapstructure:"max_drop" yaml:"max_drop"`
+	Fail            bool         `mapstructure:"fail" yaml:"fail"`
+	Steps           []StepConfig `mapstructure:"steps" yaml:"steps"`
 }
 
 type GNMIConnectionConfig struct {

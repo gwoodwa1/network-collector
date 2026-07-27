@@ -1,0 +1,54 @@
+name_playbook: gnmi-all-interface-light-level-guard
+inventory_file: ../inventory/gnmi-events.yaml
+fail_on_fail: true
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: protect-all-optical-levels-during-change
+        message: Establish a per-interface optical baseline, then fail if receive or transmit power on any channel drops by more than 1 dB.
+        gnmi_subscribe:
+          # These container-style subscription paths request every component
+          # and physical channel. Adjust them to the optical model exposed by
+          # the target platform.
+          paths:
+            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/input-power/instant
+            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/output-power/instant
+          mode: stream
+          stream_mode: sample
+          sample_interval_seconds: 10
+          duration_seconds: 600
+          max_updates: 5000
+          triggers:
+            - name: receive-light-dropped
+              event: update
+              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/input-power/instant$'
+              baseline_samples: 3
+              # Optical dBm is logarithmic and commonly negative, so use an
+              # absolute dB delta rather than max_drop_percent.
+              max_drop: 1.0
+              # once is tracked independently for every canonical event path.
+              once: true
+              fail: true
+              steps:
+                - name: collect-receive-optics-diagnostics
+                  message: "RX light on {{gnmi_event_path}} fell to {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                  cmd: show controllers optics
+
+            - name: transmit-light-dropped
+              event: update
+              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/output-power/instant$'
+              baseline_samples: 3
+              max_drop: 1.0
+              once: true
+              fail: true
+              steps:
+                - name: collect-transmit-optics-diagnostics
+                  message: "TX light on {{gnmi_event_path}} fell to {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                  cmd: show controllers optics
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl

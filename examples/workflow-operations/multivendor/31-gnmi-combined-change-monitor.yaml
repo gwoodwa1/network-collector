@@ -1,0 +1,58 @@
+name_playbook: gnmi-combined-change-monitor
+inventory_file: ../inventory/gnmi-events.yaml
+
+ssh:
+  - group: gnmi-lab
+    steps:
+      - name: monitor-change-window-health
+        message: Watch the existing production interface FourHundredGigE0/0/0/0, its traffic, and CPU while another path is changed.
+        gnmi_subscribe:
+          paths:
+            - /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/oper-status
+            - /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+            - /components/component[name=CPU0]/cpu/utilization/state/instant
+          mode: stream
+          stream_mode: sample
+          sample_interval_seconds: 10
+          duration_seconds: 900
+          max_updates: 2000
+          triggers:
+            - name: critical-interface-went-down
+              event: update
+              path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/oper-status
+              value_regex: '^(DOWN|down)$'
+              once: true
+              fail: true
+              steps:
+                - name: collect-link-diagnostics
+                  cmd: show interfaces FourHundredGigE0/0/0/0
+
+            - name: critical-ingress-dropped-by-10-percent
+              event: update
+              path: /interfaces/interface[name=FourHundredGigE0/0/0/0]/state/counters/in-octets
+              counter_rate: true
+              baseline_samples: 3
+              max_drop_percent: 10
+              once: true
+              fail: true
+              steps:
+                - name: collect-traffic-diagnostics
+                  message: "Traffic rate {{gnmi_metric_value}} octets/s fell below {{gnmi_threshold_value}}."
+                  cmd: show interfaces FourHundredGigE0/0/0/0 accounting
+
+            - name: cpu-above-85-percent
+              event: update
+              path: /components/component[name=CPU0]/cpu/utilization/state/instant
+              condition: gt
+              threshold: 85
+              once: true
+              fail: true
+              steps:
+                - name: collect-cpu-diagnostics
+                  cmd: show processes cpu
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
