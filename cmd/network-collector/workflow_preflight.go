@@ -59,13 +59,6 @@ func preflightDeviceVariables(device DeviceConfig, workflows map[string]Workflow
 	return nil
 }
 
-func preflightLocalVariables(steps []StepConfig, workflows map[string]WorkflowConfig, values map[string]string) error {
-	if err := preflightSteps(steps, workflows, newPreflightScope(values), "local", 0); err != nil {
-		return fmt.Errorf("local steps: %w", err)
-	}
-	return nil
-}
-
 func preflightSteps(steps []StepConfig, workflows map[string]WorkflowConfig, scope preflightScope, path string, depth int) error {
 	if depth > maxWorkflowDepth {
 		return fmt.Errorf("%s: nesting exceeds %d control levels", path, maxWorkflowDepth)
@@ -100,11 +93,6 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 	}
 	if step.Approval != nil {
 		if err := checkTemplateString(step.Approval.Message, scope, path+" approval.message"); err != nil {
-			return err
-		}
-	}
-	if step.Local != nil {
-		if err := preflightLocalCommand(*step.Local, scope, path); err != nil {
 			return err
 		}
 	}
@@ -319,30 +307,6 @@ func preflightForeach(config ForeachConfig, workflows map[string]WorkflowConfig,
 	delete(nested, itemName)
 	delete(nested, indexName)
 	mergePreflightOutputs(scope, scope, nested)
-	return nil
-}
-
-func preflightLocalCommand(config LocalCommandConfig, scope preflightScope, path string) error {
-	local := clonePreflightScope(scope)
-	names := make([]string, 0, len(config.Inputs))
-	for name := range config.Inputs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := checkTemplateString(config.Inputs[name], scope, path+" local.inputs."+name); err != nil {
-			return err
-		}
-		local[name] = preflightVariable{dynamic: true}
-	}
-	if err := checkTemplateString(config.Command, local, path+" local.command"); err != nil {
-		return err
-	}
-	for index, arg := range config.Args {
-		if err := checkTemplateString(arg, local, fmt.Sprintf("%s local.args[%d]", path, index)); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

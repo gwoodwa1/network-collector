@@ -51,11 +51,6 @@ func outputEnabled(config Config, devices []DeviceConfig) bool {
 			}
 		}
 	}
-	for _, step := range config.LocalSteps {
-		if step.Output != nil && (step.Output.SaveRaw != nil || step.Output.SaveParsed != nil) {
-			return true
-		}
-	}
 	return false
 }
 

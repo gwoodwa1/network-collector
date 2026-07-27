@@ -177,11 +177,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if err := preflightLocalVariables(config.LocalSteps, config.Workflows, initialVariables); err != nil {
-		slog.Error("variable preflight failed", "error", err)
-		os.Exit(1)
-	}
-
 	rsaToken := cliRSAToken || config.Credentials.RSAToken
 	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth
@@ -329,9 +324,6 @@ func main() {
 		occurrences = 1
 	}
 	deviceResultCount := len(devices) * occurrences
-	if len(config.LocalSteps) > 0 {
-		deviceResults = append(deviceResults, runPlaybookLocalSteps(config.LocalSteps, config, jsonOut, parsers, runDir, deviceResultCount, events))
-	}
 	runFailed := schedulingStopped
 	resultsByIndex := make(map[int]deviceRunResult, len(deviceResults))
 	for _, result := range deviceResults {
@@ -343,11 +335,7 @@ func main() {
 	var aggregated []deviceValidation
 	var artifacts []outputArtifact
 	var outcomes []deviceOutcome
-	resultCount := deviceResultCount
-	if len(config.LocalSteps) > 0 {
-		resultCount++
-	}
-	for index := 0; index < resultCount; index++ {
+	for index := 0; index < deviceResultCount; index++ {
 		if result, ok := resultsByIndex[index]; ok {
 			aggregated = append(aggregated, result.aggregated...)
 			artifacts = append(artifacts, result.artifacts...)

@@ -26,13 +26,6 @@ type SSHProbeConfig struct {
 	PostWaitSeconds int `mapstructure:"post_wait_seconds" yaml:"post_wait_seconds"`
 }
 
-type LocalCommandConfig struct {
-	Command        string            `mapstructure:"command" yaml:"command"`
-	Args           []string          `mapstructure:"args" yaml:"args"`
-	Inputs         map[string]string `mapstructure:"inputs" yaml:"inputs"`
-	TimeoutSeconds int               `mapstructure:"timeout_seconds" yaml:"timeout_seconds"`
-}
-
 type ValidationActionConfig struct {
 	Action  string            `mapstructure:"action" yaml:"action"`
 	Command string            `mapstructure:"cmd" yaml:"cmd"`
@@ -50,7 +43,7 @@ type StepConfig struct {
 	WaitSeconds    int                     `mapstructure:"wait_seconds" yaml:"wait_seconds"`
 	ReturnToPrompt *bool                   `mapstructure:"return_to_prompt" yaml:"return_to_prompt"`
 	SSHProbe       *SSHProbeConfig         `mapstructure:"ssh_probe" yaml:"ssh_probe"`
-	Local          *LocalCommandConfig     `mapstructure:"local" yaml:"local"`
+	RemovedLocal   interface{}             `mapstructure:"local" yaml:"local"`
 	Validation     *ValidationConfig       `mapstructure:"validation" yaml:"validation"`
 	Validations    []ValidationConfig      `mapstructure:"validations" yaml:"validations"`
 	Retry          *RetryConfig            `mapstructure:"retry" yaml:"retry"`
@@ -265,7 +258,7 @@ type Config struct {
 	Report        ReportConfig              `mapstructure:"report" yaml:"report"`
 	SSH           []DeviceConfig            `mapstructure:"ssh" yaml:"ssh"`
 	NETCONF       []DeviceConfig            `mapstructure:"netconf" yaml:"netconf"`
-	LocalSteps    []StepConfig              `mapstructure:"local_steps" yaml:"local_steps"`
+	RemovedLocalSteps interface{}            `mapstructure:"local_steps" yaml:"local_steps"`
 	Workflows     map[string]WorkflowConfig `mapstructure:"workflows" yaml:"workflows"`
 	Schedule      ScheduleConfig            `mapstructure:"schedule" yaml:"schedule"`
 	Vars          map[string]interface{}    `mapstructure:"vars" yaml:"vars"`
@@ -469,6 +462,7 @@ type stepExecutionContext struct {
 	events         *eventDispatcher
 	reauthenticate func() (string, string, error)
 	netconf        netconfStepExecutor
+	sshCommand     sshEnsureCommandExecutor
 	sshEnsure      sshEnsureCommandExecutor
 	gnmi           *GNMIConnectionConfig
 	checkMode      bool

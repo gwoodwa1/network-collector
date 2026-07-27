@@ -393,6 +393,9 @@ func loadConfig(configFile string) (Config, bool, error) {
 	))); err != nil {
 		return Config{}, false, err
 	}
+	if err := rejectRemovedLocalExecution(config); err != nil {
+		return Config{}, false, err
+	}
 	if _, err := configVariables(config.Vars); err != nil {
 		return Config{}, false, err
 	}
@@ -402,6 +405,115 @@ func loadConfig(configFile string) (Config, bool, error) {
 	}
 	config.baseDir = filepath.Dir(absolutePath)
 	return config, settings.GetBool("fail_on_fail"), nil
+}
+
+func rejectRemovedLocalExecution(config Config) error {
+	if config.RemovedLocalSteps != nil {
+		return fmt.Errorf("local_steps is unsupported: arbitrary local execution has been removed; use a Go-native processor")
+	}
+	for index, device := range config.SSH {
+		if err := rejectRemovedLocalSteps(device.Steps, fmt.Sprintf("ssh[%d].steps", index)); err != nil {
+			return err
+		}
+	}
+	for index, device := range config.NETCONF {
+		if err := rejectRemovedLocalSteps(device.Steps, fmt.Sprintf("netconf[%d].steps", index)); err != nil {
+			return err
+		}
+	}
+	for name, workflow := range config.Workflows {
+		if err := rejectRemovedLocalSteps(workflow.Steps, fmt.Sprintf("workflows.%s.steps", name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectRemovedLocalSteps(steps []StepConfig, path string) error {
+	for index, step := range steps {
+		stepPath := fmt.Sprintf("%s[%d]", path, index)
+		if name := strings.TrimSpace(step.Name); name != "" {
+			stepPath += "(" + name + ")"
+		}
+		if step.RemovedLocal != nil {
+			return fmt.Errorf("%s.local is unsupported: arbitrary local execution has been removed; use a Go-native processor", stepPath)
+		}
+		nested := []struct {
+			name  string
+			steps []StepConfig
+		}{
+			{"repeat.steps", stepsFromRepeat(step.Repeat)},
+			{"foreach.steps", stepsFromForeach(step.Foreach)},
+			{"parallel.steps", stepsFromParallel(step.Parallel)},
+			{"block.steps", stepsFromBlock(step.Block, "steps")},
+			{"block.rescue", stepsFromBlock(step.Block, "rescue")},
+			{"block.rollback", stepsFromBlock(step.Block, "rollback")},
+			{"block.always", stepsFromBlock(step.Block, "always")},
+			{"on_pass.steps", stepsFromAction(step.OnPass)},
+			{"on_fail.steps", stepsFromAction(step.OnFail)},
+		}
+		if step.GNMISubscribe != nil {
+			for triggerIndex, trigger := range step.GNMISubscribe.Triggers {
+				nested = append(nested, struct {
+					name  string
+					steps []StepConfig
+				}{
+					fmt.Sprintf("gnmi_subscribe.triggers[%d].steps", triggerIndex),
+					trigger.Steps,
+				})
+			}
+		}
+		for _, child := range nested {
+			if err := rejectRemovedLocalSteps(child.steps, stepPath+"."+child.name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func stepsFromRepeat(value *RepeatConfig) []StepConfig {
+	if value == nil {
+		return nil
+	}
+	return value.Steps
+}
+
+func stepsFromForeach(value *ForeachConfig) []StepConfig {
+	if value == nil {
+		return nil
+	}
+	return value.Steps
+}
+
+func stepsFromParallel(value *ParallelConfig) []StepConfig {
+	if value == nil {
+		return nil
+	}
+	return value.Steps
+}
+
+func stepsFromBlock(value *BlockConfig, phase string) []StepConfig {
+	if value == nil {
+		return nil
+	}
+	switch phase {
+	case "steps":
+		return value.Steps
+	case "rescue":
+		return value.Rescue
+	case "rollback":
+		return value.Rollback
+	default:
+		return value.Always
+	}
+}
+
+func stepsFromAction(value *ValidationActionConfig) []StepConfig {
+	if value == nil {
+		return nil
+	}
+	return value.Steps
 }
 
 func validateExecutionConfig(cfg ExecutionConfig) error {
