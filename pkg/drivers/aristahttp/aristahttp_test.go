@@ -1,6 +1,7 @@
 package aristahttp
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -97,7 +98,7 @@ func TestDefaultsAndResponseLimit(t *testing.T) {
 		t.Fatalf("unexpected default timeout: %s", client.session.Timeout)
 	}
 	transport := client.session.Transport.(*http.Transport)
-	if transport.TLSClientConfig.MinVersion != 0x0303 {
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("minimum TLS version is not TLS 1.2: %#x", transport.TLSClientConfig.MinVersion)
 	}
 

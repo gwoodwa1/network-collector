@@ -1,6 +1,7 @@
 package restconf
 
 import (
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,7 +105,7 @@ func TestDefaultsAndResponseLimit(t *testing.T) {
 		t.Fatalf("unexpected default timeout: %s", client.client.Timeout)
 	}
 	transport := client.client.Transport.(*http.Transport)
-	if transport.TLSClientConfig.MinVersion != 0x0303 {
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("minimum TLS version is not TLS 1.2: %#x", transport.TLSClientConfig.MinVersion)
 	}
 
