@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func tlsServerHost(server *httptest.Server) string { return strings.TrimPrefix(server.URL, "https://") }
@@ -47,7 +48,7 @@ func TestExecuteAgainstTLSServer(t *testing.T) {
 	}
 
 	client := &AristaHTTP{}
-	if err := client.Connect(tlsServerHost(server), "admin", "secret", WithSkipTLS()); err != nil {
+	if err := client.Connect(tlsServerHost(server), "admin", "secret", WithSkipTLSVerification()); err != nil {
 		t.Fatal(err)
 	}
 	output, err := client.Execute("show version, show clock")
@@ -68,7 +69,7 @@ func TestExecuteReportsHTTPStatus(t *testing.T) {
 	}))
 	defer server.Close()
 	client := &AristaHTTP{}
-	if err := client.Connect(tlsServerHost(server), "admin", "secret", WithSkipTLS()); err != nil {
+	if err := client.Connect(tlsServerHost(server), "admin", "secret", WithSkipTLSVerification()); err != nil {
 		t.Fatal(err)
 	}
 	_, err := client.Execute("show version")
@@ -84,5 +85,32 @@ func TestValidationErrors(t *testing.T) {
 	}
 	if _, err := client.Execute("show version"); err == nil {
 		t.Fatal("execute before connect accepted")
+	}
+}
+
+func TestDefaultsAndResponseLimit(t *testing.T) {
+	client := &AristaHTTP{}
+	if err := client.Connect("router.example", "user", "pass"); err != nil {
+		t.Fatal(err)
+	}
+	if client.session.Timeout != 30*time.Second {
+		t.Fatalf("unexpected default timeout: %s", client.session.Timeout)
+	}
+	transport := client.session.Transport.(*http.Transport)
+	if transport.TLSClientConfig.MinVersion != 0x0303 {
+		t.Fatalf("minimum TLS version is not TLS 1.2: %#x", transport.TLSClientConfig.MinVersion)
+	}
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", maxResponseBytes+1))
+	}))
+	defer server.Close()
+	limited := &AristaHTTP{}
+	if err := limited.Connect(tlsServerHost(server), "user", "pass", WithSkipTLSVerification()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := limited.Execute("show version"); err == nil ||
+		!strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("oversized response was not rejected: %v", err)
 	}
 }

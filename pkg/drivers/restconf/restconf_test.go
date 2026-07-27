@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteAgainstTLSServer(t *testing.T) {
@@ -34,7 +35,7 @@ func TestExecuteAgainstTLSServer(t *testing.T) {
 	}
 
 	client := &RESTCONFClient{}
-	if err := client.Connect(server.URL+"/", "admin", "secret", WithSkipTLS()); err != nil {
+	if err := client.Connect(server.URL+"/", "admin", "secret", WithSkipTLSVerification()); err != nil {
 		t.Fatal(err)
 	}
 	output, err := client.Execute(http.MethodGet, "/restconf/data/openconfig-interfaces:interfaces")
@@ -57,7 +58,7 @@ func TestExecuteReportsStatusAndInvalidJSON(t *testing.T) {
 		want   string
 	}{
 		{name: "status", status: http.StatusUnauthorized, body: "denied", want: "401 Unauthorized"},
-		{name: "invalid-json", status: http.StatusOK, body: "not-json", want: "failed to unmarshal JSON"},
+		{name: "invalid-json", status: http.StatusOK, body: "not-json", want: "failed to unmarshal RESTCONF JSON"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,7 +68,7 @@ func TestExecuteReportsStatusAndInvalidJSON(t *testing.T) {
 			}))
 			defer server.Close()
 			client := &RESTCONFClient{}
-			if err := client.Connect(server.URL, "admin", "secret", WithSkipTLS()); err != nil {
+			if err := client.Connect(server.URL, "admin", "secret", WithSkipTLSVerification()); err != nil {
 				t.Fatal(err)
 			}
 			_, err := client.Execute(http.MethodGet, "restconf/data/test")
@@ -85,5 +86,38 @@ func TestValidationErrors(t *testing.T) {
 	}
 	if _, err := client.Execute(http.MethodGet, "data/test"); err == nil {
 		t.Fatal("execute before connect accepted")
+	}
+	if err := client.Connect("http://router.example/restconf", "user", "pass"); err == nil {
+		t.Fatal("plaintext RESTCONF accepted without explicit lab option")
+	}
+	if err := client.Connect("router.example/restconf", "user", "pass"); err == nil {
+		t.Fatal("relative RESTCONF URL accepted")
+	}
+}
+
+func TestDefaultsAndResponseLimit(t *testing.T) {
+	client := &RESTCONFClient{}
+	if err := client.Connect("https://router.example/restconf", "user", "pass"); err != nil {
+		t.Fatal(err)
+	}
+	if client.client.Timeout != 30*time.Second {
+		t.Fatalf("unexpected default timeout: %s", client.client.Timeout)
+	}
+	transport := client.client.Transport.(*http.Transport)
+	if transport.TLSClientConfig.MinVersion != 0x0303 {
+		t.Fatalf("minimum TLS version is not TLS 1.2: %#x", transport.TLSClientConfig.MinVersion)
+	}
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", maxResponseBytes+1))
+	}))
+	defer server.Close()
+	limited := &RESTCONFClient{}
+	if err := limited.Connect(server.URL, "user", "pass", WithSkipTLSVerification()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := limited.Execute(http.MethodGet, "restconf/data"); err == nil ||
+		!strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("oversized response was not rejected: %v", err)
 	}
 }

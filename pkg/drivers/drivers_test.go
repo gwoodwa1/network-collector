@@ -36,11 +36,11 @@ func TestDriverInterfaces(t *testing.T) {
 
 func TestOptionHelpers(t *testing.T) {
 	client := &aristahttp.AristaHTTP{}
-	aristahttp.WithSkipTLS()(client)
+	aristahttp.WithSkipTLSVerification()(client)
 	aristahttp.WithRequestTimeout(5 * time.Second)(client)
 
 	restClient := &restconf.RESTCONFClient{}
-	restconf.WithSkipTLS()(restClient)
+	restconf.WithSkipTLSVerification()(restClient)
 	restconf.WithRequestTimeout(5 * time.Second)(restClient)
 
 	gnmiClient := &gnmi.GNMIClient{}
