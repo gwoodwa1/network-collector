@@ -104,7 +104,7 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		netconfTimeout = time.Duration(device.OperationTimeout) * time.Second
 	}
 	netconfPolicy := netconfConnectionPolicy{
-		timeout: netconfTimeout,
+		timeout:        netconfTimeout,
 		hostKeyPolicy:  effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).HostKeyPolicy,
 		knownHostsFile: effectiveSSHSecurity(config.SSHSecurity, device.SSHSecurity).KnownHostsFile,
 	}
