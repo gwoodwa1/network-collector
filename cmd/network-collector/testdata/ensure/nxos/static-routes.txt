@@ -1,0 +1,10 @@
+feature interface-vlan
+ip route 198.51.100.0/24 192.0.2.1
+vrf context CUSTOMER-A
+  ip route 203.0.113.0/24 192.0.2.10
+  ip route 203.0.113.0 255.255.255.0 192.0.2.11
+vrf context CUSTOMER-B
+  ip route 203.0.113.0/24 192.0.2.20
+interface Ethernet1/3
+  no shutdown
+ip route 192.0.2.128/25 198.51.100.1

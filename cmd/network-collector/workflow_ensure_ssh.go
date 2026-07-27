@@ -428,9 +428,15 @@ func sshStaticRouteAdapter(platform string) (sshStaticRoutePlatformAdapter, erro
 			parse:            parseIOSXEStaticRoutes,
 			commands:         iosXEStaticRouteCommands,
 		}, nil
+	case "cisco_nxos":
+		return sshStaticRoutePlatformAdapter{
+			discoveryCommand: "show running-config",
+			parse:            parseNXOSStaticRoutes,
+			commands:         nxOSStaticRouteCommands,
+		}, nil
 	default:
 		return sshStaticRoutePlatformAdapter{}, fmt.Errorf(
-			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe",
+			"SSH static_route ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos",
 			platform,
 		)
 	}
@@ -629,6 +635,50 @@ func iosXEPrefixParts(prefix string) (string, string) {
 		return prefix, ""
 	}
 	return network.IP.String(), net.IP(network.Mask).String()
+}
+
+func parseNXOSStaticRoutes(output, wantedPrefix, wantedVRF string) sshStaticRouteState {
+	state := sshStaticRouteState{Prefix: wantedPrefix, VRF: wantedVRF, NextHops: []string{}}
+	currentVRF := ""
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(raw)
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		if strings.HasPrefix(trimmed, "vrf context ") {
+			currentVRF = strings.TrimSpace(strings.TrimPrefix(trimmed, "vrf context "))
+			continue
+		}
+		if indent == 0 && trimmed != "" && !strings.HasPrefix(trimmed, "ip route ") {
+			currentVRF = ""
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 4 || fields[0] != "ip" || fields[1] != "route" || currentVRF != wantedVRF {
+			continue
+		}
+		prefix, nextHopIndex, ok := parseIOSXERoutePrefix(fields, 2)
+		if !ok || prefix != wantedPrefix || nextHopIndex >= len(fields) {
+			continue
+		}
+		nextHop := fields[nextHopIndex]
+		if net.ParseIP(nextHop) != nil && !containsString(state.NextHops, nextHop) {
+			state.NextHops = append(state.NextHops, nextHop)
+		}
+	}
+	sort.Strings(state.NextHops)
+	return state
+}
+
+func nxOSStaticRouteCommands(prefix, nextHop, vrf string, present bool) []string {
+	route := "ip route " + prefix + " " + nextHop
+	if !present {
+		route = "no " + route
+	}
+	commands := []string{"configure terminal"}
+	if vrf != "" {
+		commands = append(commands, "vrf context "+vrf, " "+route)
+	} else {
+		commands = append(commands, route)
+	}
+	return append(commands, "end", "copy running-config startup-config")
 }
 
 func routeVRFLabel(vrf string) string {

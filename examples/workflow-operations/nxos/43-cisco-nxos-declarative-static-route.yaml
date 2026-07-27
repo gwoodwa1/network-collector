@@ -1,0 +1,34 @@
+name_playbook: Declarative Cisco NX-OS SSH static route
+inventory_file: ../inventory/multivendor-operations.yaml
+fail_on_fail: true
+
+vars:
+  route_prefix: 203.0.114.0/24
+  route_next_hop: 192.0.2.10
+  route_vrf: CUSTOMER-A
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: nxos-cli-01
+    steps:
+      - name: authorize-nxos-static-route
+        approval:
+          message: >-
+            Install {{route_prefix}} via {{route_next_hop}} in
+            VRF {{route_vrf}}?
+          timeout_seconds: 300
+
+      - name: ensure-nxos-static-route
+        ensure:
+          resource: static_route
+          prefix: "{{route_prefix}}"
+          next_hop: "{{route_next_hop}}"
+          vrf: "{{route_vrf}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+        register: route_plan

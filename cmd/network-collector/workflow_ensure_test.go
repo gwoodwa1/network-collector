@@ -741,6 +741,68 @@ func TestIOSXEStaticRouteAbsentPlanIsExact(t *testing.T) {
 	}
 }
 
+func TestNXOSStaticRouteParsingAndVRFCommands(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "static-routes.txt")
+	customerRoute := parseNXOSStaticRoutes(fixture, "203.0.113.0/24", "CUSTOMER-A")
+	if len(customerRoute.NextHops) != 2 ||
+		customerRoute.NextHops[0] != "192.0.2.10" ||
+		customerRoute.NextHops[1] != "192.0.2.11" {
+		t.Fatalf("unexpected NX-OS VRF route: %+v", customerRoute)
+	}
+	defaultRoute := parseNXOSStaticRoutes(fixture, "192.0.2.128/25", "")
+	if len(defaultRoute.NextHops) != 1 || defaultRoute.NextHops[0] != "198.51.100.1" {
+		t.Fatalf("NX-OS parser did not return to the default VRF: %+v", defaultRoute)
+	}
+	commands := nxOSStaticRouteCommands("203.0.114.0/24", "192.0.2.10", "CUSTOMER-A", true)
+	joined := strings.Join(commands, "\n")
+	if !strings.Contains(joined, "vrf context CUSTOMER-A\n ip route 203.0.114.0/24 192.0.2.10") ||
+		commands[len(commands)-1] != "copy running-config startup-config" {
+		t.Fatalf("unexpected NX-OS VRF route commands: %+v", commands)
+	}
+}
+
+func TestNXOSStaticRouteEnsureCheckApplyAndVerify(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "static-routes.txt")
+	verifiedFixture := fixture + "\nvrf context CUSTOMER-A\n  ip route 203.0.114.0/24 192.0.2.10\n"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "Copy complete.", verifiedFixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.114.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "present", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		executor.commands[0] != "show running-config" ||
+		!strings.Contains(executor.commands[1], "vrf context CUSTOMER-A") ||
+		!strings.Contains(executor.commands[1], "ip route 203.0.114.0/24 192.0.2.10") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("NX-OS route did not discover, apply, and verify: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
+func TestNXOSStaticRouteAbsentPlanIsExact(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "nxos", "static-routes.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "cisco_nxos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "static_route", Prefix: "203.0.113.0/24", NextHop: "192.0.2.10",
+		VRF: "CUSTOMER-A", State: "absent", Transport: "ssh", RollbackOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 ||
+		!strings.Contains(output, `no ip route 203.0.113.0/24 192.0.2.10`) ||
+		!strings.Contains(output, `"192.0.2.11"`) {
+		t.Fatalf("NX-OS route removal plan was not exact: commands=%+v output=%s", executor.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)
