@@ -8,6 +8,7 @@ import (
 type preflightVariable struct {
 	value   string
 	dynamic bool
+	tainted bool
 }
 
 type preflightScope map[string]preflightVariable
@@ -90,6 +91,9 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 	if err := checkTemplateString(step.Command, scope, path+" cmd"); err != nil {
 		return err
 	}
+	if err := rejectTaintedTemplateReferences(step.Command, scope, path+" cmd"); err != nil {
+		return err
+	}
 	if step.Approval != nil {
 		if err := checkTemplateString(step.Approval.Message, scope, path+" approval.message"); err != nil {
 			return err
@@ -102,6 +106,9 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 			"persist": step.NETCONF.Persist, "persist_id": step.NETCONF.PersistID,
 		} {
 			if err := checkTemplateString(value, scope, path+" netconf."+field); err != nil {
+				return err
+			}
+			if err := rejectTaintedTemplateReferences(value, scope, path+" netconf."+field); err != nil {
 				return err
 			}
 		}
@@ -122,7 +129,7 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 
 	// A step registers its output before its validation actions execute.
 	if register := strings.TrimSpace(step.Register); register != "" {
-		scope[register] = preflightVariable{dynamic: true}
+		scope[register] = preflightVariable{dynamic: true, tainted: true}
 	}
 	for index, validation := range stepValidations(step) {
 		validationPath := fmt.Sprintf("%s validation[%d]", path, index+1)
@@ -144,6 +151,9 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 			return err
 		}
 		if err := checkTemplateString(action.Command, scope, path+" "+label+".cmd"); err != nil {
+			return err
+		}
+		if err := rejectTaintedTemplateReferences(action.Command, scope, path+" "+label+".cmd"); err != nil {
 			return err
 		}
 		branch := clonePreflightScope(scope)
@@ -206,7 +216,7 @@ func preflightStep(step StepConfig, workflows map[string]WorkflowConfig, scope p
 				"gnmi_event", "gnmi_event_type", "gnmi_event_path", "gnmi_event_value",
 				"gnmi_metric_value", "gnmi_baseline_value", "gnmi_threshold_value",
 			} {
-				branch[name] = preflightVariable{dynamic: true}
+				branch[name] = preflightVariable{dynamic: true, tainted: true}
 			}
 			if err := preflightSteps(trigger.Steps, workflows, branch, fmt.Sprintf("%s/gnmi_trigger[%d]", path, index+1), depth+1); err != nil {
 				return err
@@ -248,7 +258,10 @@ func preflightWorkflow(step StepConfig, workflows map[string]WorkflowConfig, sco
 		if err != nil {
 			return fmt.Errorf("%s: workflow parameter %q: %w", path, parameter, err)
 		}
-		bindings[parameter] = preflightVariable{value: text, dynamic: valueHasDynamicReference(value, scope)}
+		bindings[parameter] = preflightVariable{
+			value: text, dynamic: valueHasDynamicReference(value, scope),
+			tainted: valueHasTaintedReference(value, scope),
+		}
 	}
 	for parameter := range step.With {
 		if !allowed[parameter] {
@@ -270,6 +283,7 @@ func preflightWorkflow(step StepConfig, workflows map[string]WorkflowConfig, sco
 }
 
 func preflightForeach(config ForeachConfig, workflows map[string]WorkflowConfig, scope preflightScope, path string, depth int) error {
+	itemTainted := false
 	if len(config.Items) > 0 && strings.TrimSpace(config.From) != "" {
 		return fmt.Errorf("%s: foreach cannot define both items and from", path)
 	}
@@ -277,6 +291,7 @@ func preflightForeach(config ForeachConfig, workflows map[string]WorkflowConfig,
 		if err := requirePreflightVariable(scope, from, path+" foreach.from"); err != nil {
 			return err
 		}
+		itemTainted = scope[from].tainted
 	} else {
 		if config.Items == nil {
 			return fmt.Errorf("%s: foreach requires items or from", path)
@@ -288,6 +303,7 @@ func preflightForeach(config ForeachConfig, workflows map[string]WorkflowConfig,
 			if err := checkTemplateValue(item, scope, fmt.Sprintf("%s foreach.items[%d]", path, index)); err != nil {
 				return err
 			}
+			itemTainted = itemTainted || valueHasTaintedReference(item, scope)
 		}
 	}
 	itemName, indexName := strings.TrimSpace(config.Item), strings.TrimSpace(config.Index)
@@ -298,7 +314,7 @@ func preflightForeach(config ForeachConfig, workflows map[string]WorkflowConfig,
 		indexName = "index"
 	}
 	nested := clonePreflightScope(scope)
-	nested[itemName] = preflightVariable{dynamic: true}
+	nested[itemName] = preflightVariable{dynamic: true, tainted: itemTainted}
 	nested[indexName] = preflightVariable{value: "0"}
 	if err := preflightSteps(config.Steps, workflows, nested, path+"/foreach", depth); err != nil {
 		return err
@@ -323,14 +339,23 @@ func preflightEnsure(config EnsureConfig, scope preflightScope, path string) err
 		if err := checkTemplateString(value, scope, path+" ensure."+field); err != nil {
 			return err
 		}
+		if err := rejectTaintedTemplateReferences(value, scope, path+" ensure."+field); err != nil {
+			return err
+		}
 	}
 	for index, target := range config.Attributes.ImportRouteTargets {
 		if err := checkTemplateString(target, scope, fmt.Sprintf("%s ensure.attributes.import_route_targets[%d]", path, index)); err != nil {
 			return err
 		}
+		if err := rejectTaintedTemplateReferences(target, scope, fmt.Sprintf("%s ensure.attributes.import_route_targets[%d]", path, index)); err != nil {
+			return err
+		}
 	}
 	for index, target := range config.Attributes.ExportRouteTargets {
 		if err := checkTemplateString(target, scope, fmt.Sprintf("%s ensure.attributes.export_route_targets[%d]", path, index)); err != nil {
+			return err
+		}
+		if err := rejectTaintedTemplateReferences(target, scope, fmt.Sprintf("%s ensure.attributes.export_route_targets[%d]", path, index)); err != nil {
 			return err
 		}
 	}
@@ -385,4 +410,26 @@ func valueHasDynamicReference(value interface{}, scope preflightScope) bool {
 		}
 	}
 	return false
+}
+
+func valueHasTaintedReference(value interface{}, scope preflightScope) bool {
+	text, err := variableString(value)
+	if err != nil {
+		return true
+	}
+	for _, match := range templateVariablePattern.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 && scope[match[1]].tainted {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectTaintedTemplateReferences(input string, scope preflightScope, location string) error {
+	for _, match := range templateVariablePattern.FindAllStringSubmatch(input, -1) {
+		if len(match) > 1 && scope[match[1]].tainted {
+			return fmt.Errorf("%s cannot interpolate tainted device output variable %q into an executable field", location, match[1])
+		}
+	}
+	return nil
 }
