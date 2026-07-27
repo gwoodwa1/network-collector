@@ -108,6 +108,7 @@ type GNMITriggerConfig struct {
 	Path            string       `mapstructure:"path" yaml:"path"`
 	PathRegex       string       `mapstructure:"path_regex" yaml:"path_regex"`
 	Value           string       `mapstructure:"value" yaml:"value"`
+	ValueNot        string       `mapstructure:"value_not" yaml:"value_not"`
 	ValueRegex      string       `mapstructure:"value_regex" yaml:"value_regex"`
 	IncludeInitial  bool         `mapstructure:"include_initial" yaml:"include_initial"`
 	Once            bool         `mapstructure:"once" yaml:"once"`

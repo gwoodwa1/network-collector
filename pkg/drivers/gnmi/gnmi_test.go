@@ -137,3 +137,15 @@ func TestWildcardOpticalSubscriptionPathsParse(t *testing.T) {
 		}
 	}
 }
+
+func TestWildcardRoutingNeighborSubscriptionPathsParse(t *testing.T) {
+	for _, value := range []string{
+		"/network-instances/network-instance[name=*]/protocols/protocol[identifier=ISIS][name=*]/isis/interfaces/interface[interface-id=*]/levels/level[level-number=*]/adjacencies/adjacency[system-id=*]/state/adjacency-state",
+		"/network-instances/network-instance[name=*]/mpls/signaling-protocols/ldp/neighbors/neighbor[lsr-id=*][label-space-id=*]/state/session-state",
+		"/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=*]/bgp/neighbors/neighbor[neighbor-address=*]/state/session-state",
+	} {
+		if _, err := path.ParsePath(value); err != nil {
+			t.Fatalf("failed to parse wildcard routing-neighbor path %q: %v", value, err)
+		}
+	}
+}

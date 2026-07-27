@@ -7,74 +7,159 @@ fail_on_fail: true
 ssh:
   - group: gnmi-lab
     steps:
-      - name: monitor-optics-drops-and-interface-errors
-        message: Monitor all optical channels and interface counters for the complete change window.
-        gnmi_subscribe:
-          paths:
-            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/input-power/instant
-            - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/output-power/instant
-            - /interfaces/interface[name=*]/state/counters/in-discards
-            - /interfaces/interface[name=*]/state/counters/out-discards
-            - /interfaces/interface[name=*]/state/counters/in-errors
-            - /interfaces/interface[name=*]/state/counters/out-errors
-          mode: stream
-          stream_mode: sample
-          sample_interval_seconds: 10
-          duration_seconds: 900
-          max_updates: 20000
-          triggers:
-            - name: receive-light-dropped
-              event: update
-              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/input-power/instant$'
-              baseline_samples: 3
-              max_drop: 1.0
-              once: true
-              fail: true
-              steps:
-                - name: collect-receive-optics
-                  message: "FAIL: RX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
-                  cmd: show controllers optics
+      - name: monitor-complete-change-health
+        parallel:
+          max_parallel: 2
+          steps:
+            # Sampled telemetry handles optics and monotonic counters.
+            - name: monitor-optics-drops-and-interface-errors
+              gnmi_subscribe:
+                paths:
+                  - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/input-power/instant
+                  - /components/component[name=*]/transceiver/physical-channels/channel[index=*]/state/output-power/instant
+                  - /interfaces/interface[name=*]/state/counters/in-discards
+                  - /interfaces/interface[name=*]/state/counters/out-discards
+                  - /interfaces/interface[name=*]/state/counters/in-errors
+                  - /interfaces/interface[name=*]/state/counters/out-errors
+                mode: stream
+                stream_mode: sample
+                sample_interval_seconds: 10
+                duration_seconds: 900
+                max_updates: 20000
+                triggers:
+                  - name: receive-light-dropped
+                    event: update
+                    path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/input-power/instant$'
+                    baseline_samples: 3
+                    max_drop: 1.0
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-receive-optics
+                        message: "FAIL: RX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                        cmd: show controllers optics
 
-            - name: transmit-light-dropped
-              event: update
-              path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/output-power/instant$'
-              baseline_samples: 3
-              max_drop: 1.0
-              once: true
-              fail: true
-              steps:
-                - name: collect-transmit-optics
-                  message: "FAIL: TX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
-                  cmd: show controllers optics
+                  - name: transmit-light-dropped
+                    event: update
+                    path_regex: '^/components/component\[name=.*\]/transceiver/physical-channels/channel\[index=.*\]/state/output-power/instant$'
+                    baseline_samples: 3
+                    max_drop: 1.0
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-transmit-optics
+                        message: "FAIL: TX light on {{gnmi_event_path}} is {{gnmi_metric_value}} dBm; baseline {{gnmi_baseline_value}} dBm, minimum {{gnmi_threshold_value}} dBm."
+                        cmd: show controllers optics
 
-            # Discards are monotonic counters. Converting them to a rate and
-            # testing for > 0 means any new packet discard fails the monitor.
-            - name: packet-discard-counter-increased
-              event: update
-              path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-discards$'
-              counter_rate: true
-              condition: gt
-              threshold: 0
-              once: true
-              fail: true
-              steps:
-                - name: collect-packet-drop-diagnostics
-                  message: "FAIL: packet discards increased on {{gnmi_event_path}} at {{gnmi_metric_value}} packets/s."
-                  cmd: show interfaces accounting
+                  # Any positive discard rate means the counter increased.
+                  - name: packet-discard-counter-increased
+                    event: update
+                    path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-discards$'
+                    counter_rate: true
+                    condition: gt
+                    threshold: 0
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-packet-drop-diagnostics
+                        message: "FAIL: packet discards increased on {{gnmi_event_path}} at {{gnmi_metric_value}} packets/s."
+                        cmd: show interfaces accounting
 
-            # Input/output error counters use the same any-increment policy.
-            - name: interface-error-counter-increased
-              event: update
-              path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-errors$'
-              counter_rate: true
-              condition: gt
-              threshold: 0
-              once: true
-              fail: true
-              steps:
-                - name: collect-interface-error-diagnostics
-                  message: "FAIL: interface errors increased on {{gnmi_event_path}} at {{gnmi_metric_value}} errors/s."
-                  cmd: show interfaces
+                  # Input/output error counters use the same any-increment policy.
+                  - name: interface-error-counter-increased
+                    event: update
+                    path_regex: '^/interfaces/interface\[name=.*\]/state/counters/(in|out)-errors$'
+                    counter_rate: true
+                    condition: gt
+                    threshold: 0
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-interface-error-diagnostics
+                        message: "FAIL: interface errors increased on {{gnmi_event_path}} at {{gnmi_metric_value}} errors/s."
+                        cmd: show interfaces
+
+            # Protocol sessions need ON_CHANGE rather than sampled telemetry.
+            # include_initial also fails any neighbor that is unhealthy when
+            # the monitor starts; subsequent changes are handled immediately.
+            - name: monitor-routing-neighbors
+              gnmi_subscribe:
+                paths:
+                  - /network-instances/network-instance[name=*]/protocols/protocol[identifier=ISIS][name=*]/isis/interfaces/interface[interface-id=*]/levels/level[level-number=*]/adjacencies/adjacency[system-id=*]/state/adjacency-state
+                  - /network-instances/network-instance[name=*]/mpls/signaling-protocols/ldp/neighbors/neighbor[lsr-id=*][label-space-id=*]/state/session-state
+                  - /network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=*]/bgp/neighbors/neighbor[neighbor-address=*]/state/session-state
+                mode: stream
+                stream_mode: on_change
+                duration_seconds: 900
+                max_updates: 10000
+                triggers:
+                  - name: isis-adjacency-not-up
+                    event: update
+                    path_regex: '/protocol\[identifier=ISIS\].*/adjacency\[system-id=.*\]/state/adjacency-state$'
+                    value_not: UP
+                    include_initial: true
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-isis-diagnostics
+                        message: "FAIL: IS-IS adjacency {{gnmi_event_path}} changed to {{gnmi_event_value}}."
+                        cmd: show isis neighbors
+
+                  - name: ldp-session-not-operational
+                    event: update
+                    path_regex: '/mpls/signaling-protocols/ldp/neighbors/neighbor\[.*\]/state/session-state$'
+                    value_not: OPERATIONAL
+                    include_initial: true
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-ldp-diagnostics
+                        message: "FAIL: LDP session {{gnmi_event_path}} changed to {{gnmi_event_value}}."
+                        cmd: show mpls ldp neighbor brief
+
+                  - name: bgp-session-not-established
+                    event: update
+                    path_regex: '/protocol\[identifier=BGP\].*/neighbor\[neighbor-address=.*\]/state/session-state$'
+                    value_not: ESTABLISHED
+                    include_initial: true
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-bgp-diagnostics
+                        message: "FAIL: BGP session {{gnmi_event_path}} changed to {{gnmi_event_value}}."
+                        cmd: show bgp summary
+
+                  # Some targets delete a neighbor path instead of publishing
+                  # a final non-established state, so deletes also fail.
+                  - name: isis-adjacency-disappeared
+                    event: delete
+                    path_regex: '/protocol\[identifier=ISIS\].*/adjacency\[system-id=.*\](/state/adjacency-state)?$'
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-deleted-isis-adjacency
+                        message: "FAIL: IS-IS adjacency disappeared at {{gnmi_event_path}}."
+                        cmd: show isis neighbors
+
+                  - name: ldp-session-disappeared
+                    event: delete
+                    path_regex: '/mpls/signaling-protocols/ldp/neighbors/neighbor\[.*\](/state/session-state)?$'
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-deleted-ldp-session
+                        message: "FAIL: LDP session disappeared at {{gnmi_event_path}}."
+                        cmd: show mpls ldp neighbor brief
+
+                  - name: bgp-session-disappeared
+                    event: delete
+                    path_regex: '/protocol\[identifier=BGP\].*/neighbor\[neighbor-address=.*\](/state/session-state)?$'
+                    once: true
+                    fail: true
+                    steps:
+                      - name: collect-deleted-bgp-session
+                        message: "FAIL: BGP session disappeared at {{gnmi_event_path}}."
+                        cmd: show bgp summary
 
 output:
   directory: artifacts

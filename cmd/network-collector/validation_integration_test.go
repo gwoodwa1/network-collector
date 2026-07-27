@@ -1853,9 +1853,17 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if opticsGuard == nil || len(opticsGuard.Triggers) != 2 || opticsGuard.Triggers[0].MaxDrop == nil || *opticsGuard.Triggers[0].MaxDrop != 1 || opticsGuard.Triggers[0].BaselineSamples != 3 || !opticsGuard.Triggers[0].Once || !opticsGuard.Triggers[0].Fail {
 		t.Fatalf("gNMI optics guard example is incomplete: %+v", opticsGuard)
 	}
-	changeMonitor := loaded["34-gnmi-change-health-monitor.yaml"].SSH[0].Steps[0].GNMISubscribe
-	if changeMonitor == nil || len(changeMonitor.Paths) != 6 || len(changeMonitor.Triggers) != 4 || !changeMonitor.Triggers[2].CounterRate || changeMonitor.Triggers[2].Threshold == nil || *changeMonitor.Triggers[2].Threshold != 0 || changeMonitor.Triggers[2].Condition != "gt" || !changeMonitor.Triggers[3].Fail {
-		t.Fatalf("combined gNMI change monitor example is incomplete: %+v", changeMonitor)
+	changeMonitor := loaded["34-gnmi-change-health-monitor.yaml"].SSH[0].Steps[0].Parallel
+	if changeMonitor == nil || len(changeMonitor.Steps) != 2 {
+		t.Fatalf("combined gNMI change monitor parallel structure is incomplete: %+v", changeMonitor)
+	}
+	sampledMonitor := changeMonitor.Steps[0].GNMISubscribe
+	neighborMonitor := changeMonitor.Steps[1].GNMISubscribe
+	if sampledMonitor == nil || len(sampledMonitor.Paths) != 6 || len(sampledMonitor.Triggers) != 4 || !sampledMonitor.Triggers[2].CounterRate || sampledMonitor.Triggers[2].Threshold == nil || *sampledMonitor.Triggers[2].Threshold != 0 || sampledMonitor.Triggers[2].Condition != "gt" || !sampledMonitor.Triggers[3].Fail {
+		t.Fatalf("sampled gNMI change monitor is incomplete: %+v", sampledMonitor)
+	}
+	if neighborMonitor == nil || neighborMonitor.StreamMode != "on_change" || len(neighborMonitor.Paths) != 3 || len(neighborMonitor.Triggers) != 6 || neighborMonitor.Triggers[0].ValueNot != "UP" || neighborMonitor.Triggers[1].ValueNot != "OPERATIONAL" || neighborMonitor.Triggers[2].ValueNot != "ESTABLISHED" || !neighborMonitor.Triggers[0].IncludeInitial || neighborMonitor.Triggers[3].Event != "delete" {
+		t.Fatalf("routing-neighbor gNMI change monitor is incomplete: %+v", neighborMonitor)
 	}
 	recovery := loaded["02-reuse-and-recovery.yaml"]
 	if len(recovery.Workflows) != 2 || recovery.SSH[0].Steps[0].Use == "" || len(recovery.SSH[0].Steps[1].Block.Rescue) == 0 || len(recovery.SSH[0].Steps[2].Block.Rollback) == 0 {

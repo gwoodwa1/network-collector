@@ -47,7 +47,7 @@ easier to read.
 | `multivendor/31-gnmi-combined-change-monitor.yaml` | one bounded change-window monitor for link state, traffic-rate degradation, and CPU |
 | `multivendor/32-gnmi-guarded-new-path-provision.yaml` | parallel new-path provisioning while two different production interfaces are baselined and protected, with immediate rollback |
 | `multivendor/33-gnmi-all-interface-light-level-guard.yaml` | per-interface and per-channel RX/TX optical baselines with an absolute 1 dB drop guard |
-| `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process change monitor combining all-channel optics, packet discards, and interface errors |
+| `multivendor/34-gnmi-change-health-monitor.yaml` | standalone second-process monitor combining optics, discards, errors, and IS-IS/LDP/BGP neighbor state |
 
 Run one example from the repository root:
 
@@ -118,7 +118,7 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 
 The gNMI monitoring examples use OpenConfig-style paths and documentation-only targets. Start the traffic guard before the change and allow one counter interval plus all configured `baseline_samples` to complete before changing the network. With the supplied 10-second interval and three baseline rates, allow roughly 40 seconds. Numeric baselines are maintained independently for every canonical event path, allowing the optics example to use a regular expression across all returned components and channels. Example 32 makes the intended topology explicit: interfaces `0/0/0/0` and `0/0/0/1` are existing production paths being protected while the distinct interface `0/0/0/10` is provisioned. CPU component names, operational and optical paths, CLI diagnostics, and the spelling/case of interface status values vary by platform and must be adjusted for the target.
 
-Example 34 is deliberately independent of the change itself. Start it in one terminal, allow about 40 seconds for optical baselines and counter starting values, then run any routine-change workbook in another terminal. The monitoring process exits non-zero when `--fail-on-fail` is used or `fail_on_fail: true` remains configured and any optical, discard, or error guard fires.
+Example 34 is deliberately independent of the change itself. Start it in one terminal, allow about 40 seconds for optical baselines and counter starting values, then run any routine-change workbook in another terminal. A parallel `on_change` branch checks initial and subsequent IS-IS, LDP, and BGP session state while the sampled branch handles optics and counters. The monitoring process exits non-zero when `--fail-on-fail` is used or `fail_on_fail: true` remains configured and any optical, discard, error, adjacency, or session guard fires.
 
 `13-structured-drift.yaml` shows both baseline modes. `baseline: previous` maintains rolling state automatically; a normal path points to an explicitly approved JSON baseline. Drift compares parsed JSON rather than unstable CLI formatting and always writes a `drift.json` artifact. `fail_on_change` decides whether detected changes fail the device run.
 

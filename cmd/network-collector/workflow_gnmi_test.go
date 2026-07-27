@@ -196,3 +196,38 @@ func TestGNMICounterIncrementCondition(t *testing.T) {
 		}
 	}
 }
+
+func TestGNMIValueNotMatchesUnhealthyStatePerNeighbor(t *testing.T) {
+	failed := false
+	validations := []deviceValidation{}
+	var log bytes.Buffer
+	ctx := &stepExecutionContext{
+		hostname: "router-1", sessionLog: &log, variables: map[string]string{},
+		runFailed: &failed, aggregated: &validations,
+	}
+	handler, err := gnmiTriggerHandler(ctx, nil, []GNMITriggerConfig{{
+		Name: "bgp-not-established", Event: "update", PathRegex: `/session-state$`,
+		ValueNot: "ESTABLISHED", IncludeInitial: true, Once: true,
+		Steps: []StepConfig{{Name: "record-bgp", Message: "BGP {{gnmi_event_path}} is {{gnmi_event_value}}"}},
+	}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	establishedPath := "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=default]/bgp/neighbors/neighbor[neighbor-address=192.0.2.1]/state/session-state"
+	idlePath := "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=default]/bgp/neighbors/neighbor[neighbor-address=192.0.2.2]/state/session-state"
+	if err := handler(gnmidriver.Event{Type: "update", Path: establishedPath, Value: "ESTABLISHED", Initial: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler(gnmidriver.Event{Type: "update", Path: idlePath, Value: "IDLE", Initial: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler(gnmidriver.Event{Type: "update", Path: idlePath, Value: "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(log.String(), establishedPath) {
+		t.Fatalf("healthy BGP neighbor unexpectedly triggered:\n%s", log.String())
+	}
+	if got := strings.Count(log.String(), "[gnmi:bgp-not-established]"); got != 1 {
+		t.Fatalf("got %d unhealthy alarms, want one per neighbor path:\n%s", got, log.String())
+	}
+}

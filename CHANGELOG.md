@@ -10,6 +10,7 @@ All notable changes to Network Collector are documented here.
 - Added an integrated guarded-provisioning example that baselines two existing production interfaces while enabling a separate new path and immediately rolls back the new path when traffic or CPU breaches its guard.
 - Added per-path numeric trigger state and absolute-drop baselines for logarithmic telemetry, with an all-interface RX/TX optical-level guard example.
 - Added a standalone combined change-health monitor for use beside another collector run, failing on optical degradation or any new packet discard or interface error across wildcard-selected paths.
+- Extended the combined monitor with parallel on-change IS-IS, LDP, and BGP neighbor health, including inverse healthy-state matching, initial-state checks, neighbor deletion detection, and protocol diagnostics.
 - Updated direct and transitive Go dependencies to their latest compatible releases.
 
 ## [1.2.0] - 2026-07-25

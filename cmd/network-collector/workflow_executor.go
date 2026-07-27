@@ -1285,6 +1285,9 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 		if strings.TrimSpace(trigger.Path) == "" && strings.TrimSpace(trigger.PathRegex) == "" {
 			return nil, fmt.Errorf("gNMI trigger %q must define path or path_regex", trigger.Name)
 		}
+		if strings.TrimSpace(trigger.ValueNot) != "" && (strings.TrimSpace(trigger.Value) != "" || strings.TrimSpace(trigger.ValueRegex) != "") {
+			return nil, fmt.Errorf("gNMI trigger %q value_not cannot be combined with value or value_regex", trigger.Name)
+		}
 		condition := strings.ToLower(strings.TrimSpace(trigger.Condition))
 		if condition != "" && condition != "gt" && condition != "gte" && condition != "lt" && condition != "lte" && condition != "eq" && condition != "neq" {
 			return nil, fmt.Errorf("gNMI trigger %q condition must be gt, gte, lt, lte, eq, or neq", trigger.Name)
@@ -1355,6 +1358,9 @@ func gnmiTriggerHandler(ctx *stepExecutionContext, sshClient **ssh.Client, trigg
 			}
 			valueText := fmt.Sprint(event.Value)
 			if trigger.Value != "" && valueText != trigger.Value {
+				continue
+			}
+			if trigger.ValueNot != "" && valueText == trigger.ValueNot {
 				continue
 			}
 			if valuePatterns[index] != nil && !valuePatterns[index].MatchString(valueText) {

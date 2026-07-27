@@ -1200,7 +1200,7 @@ Additional monitoring examples:
 - [`31-gnmi-combined-change-monitor.yaml`](examples/workflow-operations/multivendor/31-gnmi-combined-change-monitor.yaml) monitors interface state, traffic, and CPU together during one bounded change window.
 - [`32-gnmi-guarded-new-path-provision.yaml`](examples/workflow-operations/multivendor/32-gnmi-guarded-new-path-provision.yaml) provisions interface `0/0/0/10` in parallel while protecting existing interfaces `0/0/0/0` and `0/0/0/1`, and immediately disables the new interface if a guard fires.
 - [`33-gnmi-all-interface-light-level-guard.yaml`](examples/workflow-operations/multivendor/33-gnmi-all-interface-light-level-guard.yaml) establishes independent RX/TX light baselines for every returned optical channel and alarms on a 1 dB drop.
-- [`34-gnmi-change-health-monitor.yaml`](examples/workflow-operations/multivendor/34-gnmi-change-health-monitor.yaml) combines all-channel optics, packet discards, and interface errors as a standalone monitor for a separate routine-change run.
+- [`34-gnmi-change-health-monitor.yaml`](examples/workflow-operations/multivendor/34-gnmi-change-health-monitor.yaml) combines all-channel optics, packet discards, interface errors, and IS-IS/LDP/BGP neighbor state as a standalone monitor for a separate routine-change run.
 
 To monitor an unrelated routine-change workbook, use two collector processes. Start the monitor first:
 
@@ -1216,7 +1216,24 @@ Allow approximately 40 seconds for the first counters and three optical baseline
 go run ./cmd/network-collector --config path/to/routine-change.yaml
 ```
 
-The monitor runs for its configured `duration_seconds` independently of the change process. It fails if any RX/TX channel falls more than `max_drop` dB, any interface discard counter increases, or any interface error counter increases. Each canonical path alarms independently and writes its own diagnostic event and session output.
+The monitor runs for its configured `duration_seconds` independently of the change process. Its sampled branch fails if any RX/TX channel falls more than `max_drop` dB, any interface discard counter increases, or any interface error counter increases. A parallel `on_change` branch requires IS-IS adjacency state `UP`, LDP session state `OPERATIONAL`, and BGP session state `ESTABLISHED`; it checks initial state and fails on later state changes or neighbor-path deletion. Each canonical path alarms independently and writes its own diagnostic event and session output.
+
+Use `value_not` for inverse string-state matching. The trigger fires for any value other than the configured healthy value:
+
+```yaml
+- name: bgp-session-not-established
+  event: update
+  path_regex: '/protocol\[identifier=BGP\].*/neighbor\[neighbor-address=.*\]/state/session-state$'
+  value_not: ESTABLISHED
+  include_initial: true
+  once: true
+  fail: true
+  steps:
+    - name: collect-bgp
+      cmd: show bgp summary
+```
+
+The example paths and healthy values follow the OpenConfig models. Platform support and protocol instance keys vary, so verify them against the target’s gNMI capabilities.
 
 Each SSH device run is recorded under `session_logs/` using the hostname and start timestamp in the filename. Set top-level `name_playbook` to include a playbook title in the ASCII banner at the start of each session log.
 
