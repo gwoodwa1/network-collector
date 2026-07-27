@@ -1697,8 +1697,22 @@ and examples 51–56 in
 Configured variables are validated before device execution. Null values,
 blank or whitespace-only strings, empty lists/maps, and empty values nested
 inside lists or maps are rejected with their variable path. Boolean `false`
-and numeric `0` are valid because they are explicit values. Missing template
-variables continue to fail during rendering.
+and numeric `0` are valid because they are explicit values.
+
+Before credentials are resolved or any device/local step starts, a per-device
+variable preflight walks the complete workflow. It rejects undefined or empty
+references in commands, messages, validations, approvals, local commands,
+NETCONF operations, declarative ensure resources, drift paths, workflow
+arguments, loops, blocks, parallel branches, and gNMI trigger actions. The
+check uses the effective variables for each host, including its inventory
+overrides, and understands variables introduced by earlier `register` steps,
+workflow parameters, `foreach` item/index bindings, and gNMI event bindings.
+An error includes the device and nested step path.
+
+Values produced by `register` or a gNMI event are runtime values: preflight can
+prove that the producer exists before the reference, but cannot know whether
+the device will return empty output. Normal execution and validation remain
+responsible for the content of those dynamic values.
 
 ### Running local tools
 

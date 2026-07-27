@@ -121,6 +121,37 @@ func main() {
 	if (includeSelector != nil || excludeSelector != nil || replayDevices != nil) && len(devices) == 0 {
 		slog.Warn("inventory selection matched no devices")
 	}
+
+	initialVariables, err := configVariables(config.Vars)
+	if err != nil {
+		slog.Error("invalid playbook variables", "error", err)
+		os.Exit(1)
+	}
+	variableStates := make(map[string]*deviceVariableState)
+	for index, device := range devices {
+		key := variableScopeKey(device.Hostname, device.IP)
+		state, exists := variableStates[key]
+		if !exists {
+			deviceVariables, variableErr := mergeInventoryVariables(initialVariables, device.InventoryVars)
+			if variableErr != nil {
+				slog.Error("invalid inventory variables", "hostname", device.Hostname, "error", variableErr)
+				os.Exit(1)
+			}
+			state = &deviceVariableState{variables: deviceVariables}
+			state.cond = sync.NewCond(&state.mu)
+			variableStates[key] = state
+		}
+		state.order = append(state.order, index)
+		if variableErr := preflightDeviceVariables(device, config.Workflows, state.variables); variableErr != nil {
+			slog.Error("variable preflight failed", "hostname", device.Hostname, "error", variableErr)
+			os.Exit(1)
+		}
+	}
+	if err := preflightLocalVariables(config.LocalSteps, config.Workflows, initialVariables); err != nil {
+		slog.Error("variable preflight failed", "error", err)
+		os.Exit(1)
+	}
+
 	rsaToken := cliRSAToken || config.Credentials.RSAToken
 	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth
@@ -248,19 +279,6 @@ func main() {
 		approvals, approvalWriter = newApprovalInput(os.Stdin), os.Stdout
 	}
 
-	variableStates := make(map[string]*deviceVariableState)
-	initialVariables, _ := configVariables(config.Vars)
-	for index, device := range devices {
-		key := variableScopeKey(device.Hostname, device.IP)
-		state, exists := variableStates[key]
-		if !exists {
-			deviceVariables, _ := mergeInventoryVariables(initialVariables, device.InventoryVars)
-			state = &deviceVariableState{variables: deviceVariables}
-			state.cond = sync.NewCond(&state.mu)
-			variableStates[key] = state
-		}
-		state.order = append(state.order, index)
-	}
 	runner := func(occurrence, index int, device DeviceConfig) deviceRunResult {
 		state := variableStates[variableScopeKey(device.Hostname, device.IP)]
 		state.mu.Lock()

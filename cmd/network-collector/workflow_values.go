@@ -12,6 +12,8 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 )
 
+var templateVariablePattern = regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
+
 func newApprovalInput(reader io.Reader) *approvalInput {
 	return &approvalInput{scanner: bufio.NewScanner(reader)}
 }
@@ -28,11 +30,10 @@ func readApprovalAnswer(input *approvalInput) approvalAnswer {
 }
 
 func renderTemplate(input string, vars map[string]string) (string, error) {
-	re := regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
 	missing := map[string]bool{}
 
-	output := re.ReplaceAllStringFunc(input, func(match string) string {
-		parts := re.FindStringSubmatch(match)
+	output := templateVariablePattern.ReplaceAllStringFunc(input, func(match string) string {
+		parts := templateVariablePattern.FindStringSubmatch(match)
 		if len(parts) < 2 {
 			return match
 		}
