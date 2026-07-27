@@ -2188,11 +2188,14 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		t.Fatalf("approval example is incomplete: %+v", approval)
 	}
 	scheduled := loaded["04-recurring-schedule.yaml"]
-	if scheduled.Schedule.Count != 3 || len(scheduled.LocalSteps) != 1 {
+	if scheduled.Schedule.Count != 3 {
 		t.Fatalf("schedule example is incomplete: %+v", scheduled)
 	}
 	diff := loaded["05-pre-post-diff.yaml"]
-	if len(diff.Workflows) != 1 || len(diff.SSH) != 1 || len(diff.SSH[0].Steps) != 8 || diff.SSH[0].Steps[0].Parallel == nil || diff.SSH[0].Steps[2].Approval == nil || diff.SSH[0].Steps[6].Parallel == nil {
+	if len(diff.Workflows) != 0 || len(diff.SSH) != 1 || len(diff.SSH[0].Steps) != 7 ||
+		diff.SSH[0].Steps[0].Parallel == nil || diff.SSH[0].Steps[2].Approval == nil ||
+		diff.SSH[0].Steps[5].Parallel == nil ||
+		diff.SSH[0].Steps[5].Parallel.Steps[0].Validation == nil {
 		t.Fatalf("pre/post diff example is incomplete: %+v", diff)
 	}
 	custom := loaded["06-custom-variables.yaml"]

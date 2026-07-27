@@ -39,9 +39,3 @@ ssh:
 
       - name: occurrence-complete
         message: health-sample occurrence completed
-
-local_steps:
-  - name: schedule-finished
-    local:
-      command: printf
-      args: ['All scheduled device occurrences completed\n']

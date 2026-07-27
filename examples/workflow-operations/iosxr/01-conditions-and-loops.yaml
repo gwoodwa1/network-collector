@@ -40,17 +40,9 @@ ssh:
             - name: collect-interface
               cmd: show interfaces {{interface}}
 
-      # A safe local step creates a JSON array, matching parser output that was
-      # registered from a previous device command.
-      - name: build-vlan-list
-        local:
-          command: printf
-          args: ['[100,200,300]']
-        register: discovered_vlans
-
       - name: discovered-vlans
         foreach:
-          from: discovered_vlans
+          items: [100, 200, 300]
           item: vlan
           steps:
             - name: collect-vlan
