@@ -255,7 +255,7 @@ func TestStepOutputBudgetRejectsBeforeRegistration(t *testing.T) {
 	ctx := &stepExecutionContext{
 		hostname: "router-01", ip: "192.0.2.10", sessionLog: io.Discard,
 		variables: map[string]string{}, runFailed: &failed, aggregated: &validations,
-		sshCommand: echoCommandExecutor{},
+		sshCommand: echoCommandExecutor{}, failureLog: filepath.Join(t.TempDir(), "failures.txt"),
 	}
 	executeSteps(ctx, nil, []StepConfig{{
 		Name: "bounded", Command: "oversized-device-response",
