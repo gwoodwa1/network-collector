@@ -126,7 +126,11 @@ go run ./cmd/network-collector \
 
 Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occurrences and exits; use an external scheduler for indefinite calendar-based execution.
 
-`05-pre-post-diff.yaml` is the most complete change-window pattern. It captures six pre/post command outputs, parses platform and route summaries with bundled TextFSM modules, generates unified JSON diffs with a reusable local workflow, and fails when selected state changes. Raw output may contain counters or timestamps, so compare only commands stable on your platform or parse and compare stable fields.
+`05-pre-post-diff.yaml` is the most complete change-window pattern. It captures
+six pre/post command outputs, parses platform and route summaries with bundled
+TextFSM modules, and uses native validation to fail when selected state
+changes. Raw output may contain counters or timestamps, so compare only
+commands stable on your platform or parse and compare stable fields.
 
 `09-openconfig-facts.yaml` demonstrates vendor-neutral fact gathering. Each subset tries an OpenConfig NETCONF filter first and falls back independently to SSH plus TextFSM. Set `format` to `openconfig`, `native`, or `both`; native output preserves fields that OpenConfig does not model. The bundled SSH mappings currently cover IOS-XR system, platform, interfaces, LLDP, BGP, IS-IS, and LDP.
 

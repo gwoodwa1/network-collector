@@ -278,7 +278,8 @@ Rules:
 
 - Use `validation` for one rule and `validations` for multiple rules.
 - If a step has `parser`, validations run against the parsed JSON, not raw CLI text.
-- If a step has `enrich`, its input must be valid JSON. A command normally needs a `parser`; a `local` step may emit JSON directly.
+- If a step has `enrich`, its input must be valid JSON. A device command
+  normally needs a `parser`.
 - Enrichment runs after parsing. Registration, validation, drift checks, and parsed artifacts use the enriched result.
 - If a step has `parser` and `register`, the parsed JSON is registered as the variable value.
 - If a step has `register` and validation results have `raw_extract`, the first non-empty `raw_extract` can be registered.
@@ -324,7 +325,9 @@ Rules for generated expressions:
 - Keep `_summary.has_issues`, `_summary.issue_count`, and `_summary.issues` stable when producing health results. Each issue should include a rule, severity, message, and evidence where practical.
 - Validate booleans with `expected_type: bool`.
 - Enrichment has no environment, filesystem, or jq module access. It is a deterministic transformation of the input JSON and `$params`.
-- `facts` steps currently use a separate execution path and do not apply `enrich` or validation. Do not generate `facts` plus `enrich` until runtime support is added; enrich a command/parser or local JSON step instead.
+- `facts` steps currently use a separate execution path and do not apply
+  `enrich` or validation. Do not generate `facts` plus `enrich` until runtime
+  support is added; enrich a command/parser step instead.
 
 A separate general-purpose skill is not required to write expressions. This authoring skill contains the runtime contract and preferred patterns. Consider a dedicated expression library or skill only when maintaining a sizeable catalogue of domain rules, vendor schema mappings, shared fixtures, and golden-output tests.
 - Use `wait_seconds` alone for pauses.
