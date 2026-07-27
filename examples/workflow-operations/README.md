@@ -20,7 +20,7 @@ easier to read.
 | `iosxr/04-recurring-schedule.yaml` | finite `schedule`, device concurrency, retries, validation actions |
 | `iosxr/05-pre-post-diff.yaml` | parallel pre-checks, health gate, approval, change hook, post-checks, unified diffs |
 | `iosxr/06-custom-variables.yaml` | inline `vars`, imported `vars_files`, conditions, loops, workflow arguments, validations |
-| `iosxr/07-interface-turnup.yaml` | approval, SSH configuration, hard-gated state/optics/error checks, automatic rollback |
+| `iosxr/07-interface-turnup.yaml` | admin-down precondition, approval, SSH configuration, hard-gated state/optics/error checks, automatic rollback |
 | `iosxr/08-ssh-security-profiles.yaml` | global `auto` negotiation, inventory-level `legacy` override, host-key migration |
 | `iosxr/09-openconfig-facts.yaml` | vendor-neutral OpenConfig facts, native facts, per-subset transport fallback |
 | `iosxr/10-targeting-canary-and-replay.yaml` | inventory labels, Boolean selectors, exclusions, canaries, failure thresholds, JSONL events, failed-device replay |
@@ -110,7 +110,14 @@ Schedules are deliberately finite. `04-recurring-schedule.yaml` runs three occur
 
 `06-custom-variables.yaml` imports shared values from `vars/common.yaml` and uses them throughout the workflow. This is a useful pattern for keeping site, environment, interface, expected-state, and change-window data separate from reusable workflow logic.
 
-`07-interface-turnup.yaml` is a guarded interface activation pattern. It verifies the port exists, asks for approval, commits `no shutdown`, checks line protocol, parses Rx/Tx optical power and alarm flags, verifies zero input/CRC/output errors, and returns the interface to shutdown if a post-check fails. Its multiline IOS-XR configuration commands are a lab template and must be tested against the target driver and commit policy.
+`07-interface-turnup.yaml` is a guarded interface activation pattern. Before
+approval or configuration, its fail-only precondition verifies that the
+selected port both exists and is administratively down; an active port may be
+the wrong port and is never changed. It then commits `no shutdown`, checks line
+protocol, parses Rx/Tx optical power and alarm flags, verifies zero
+input/CRC/output errors, and returns the interface to shutdown if a post-check
+fails. Its multiline IOS-XR configuration commands are a lab template and must
+be tested against the target driver and commit policy.
 
 `08-ssh-security-profiles.yaml` demonstrates a mixed customer estate. The playbook defaults to modern-first `auto`, while `inventory/security-profiles.yaml` explicitly assigns `legacy` to an older router. It retains the previous insecure host-key behavior to avoid surprising existing users and includes the two-line migration to `known_hosts` as comments.
 

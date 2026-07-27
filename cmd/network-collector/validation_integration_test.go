@@ -1944,7 +1944,9 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	}
 	turnup := loaded["07-interface-turnup.yaml"]
 	turnupParsers, err := loadOptionalParsers(turnup.ParsersFile, loadedPaths["07-interface-turnup.yaml"])
-	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" || len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 ||
+	if err != nil || turnupParsers == nil || turnupParsers.Parsers["xr_controller_optics_power"].Type != "regex" ||
+		len(turnup.SSH[0].Steps[0].Validations) != 2 || turnup.SSH[0].Steps[0].Validations[1].Expected != "administratively down" || !hardGate(turnup.SSH[0].Steps[0]) ||
+		len(turnup.SSH[0].Steps[2].Block.Rollback) != 1 ||
 		!hardGate(turnup.SSH[0].Steps[2].Block.Steps[2]) || !hardGate(turnup.SSH[0].Steps[2].Block.Steps[3]) || !hardGate(turnup.SSH[0].Steps[2].Block.Steps[4]) {
 		t.Fatalf("interface turn-up example is incomplete: parsers=%+v config=%+v error=%v", turnupParsers, turnup, err)
 	}

@@ -20,14 +20,21 @@ ssh:
       - name: capture-pre-change-interface
         cmd: show interfaces {{interface}}
         register: interface_before
-        validation:
-          extractor: regex
-          pattern: '(?m)^{{interface}} is (.+?), line protocol is (.+)$'
-          condition: matches
-          expected: '.+'
+        # This is a fail-only safety gate. It proves that the selected port
+        # exists and is administratively down before approval or configuration.
+        # An active port may be the wrong port and must never be disrupted.
+        validations:
+          - extractor: regex
+            pattern: '(?m)^{{interface}} is (.+?), line protocol is .+$'
+            condition: matches
+            expected: '.+'
+          - extractor: regex
+            pattern: '(?m)^{{interface}} is (administratively down), line protocol is .+$'
+            condition: eq
+            expected: administratively down
         on_fail:
           action: fail
-          message: interface {{interface}} was not found; refusing the change
+          message: interface {{interface}} was not found or is not administratively down; refusing the change
 
       - name: authorize-interface-turnup
         approval:
