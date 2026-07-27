@@ -1694,6 +1694,12 @@ providers for passwords and tokens. See
 and examples 51–56 in
 [`examples/workflow-operations`](examples/workflow-operations/README.md).
 
+Configured variables are validated before device execution. Null values,
+blank or whitespace-only strings, empty lists/maps, and empty values nested
+inside lists or maps are rejected with their variable path. Boolean `false`
+and numeric `0` are valid because they are explicit values. Missing template
+variables continue to fail during rendering.
+
 ### Running local tools
 
 A step can run an installed local CLI with `local`. Commands are executed directly as an argument list, without a shell. This avoids shell expansion and quoting surprises. Local commands default to a 30-second timeout, and their output can be registered, parsed, validated, and saved like SSH command output.

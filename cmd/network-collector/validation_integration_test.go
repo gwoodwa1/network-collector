@@ -1696,6 +1696,46 @@ func TestCustomVariablesFilesPrecedenceAndExecution(t *testing.T) {
 	}
 }
 
+func TestConfiguredVariablesRejectEmptyValuesRecursively(t *testing.T) {
+	invalid := []map[string]interface{}{
+		{"blank": "   "},
+		{"null_value": nil},
+		{"empty_list": []interface{}{}},
+		{"empty_map": map[string]interface{}{}},
+		{"nested_list": []interface{}{"65000:100", ""}},
+		{"nested_map": map[string]interface{}{"customer": map[string]interface{}{"rd": ""}}},
+	}
+	for _, values := range invalid {
+		if _, err := configVariables(values); err == nil {
+			t.Fatalf("empty configured variable was accepted: %+v", values)
+		}
+	}
+	valid, err := configVariables(map[string]interface{}{
+		"disabled":  false,
+		"threshold": 0,
+		"targets":   []interface{}{"65000:100"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid["disabled"] != "false" || valid["threshold"] != "0" ||
+		valid["targets"] != `["65000:100"]` {
+		t.Fatalf("false, zero, or populated list was changed unexpectedly: %+v", valid)
+	}
+}
+
+func TestInventoryHostRejectsEmptyVariables(t *testing.T) {
+	inventory := &InventoryConfig{Hosts: []InventoryHostConfig{{
+		Name: "router-01", IP: "192.0.2.1", Type: "cisco_iosxr",
+		Vars: map[string]interface{}{"route_distinguisher": ""},
+	}}}
+	_, err := resolveInventoryDevices([]DeviceConfig{{Host: "router-01", Command: "show version"}}, inventory)
+	if err == nil || !strings.Contains(err.Error(), `inventory host "router-01" vars`) ||
+		!strings.Contains(err.Error(), "is blank") {
+		t.Fatalf("empty inventory variable was not rejected clearly: %v", err)
+	}
+}
+
 func TestSSHSecurityConfigDefaultsAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

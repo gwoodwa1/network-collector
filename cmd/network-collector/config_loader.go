@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -234,6 +235,9 @@ func configVariables(values map[string]interface{}) (map[string]string, error) {
 		if !validName.MatchString(name) {
 			return nil, fmt.Errorf("variable name %q must be a valid template variable", name)
 		}
+		if err := validateVariableNotEmpty(value, name); err != nil {
+			return nil, fmt.Errorf("variable %q: %w", name, err)
+		}
 		text, err := variableString(value)
 		if err != nil {
 			return nil, fmt.Errorf("variable %q: %w", name, err)
@@ -241,6 +245,46 @@ func configVariables(values map[string]interface{}) (map[string]string, error) {
 		variables[name] = text
 	}
 	return variables, nil
+}
+
+func validateVariableNotEmpty(value interface{}, path string) error {
+	if value == nil {
+		return fmt.Errorf("%s is null", path)
+	}
+	current := reflect.ValueOf(value)
+	for current.Kind() == reflect.Interface || current.Kind() == reflect.Pointer {
+		if current.IsNil() {
+			return fmt.Errorf("%s is null", path)
+		}
+		current = current.Elem()
+	}
+	switch current.Kind() {
+	case reflect.String:
+		if strings.TrimSpace(current.String()) == "" {
+			return fmt.Errorf("%s is blank", path)
+		}
+	case reflect.Slice, reflect.Array:
+		if current.Len() == 0 {
+			return fmt.Errorf("%s is an empty list", path)
+		}
+		for index := 0; index < current.Len(); index++ {
+			if err := validateVariableNotEmpty(current.Index(index).Interface(), fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		if current.Len() == 0 {
+			return fmt.Errorf("%s is an empty map", path)
+		}
+		iterator := current.MapRange()
+		for iterator.Next() {
+			key := fmt.Sprint(iterator.Key().Interface())
+			if err := validateVariableNotEmpty(iterator.Value().Interface(), path+"."+key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func mergeInventoryVariables(base map[string]string, inventory map[string]interface{}) (map[string]string, error) {
