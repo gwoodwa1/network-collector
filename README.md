@@ -1434,8 +1434,9 @@ or `value_regex`. Initial values sent before the first gNMI sync response are
 ignored by default, preventing an already-UP interface from looking like a new
 transition. Trigger actions default to once per canonical path. Repeated
 execution requires `repeat: true`, is capped by `max_trigger_fires`, and is
-rate-limited by `trigger_cooldown_seconds`. `once` and `repeat` are mutually
-exclusive.
+rate-limited by `trigger_cooldown_seconds`. A non-configurable 100-action
+ceiling also applies across all triggers for one device run. `once` and
+`repeat` are mutually exclusive.
 
 Trigger actions receive `{{gnmi_event_type}}`, `{{gnmi_event_path}}`, `{{gnmi_event_value}}`, and the complete JSON event in `{{gnmi_event}}`. Their nested `steps` use the normal executor, so SSH commands, NETCONF operations, registered Go functionality, workflows, blocks, and other controls can be mixed without opening duplicate top-level inventory entries. A `gnmi.triggered` lifecycle event is also emitted.
 
