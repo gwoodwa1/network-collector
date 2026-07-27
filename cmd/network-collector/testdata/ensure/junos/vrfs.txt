@@ -1,0 +1,11 @@
+set routing-instances CUSTOMER-A instance-type vrf
+set routing-instances CUSTOMER-A route-distinguisher 65000:100
+set routing-instances CUSTOMER-A vrf-target import target:65000:100
+set routing-instances CUSTOMER-A vrf-target export target:65000:100
+set routing-instances CUSTOMER-A interface ge-0/0/3.0
+set routing-instances CUSTOMER-A routing-options static route 203.0.113.0/24 next-hop 192.0.2.10
+set routing-instances CUSTOMER-A protocols bgp group CE neighbor 192.0.2.20 peer-as 65100
+set security nat source pool CUSTOMER-A-SNAT routing-instance CUSTOMER-A
+set routing-instances CUSTOMER-B instance-type vrf
+set routing-instances CUSTOMER-B route-distinguisher 65000:200
+set routing-instances CUSTOMER-B vrf-target target:65000:200

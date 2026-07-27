@@ -1,0 +1,5 @@
+set routing-instances CUSTOMER-A instance-type vrf
+set routing-instances CUSTOMER-A route-distinguisher 65000:100
+set routing-instances CUSTOMER-A vrf-target import target:65000:100
+set routing-instances CUSTOMER-A vrf-target import target:65000:101
+set routing-instances CUSTOMER-A vrf-target export target:65000:100

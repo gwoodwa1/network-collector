@@ -4,6 +4,14 @@ All notable changes to Network Collector are documented here.
 
 ## Unreleased
 
+- Added Junos SSH VRF desired state with explicit `instance-type vrf`, exact
+  RD and directional route-target replacement, dependency-aware deletion
+  refusal, check-mode plans, verification, and inverse rollback.
+- Migrated the Junos routing monitor to the shared professional, self-contained
+  HTML report with change references and constrained PNG branding.
+- Added a report-generation compatibility matrix covering every vendor
+  workflow example.
+
 ## [1.2.1] - 2026-07-27
 
 - Added event-driven gNMI `Subscribe` triggers for update and delete notifications, with post-sync filtering, exact or regular-expression matching, event variables, lifecycle events, and immediate nested SSH, NETCONF, local, or reusable workflow actions.

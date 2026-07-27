@@ -66,6 +66,11 @@ files are required.
 | `--type`                   | `juniper_junos` | scrapligo platform/driver name used for every device you onboard.                                                                |
 | `--devices`                | *(none)*        | Optional YAML file pre-listing hostname/tables/interfaces/neighbors per device. See [below](#providing-devices-via-a-yaml-file-optional). |
 | `--passcode-reuse-window`  | `45s`           | How long a just-entered passcode may be offered for reuse on the next device. `0` disables reuse. See [below](#passcode-reuse).  |
+| `--report-output`          | `interface-traffic.html` | Professional HTML report filename inside the run artifact folder. |
+| `--report-title`           | `Junos Change Monitoring Report` | Title shown in the report header. |
+| `--change-reference`       | *(none)*        | Optional change or ticket reference shown in the report. |
+| `--logo-folder`            | *(none)*        | Folder containing optional PNG report branding. |
+| `--header-logo`, `--footer-logo` | *(automatic)* | PNG filenames inside `--logo-folder`; defaults to `header.png` and `footer.png` when present. |
 | `--diff-before`, `--diff-after` | *(none)*   | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end). |
 
 ### Onboarding (once at startup)
@@ -218,18 +223,27 @@ Everything else falls back to raw text in the same JSON line if its parser
 lookup fails, so a tick is never silently lost.
 
 After Ctrl+C, the tool reads this run's samples from the `.jsonl` files and
-writes `interface-traffic.html` in the same artifact folder when it finds
-parseable interface-rate data. The report is self-contained and graphs
-input/output bps over time for each device/interface, with a time scale of
-minute-aligned gridlines along the x-axis (one line per minute on short
-windows, automatically coarsening to 2/5/10/... -minute steps on longer
-ones so the chart stays readable). Any tick where a monitored table's
-default-route protocol next hop changed — e.g. the moment an
-internet-facing routing instance is repointed at a different peering
-router mid-change — is marked on that device's charts as a labeled
-vertical dashed line, so the traffic shift around the migration can be
-read in context. Older samples already present in an accumulated `.jsonl`
-from a previous run against the same `--devices` file are ignored.
+writes the shared Network Collector professional report
+(`interface-traffic.html` by default) in the same artifact folder when it
+finds parseable interface-rate data. The responsive, print-friendly report is
+self-contained and includes the run outcome, optional change reference,
+embedded PNG branding, and input/output bps charts for every
+device/interface. The time scale uses minute-aligned gridlines, automatically
+coarsening on longer windows. Any tick where a monitored table's default-route
+protocol next hop changed is marked as a labeled vertical line so the traffic
+shift around a migration can be read in context. Older samples already present
+in an accumulated `.jsonl` from a previous run are ignored.
+
+Branding images must be PNG files directly inside `--logo-folder`; absolute
+paths and parent traversal are rejected. For example:
+
+```bash
+./junos-routing-monitor \
+  --devices CHG-2026-0042.yaml \
+  --report-title "Junos core path migration" \
+  --change-reference CHG-2026-0042 \
+  --logo-folder ./branding
+```
 
 The interface command covers both statistics formats Junos produces: the
 compact `Input :`/`Output:` table that ae/physical units print, and `irb`

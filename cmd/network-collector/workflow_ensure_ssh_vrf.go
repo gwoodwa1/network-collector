@@ -11,6 +11,7 @@ import (
 
 type sshVRFState struct {
 	Exists             bool     `json:"exists"`
+	InstanceType       string   `json:"instance_type,omitempty"`
 	ControlPlaneExists bool     `json:"control_plane_exists,omitempty"`
 	PlatformContext    string   `json:"platform_context,omitempty"`
 	RouteDistinguisher string   `json:"route_distinguisher,omitempty"`
@@ -21,8 +22,9 @@ type sshVRFState struct {
 }
 
 type sshVRFPlatformAdapter struct {
-	parse    func(string, string) sshVRFState
-	commands func(string, sshVRFState, sshVRFState) []string
+	discovery string
+	parse     func(string, string) sshVRFState
+	commands  func(string, sshVRFState, sshVRFState) []string
 }
 
 func executeSSHVRFEnsure(
@@ -68,7 +70,10 @@ func executeSSHVRFEnsure(
 		}
 	}
 
-	discoveryCommand := "show running-config"
+	discoveryCommand := adapter.discovery
+	if discoveryCommand == "" {
+		discoveryCommand = "show running-config"
+	}
 	output, err := executor.Execute(discoveryCommand)
 	display := fmt.Sprintf("ensure vrf %s state=%s transport=ssh", name, strings.ToLower(strings.TrimSpace(config.State)))
 	if err != nil {
@@ -76,6 +81,15 @@ func executeSSHVRFEnsure(
 	}
 	current := adapter.parse(output, name)
 	desired.PlatformContext = current.PlatformContext
+	if platform == "juniper_junos" {
+		desired.InstanceType = "vrf"
+		if current.Exists && current.InstanceType != "" && current.InstanceType != desired.InstanceType {
+			return output, display, fmt.Errorf(
+				"Junos routing instance %q has instance-type %q; refusing to manage it as a VRF",
+				name, current.InstanceType,
+			)
+		}
+	}
 	if platform == "arista_eos" && present {
 		desired.ControlPlaneExists = true
 		if current.PlatformContext == "" {
@@ -140,9 +154,15 @@ func sshVRFAdapter(platform string) (sshVRFPlatformAdapter, error) {
 		return sshVRFPlatformAdapter{parse: parseIOSXEVRFState, commands: iosXEVRFCommands}, nil
 	case "cisco_nxos":
 		return sshVRFPlatformAdapter{parse: parseNXOSVRFState, commands: nxOSVRFCommands}, nil
+	case "juniper_junos":
+		return sshVRFPlatformAdapter{
+			discovery: "show configuration | display set",
+			parse:     parseJunosVRFState,
+			commands:  junosVRFCommands,
+		}, nil
 	default:
 		return sshVRFPlatformAdapter{}, fmt.Errorf(
-			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos",
+			"SSH vrf ensure is not supported for platform %q; currently supported: cisco_iosxr, arista_eos, cisco_iosxe, cisco_nxos, juniper_junos",
 			platform,
 		)
 	}
@@ -458,6 +478,74 @@ func parseNXOSVRFState(output, name string) sshVRFState {
 	return state
 }
 
+func parseJunosVRFState(output, name string) sshVRFState {
+	state := sshVRFState{ImportRouteTargets: []string{}, ExportRouteTargets: []string{}}
+	prefix := "set routing-instances " + name + " "
+	dependencies := map[string]struct{}{}
+	for _, raw := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, prefix) {
+			if junosReferencesRoutingInstance(line, name) {
+				dependencies[line] = struct{}{}
+			}
+			continue
+		}
+		state.Exists = true
+		remainder := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		fields := strings.Fields(remainder)
+		switch {
+		case len(fields) == 2 && fields[0] == "instance-type":
+			state.InstanceType = fields[1]
+		case len(fields) == 2 && fields[0] == "route-distinguisher":
+			state.RouteDistinguisher = fields[1]
+		case len(fields) == 3 && fields[0] == "vrf-target" && fields[1] == "import":
+			if target, ok := junosRouteTarget(fields[2]); ok {
+				state.ImportRouteTargets = append(state.ImportRouteTargets, target)
+			} else {
+				dependencies[remainder] = struct{}{}
+			}
+		case len(fields) == 3 && fields[0] == "vrf-target" && fields[1] == "export":
+			if target, ok := junosRouteTarget(fields[2]); ok {
+				state.ExportRouteTargets = append(state.ExportRouteTargets, target)
+			} else {
+				dependencies[remainder] = struct{}{}
+			}
+		default:
+			dependencies[remainder] = struct{}{}
+		}
+	}
+	state.ImportRouteTargets = normalizedRouteTargets(state.ImportRouteTargets)
+	state.ExportRouteTargets = normalizedRouteTargets(state.ExportRouteTargets)
+	for dependency := range dependencies {
+		state.Dependencies = append(state.Dependencies, dependency)
+	}
+	sort.Strings(state.Dependencies)
+	return state
+}
+
+func junosReferencesRoutingInstance(line, name string) bool {
+	fields := strings.Fields(line)
+	for index := 0; index+1 < len(fields); index++ {
+		if (fields[index] == "routing-instance" || fields[index] == "routing-instances") &&
+			fields[index+1] == name {
+			return true
+		}
+	}
+	return false
+}
+
+func junosRouteTarget(value string) (string, bool) {
+	const prefix = "target:"
+	if !strings.HasPrefix(value, prefix) {
+		return "", false
+	}
+	target := strings.TrimPrefix(value, prefix)
+	if validateRouteTarget(target, "Junos route target") != nil {
+		return "", false
+	}
+	return target, true
+}
+
 func sshVRFMatches(current, desired sshVRFState) bool {
 	if current.Exists != desired.Exists {
 		return false
@@ -466,6 +554,7 @@ func sshVRFMatches(current, desired sshVRFState) bool {
 		return true
 	}
 	return current.RouteDistinguisher == desired.RouteDistinguisher &&
+		(desired.InstanceType == "" || current.InstanceType == desired.InstanceType) &&
 		current.ControlPlaneExists == desired.ControlPlaneExists &&
 		stringSlicesEqual(current.ImportRouteTargets, desired.ImportRouteTargets) &&
 		stringSlicesEqual(current.ExportRouteTargets, desired.ExportRouteTargets)
@@ -643,6 +732,53 @@ func nxOSVRFCommands(name string, current, desired sshVRFState) []string {
 		}
 	}
 	return append(commands, "end", "copy running-config startup-config")
+}
+
+func junosVRFCommands(name string, current, desired sshVRFState) []string {
+	hierarchy := "routing-instances " + name
+	if current.Exists && !desired.Exists {
+		return []string{"configure", "delete " + hierarchy, "commit and-quit"}
+	}
+	if !desired.Exists {
+		return nil
+	}
+	commands := []string{"configure"}
+	if current.InstanceType != desired.InstanceType {
+		if current.InstanceType != "" {
+			commands = append(commands, "delete "+hierarchy+" instance-type "+current.InstanceType)
+		}
+		commands = append(commands, "set "+hierarchy+" instance-type "+desired.InstanceType)
+	}
+	if current.RouteDistinguisher != desired.RouteDistinguisher {
+		if current.RouteDistinguisher != "" {
+			commands = append(commands, "delete "+hierarchy+" route-distinguisher "+current.RouteDistinguisher)
+		}
+		if desired.RouteDistinguisher != "" {
+			commands = append(commands, "set "+hierarchy+" route-distinguisher "+desired.RouteDistinguisher)
+		}
+	}
+	for _, change := range junosRouteTargetChanges(hierarchy, "import", current.ImportRouteTargets, desired.ImportRouteTargets) {
+		commands = append(commands, change)
+	}
+	for _, change := range junosRouteTargetChanges(hierarchy, "export", current.ExportRouteTargets, desired.ExportRouteTargets) {
+		commands = append(commands, change)
+	}
+	return append(commands, "commit and-quit")
+}
+
+func junosRouteTargetChanges(hierarchy, direction string, current, desired []string) []string {
+	changes := []string{}
+	for _, target := range current {
+		if !containsString(desired, target) {
+			changes = append(changes, "delete "+hierarchy+" vrf-target "+direction+" target:"+target)
+		}
+	}
+	for _, target := range desired {
+		if !containsString(current, target) {
+			changes = append(changes, "set "+hierarchy+" vrf-target "+direction+" target:"+target)
+		}
+	}
+	return changes
 }
 
 func nxOSRouteTargetChanges(current, desired sshVRFState) []string {

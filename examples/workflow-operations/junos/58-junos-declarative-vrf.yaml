@@ -1,0 +1,35 @@
+name_playbook: Declarative Junos SSH VRF
+inventory_file: ../inventory/junos-netconf.yaml
+fail_on_fail: true
+
+vars:
+  vrf_name: CUSTOMER-C
+  route_distinguisher: 65000:300
+  import_route_targets: ["65000:300", "65000:301"]
+  export_route_targets: ["65000:300"]
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+
+ssh:
+  - host: junos-pe-01
+    steps:
+      - name: authorize-junos-vrf
+        approval:
+          message: Ensure VRF {{vrf_name}} uses RD {{route_distinguisher}}?
+          timeout_seconds: 300
+
+      - name: ensure-junos-vrf
+        ensure:
+          resource: vrf
+          name: "{{vrf_name}}"
+          state: present
+          transport: ssh
+          rollback_on_failure: true
+          attributes:
+            route_distinguisher: "{{route_distinguisher}}"
+            import_route_targets: ["{{import_route_targets}}"]
+            export_route_targets: ["{{export_route_targets}}"]
+        register: vrf_plan

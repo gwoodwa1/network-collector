@@ -1359,6 +1359,153 @@ func TestNXOSVRFVerificationFailureRollsBack(t *testing.T) {
 	}
 }
 
+func TestJunosVRFParsingFindsAttributesAndDependencies(t *testing.T) {
+	state := parseJunosVRFState(readPlatformEnsureFixture(t, "junos", "vrfs.txt"), "CUSTOMER-A")
+	if !state.Exists || state.InstanceType != "vrf" ||
+		state.RouteDistinguisher != "65000:100" ||
+		len(state.ImportRouteTargets) != 1 || state.ImportRouteTargets[0] != "65000:100" ||
+		len(state.ExportRouteTargets) != 1 || state.ExportRouteTargets[0] != "65000:100" ||
+		len(state.Dependencies) != 4 ||
+		state.Dependencies[0] != "interface ge-0/0/3.0" ||
+		state.Dependencies[1] != "protocols bgp group CE neighbor 192.0.2.20 peer-as 65100" ||
+		state.Dependencies[2] != "routing-options static route 203.0.113.0/24 next-hop 192.0.2.10" ||
+		state.Dependencies[3] != "set security nat source pool CUSTOMER-A-SNAT routing-instance CUSTOMER-A" {
+		t.Fatalf("unexpected Junos VRF state: %+v", state)
+	}
+}
+
+func TestJunosVRFCheckModePlansExplicitReplacementAndInverse(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "junos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	ctx.checkMode = true
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:110",
+			ImportRouteTargets: []string{"65000:100", "65000:110"},
+			ExportRouteTargets: []string{"65000:110"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"action": "would-change"`,
+		"delete routing-instances CUSTOMER-A route-distinguisher 65000:100",
+		"set routing-instances CUSTOMER-A route-distinguisher 65000:110",
+		"delete routing-instances CUSTOMER-A vrf-target import target:65000:101",
+		"delete routing-instances CUSTOMER-A vrf-target export target:65000:100",
+		"set routing-instances CUSTOMER-A vrf-target export target:65000:110",
+		"set routing-instances CUSTOMER-A route-distinguisher 65000:100",
+		"commit and-quit",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("Junos replacement or inverse plan is missing %q: %s", expected, output)
+		}
+	}
+	if len(executor.commands) != 1 ||
+		executor.commands[0] != "show configuration | display set" {
+		t.Fatalf("Junos check mode sent unexpected commands: %+v", executor.commands)
+	}
+}
+
+func TestJunosVRFIsIdempotentAndDeletionRefusesDependencies(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "junos", "vrfs-no-dependencies.txt")
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture}}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	output, _, err := executeSSHEnsureStep(ctx, executor, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:100",
+			ImportRouteTargets: []string{"65000:100", "65000:101"},
+			ExportRouteTargets: []string{"65000:100"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 1 || !strings.Contains(output, `"changed": false`) {
+		t.Fatalf("in-sync Junos VRF sent a mutation: commands=%+v output=%s", executor.commands, output)
+	}
+
+	dependent := &sequenceSSHEnsureExecutor{outputs: []string{readPlatformEnsureFixture(t, "junos", "vrfs.txt")}}
+	_, _, err = executeSSHEnsureStep(ctx, dependent, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "absent", Transport: "ssh",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interface ge-0/0/3.0") ||
+		!strings.Contains(err.Error(), "routing-options static route") ||
+		!strings.Contains(err.Error(), "routing-instance CUSTOMER-A") {
+		t.Fatalf("dependent Junos VRF deletion was not refused clearly: %v", err)
+	}
+	if len(dependent.commands) != 1 {
+		t.Fatalf("Junos dependency refusal sent a mutation: %+v", dependent.commands)
+	}
+
+	wrongType := &sequenceSSHEnsureExecutor{outputs: []string{
+		"set routing-instances CUSTOMER-A instance-type virtual-router\n",
+	}}
+	_, _, err = executeSSHEnsureStep(ctx, wrongType, EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-A", State: "present", Transport: "ssh",
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:100",
+			ImportRouteTargets: []string{"65000:100"},
+			ExportRouteTargets: []string{"65000:100"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `instance-type "virtual-router"`) {
+		t.Fatalf("non-VRF Junos routing instance was not refused: %v", err)
+	}
+}
+
+func TestJunosVRFAppliesVerifiesAndRollsBackOnFailure(t *testing.T) {
+	fixture := readPlatformEnsureFixture(t, "junos", "vrfs-no-dependencies.txt")
+	verified := fixture + `
+set routing-instances CUSTOMER-C instance-type vrf
+set routing-instances CUSTOMER-C route-distinguisher 65000:300
+set routing-instances CUSTOMER-C vrf-target import target:65000:300
+set routing-instances CUSTOMER-C vrf-target export target:65000:300
+`
+	config := EnsureConfig{
+		Resource: "vrf", Name: "CUSTOMER-C", State: "present", Transport: "ssh",
+		RollbackOnFailure: true,
+		Attributes: EnsureAttributesConfig{
+			RouteDistinguisher: "65000:300",
+			ImportRouteTargets: []string{"65000:300"},
+			ExportRouteTargets: []string{"65000:300"},
+		},
+	}
+	ctx, _ := interactionContext(t, nil)
+	ctx.deviceType = "juniper_junos"
+	executor := &sequenceSSHEnsureExecutor{outputs: []string{fixture, "commit complete", verified}}
+	output, _, err := executeSSHEnsureStep(ctx, executor, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.commands) != 3 ||
+		!strings.Contains(executor.commands[1], "set routing-instances CUSTOMER-C instance-type vrf") ||
+		!strings.Contains(executor.commands[1], "commit and-quit") ||
+		!strings.Contains(output, `"action": "changed"`) {
+		t.Fatalf("Junos VRF did not apply and verify: commands=%+v output=%s", executor.commands, output)
+	}
+
+	failing := &sequenceSSHEnsureExecutor{outputs: []string{
+		fixture, "commit complete", fixture, "rollback complete",
+	}}
+	output, _, err = executeSSHEnsureStep(ctx, failing, config)
+	if err == nil || !strings.Contains(err.Error(), "automatic rollback completed") {
+		t.Fatalf("Junos verification failure did not remain failed after rollback: %v", err)
+	}
+	if len(failing.commands) != 4 ||
+		!strings.Contains(failing.commands[3], "delete routing-instances CUSTOMER-C") ||
+		!strings.Contains(output, `"rollback_status": "succeeded"`) {
+		t.Fatalf("Junos inverse rollback was incomplete: commands=%+v output=%s", failing.commands, output)
+	}
+}
+
 func TestSSHEnsureRejectsUnsupportedPlatformAndUnsafeValues(t *testing.T) {
 	executor := &sequenceSSHEnsureExecutor{}
 	ctx, _ := interactionContext(t, nil)

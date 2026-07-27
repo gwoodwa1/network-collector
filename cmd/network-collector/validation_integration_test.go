@@ -1954,8 +1954,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 57 {
-		t.Fatalf("expected fifty-seven vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) != 58 {
+		t.Fatalf("expected fifty-eight vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -1974,8 +1974,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 57 {
-		t.Fatalf("expected fifty-seven loaded playbooks, got %d", len(loaded))
+	if len(loaded) != 58 {
+		t.Fatalf("expected fifty-eight loaded playbooks, got %d", len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[4].Foreach == nil || conditions[5].Repeat == nil {
@@ -2152,6 +2152,16 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		len(nxosVRFState[1].Ensure.Attributes.ExportRouteTargets) != 1 ||
 		!nxosVRFState[1].Ensure.RollbackOnFailure {
 		t.Fatalf("declarative NX-OS VRF example is incomplete: %+v", nxosVRFState)
+	}
+	junosVRFState := loaded["58-junos-declarative-vrf.yaml"].SSH[0].Steps
+	if len(junosVRFState) != 2 || junosVRFState[0].Approval == nil ||
+		junosVRFState[1].Ensure == nil || junosVRFState[1].Ensure.Resource != "vrf" ||
+		junosVRFState[1].Ensure.Transport != "ssh" ||
+		junosVRFState[1].Ensure.Attributes.RouteDistinguisher == "" ||
+		len(junosVRFState[1].Ensure.Attributes.ImportRouteTargets) != 1 ||
+		len(junosVRFState[1].Ensure.Attributes.ExportRouteTargets) != 1 ||
+		!junosVRFState[1].Ensure.RollbackOnFailure {
+		t.Fatalf("declarative Junos VRF example is incomplete: %+v", junosVRFState)
 	}
 	for _, example := range []string{
 		"51-iosxr-inventory-vars-vrf.yaml",

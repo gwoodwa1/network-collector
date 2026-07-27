@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
+	"github.com/gwoodwa1/network-collector/internal/reporting"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
 
@@ -33,12 +34,20 @@ func main() {
 	var devicesFile string
 	var passcodeReuseWindow time.Duration
 	var diffBeforePath, diffAfterPath string
+	var reportOutput, reportTitle, changeReference string
+	var logoFolder, headerLogo, footerLogo string
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "directory to write one <hostname>.jsonl file per device")
 	flag.StringVar(&parsersFile, "parsers", "", "path to an external parser module file; defaults to this binary's embedded parser definitions")
 	flag.StringVar(&deviceType, "type", "juniper_junos", "scrapligo platform/driver name for all onboarded devices")
 	flag.StringVar(&devicesFile, "devices", "", "optional YAML file listing hostname/tables/interfaces/neighbors per device; credentials are still always prompted interactively")
 	flag.DurationVar(&passcodeReuseWindow, "passcode-reuse-window", 45*time.Second, "how long an entered one-time passcode may be offered for reuse on the next device; 0 disables reuse")
+	flag.StringVar(&reportOutput, "report-output", "interface-traffic.html", "professional HTML report filename")
+	flag.StringVar(&reportTitle, "report-title", "Junos Change Monitoring Report", "professional report title")
+	flag.StringVar(&changeReference, "change-reference", "", "change/ticket reference shown in the report")
+	flag.StringVar(&logoFolder, "logo-folder", "", "directory containing optional PNG report branding")
+	flag.StringVar(&headerLogo, "header-logo", "", "PNG filename inside logo-folder (default: header.png when present)")
+	flag.StringVar(&footerLogo, "footer-logo", "", "PNG filename inside logo-folder (default: footer.png when present)")
 	flag.StringVar(&diffBeforePath, "diff-before", "", "path to a captured *-before.json snapshot; combine with -diff-after to print a route-level diff and exit, instead of connecting to any device")
 	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
 	flag.Parse()
@@ -54,6 +63,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if err := reporting.ValidateBranding(reporting.Config{
+		LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo,
+	}); err != nil {
+		slog.Error("invalid report branding", "error", err)
+		os.Exit(1)
 	}
 
 	// Tracked so an interval set at the top of a --devices file can be
@@ -196,10 +211,14 @@ func main() {
 		}(session)
 	}
 	wg.Wait()
-	if reportPath, err := monitorreport.GenerateInterfaceReport(outputDir, startedAt); err != nil {
-		slog.Warn("failed to write interface traffic report", "error", err)
+	reportPath, reportErr := monitorreport.GenerateProfessionalInterfaceReport(outputDir, startedAt, monitorreport.ProfessionalReportConfig{
+		Output: reportOutput, Title: reportTitle, ChangeReference: changeReference,
+		LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo, CompletedAt: time.Now(),
+	})
+	if reportErr != nil {
+		slog.Warn("failed to write professional monitoring report", "error", reportErr)
 	} else if reportPath != "" {
-		fmt.Fprintf(snapshotOut, "interface traffic report written to %s\n", reportPath)
+		fmt.Fprintf(snapshotOut, "professional monitoring report written to %s\n", reportPath)
 	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")

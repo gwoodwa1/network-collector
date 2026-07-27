@@ -549,8 +549,8 @@ statements and `commit and-quit`. SR OS uses model-driven Base-router or VPRN
 and
 [`47-nokia-sros-declarative-static-route.yaml`](examples/workflow-operations/sros/47-nokia-sros-declarative-static-route.yaml).
 
-IOS XR, Arista EOS, Cisco IOS-XE, and Cisco NX-OS also support declarative
-SSH VRFs:
+IOS XR, Arista EOS, Cisco IOS-XE, Cisco NX-OS, and Junos also support
+declarative SSH VRFs:
 
 ```yaml
 ensure:
@@ -571,7 +571,11 @@ families and policies untouched. EOS keeps `vrf instance` separate from its
 `router bgp` VRF and discovers the existing local BGP ASN rather than asking
 the workbook to duplicate it. NX-OS manages RD and IPv4-unicast route targets
 under `vrf context`, understands both directional and `route-target both`
-forms, and persists with `copy running-config startup-config`. `state: absent`
+forms, and persists with `copy running-config startup-config`. Junos owns the
+`instance-type vrf`, route distinguisher, and directional `vrf-target`
+statements while preserving other routing-instance configuration; it also
+detects references outside the routing-instance hierarchy before deletion.
+`state: absent`
 first scans the running
 configuration and refuses deletion if an interface, static route, BGP
 neighbor/policy, or other configuration hierarchy references the VRF.
@@ -583,7 +587,9 @@ and
 and
 [`50-cisco-iosxe-declarative-vrf.yaml`](examples/workflow-operations/iosxe/50-cisco-iosxe-declarative-vrf.yaml)
 and
-[`57-cisco-nxos-declarative-vrf.yaml`](examples/workflow-operations/nxos/57-cisco-nxos-declarative-vrf.yaml).
+[`57-cisco-nxos-declarative-vrf.yaml`](examples/workflow-operations/nxos/57-cisco-nxos-declarative-vrf.yaml),
+and
+[`58-junos-declarative-vrf.yaml`](examples/workflow-operations/junos/58-junos-declarative-vrf.yaml).
 
 Under `--check`, these adapters open SSH only for their fixed read-only
 discovery commands. The JSON plan contains `current`, `desired`, `changed`,
@@ -1635,12 +1641,12 @@ go run ./cmd/reporter \
 The reporter reads only the supplied run bundle. Artifact references outside
 the run directory are not opened.
 
-`xr-routing-monitor` uses this shared professional reporting engine for its
-end-of-run interface traffic and default-route transition report. Its
-`--report-title`, `--change-reference`, and logo flags provide the same
-branding choices while retaining the monitor-specific charts. The generated
-HTML is self-contained and requires no browser or graphical environment on
-the monitoring host.
+`xr-routing-monitor` and `junos-routing-monitor` use this shared professional
+reporting engine for their end-of-run interface traffic and default-route
+transition reports. Their `--report-title`, `--change-reference`, and logo
+flags provide the same branding choices while retaining monitor-specific
+charts. The generated HTML is self-contained and requires no browser or
+graphical environment on the monitoring host.
 
 ### Reusable orchestration package
 

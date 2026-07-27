@@ -71,6 +71,7 @@ easier to read.
 | `junos/55-junos-inventory-vars-static-route.yaml` | Junos exact static route rendered from per-host inventory variables |
 | `sros/56-sros-inventory-vars-static-route.yaml` | Nokia SR OS exact static route rendered from per-host inventory variables |
 | `nxos/57-cisco-nxos-declarative-vrf.yaml` | Cisco NX-OS VRF desired state with RD/route-target replacement and automatic inverse rollback |
+| `junos/58-junos-declarative-vrf.yaml` | Junos VRF desired state with explicit instance type, RD/route-target replacement, dependency refusal, inverse rollback, and `--check` |
 
 Run one example from the repository root:
 
