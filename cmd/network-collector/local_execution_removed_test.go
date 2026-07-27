@@ -78,7 +78,7 @@ credentials:
 				t.Fatal(err)
 			}
 			_, _, err := loadConfig(path)
-			if err == nil || !strings.Contains(err.Error(), "executable selection is fixed") {
+			if err == nil || !strings.Contains(err.Error(), "administrator-controlled") {
 				t.Fatalf("credential binary selection was not rejected: %v", err)
 			}
 		})

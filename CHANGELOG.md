@@ -2,6 +2,20 @@
 
 All notable changes to Network Collector are documented here.
 
+## [Unreleased]
+
+- Added fail-closed gNMI subscription budgets for duration, updates, response
+  size/count, trigger executions, and repeat-action cooldowns. Trigger actions
+  now default to once per canonical path and require `repeat: true` for
+  repeated execution.
+- Reused the configured NETCONF executor for facts collection so host-key
+  policy and custom known-hosts settings are consistent across all NETCONF
+  paths.
+- Disabled CyberArk redirects and replaced Vault/1Password `PATH` lookup with
+  startup validation of administrator-controlled absolute executable paths.
+- Pinned the Docker build and runtime base images to immutable multi-platform
+  digests.
+
 ## [2.0.1] - 2026-07-27
 
 - Made production security the default configuration policy. The collector now
