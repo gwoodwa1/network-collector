@@ -324,6 +324,7 @@ func Render(config Config, model Model) (string, error) {
 	if model.SchemaVersion == "" {
 		model.SchemaVersion = ReportModelVersion
 	}
+	model = sanitizeModel(model)
 	var rendered bytes.Buffer
 	if err := reportTemplate.Execute(&rendered, model); err != nil {
 		return "", fmt.Errorf("render report: %w", err)

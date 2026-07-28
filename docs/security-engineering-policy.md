@@ -167,6 +167,14 @@ The repository's GitHub Actions workflows are expected to enforce:
 Actions and container base images should be pinned to immutable revisions.
 Dependency and base-image update automation must not bypass the same gates.
 
+The repository contract tests in `internal/securitycontract` fail when these
+in-tree workflow, release-scanning, action-pinning, container-pinning, or
+toolchain requirements drift. Repository tests cannot prove GitHub's external
+branch-protection configuration. Repository administrators must separately
+require both `Test / test` and `Test / container-security` for changes to
+`main`, and periodically verify that requirement through the GitHub ruleset or
+branch-protection API.
+
 ## Public and private material
 
 The following belongs in the public repository:

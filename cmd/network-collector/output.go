@@ -7,9 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/safeoutput"
 
 	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
@@ -378,23 +379,8 @@ func writeSessionf(writer io.Writer, format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(writer, format, args...)
 }
 
-var sensitiveLogPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(password|passwd|secret|community|token)\b(\s+(?:[0579]\s+)?|\s*[:=]\s*)([^\s,;]+)`),
-	regexp.MustCompile(`(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`),
-	regexp.MustCompile(`(?is)<(?:password|secret|community|token)(?:\s[^>]*)?>.*?</(?:password|secret|community|token)>`),
-}
-
 func protectHumanOutput(value string) string {
-	value = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '\t' || r >= 0x20 && r != 0x7f {
-			return r
-		}
-		return -1
-	}, value)
-	for _, pattern := range sensitiveLogPatterns {
-		value = pattern.ReplaceAllString(value, "$1$2[REDACTED]")
-	}
-	return value
+	return safeoutput.Sanitize(value)
 }
 
 func outputMetadata(value string) string {

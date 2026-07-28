@@ -1,9 +1,36 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestPrintTickStatusLineNeutralisesHostileDeviceOutput(t *testing.T) {
+	stats, _ := json.Marshal(map[string]any{"stats": []map[string]string{{
+		"INPUT_RATE_BPS": "1", "OUTPUT_RATE_BPS": "2",
+	}}})
+	var buf bytes.Buffer
+	printTickStatusLine(&buf, tickResult{
+		Hostname: "\x1b]2;hostile-title\x07 password=JUNOS_SECRET_CANARY",
+		Interfaces: map[string]json.RawMessage{
+			"token=JUNOS_INTERFACE_CANARY": stats,
+		},
+	}, true)
+	got := buf.String()
+	for _, secret := range []string{"JUNOS_SECRET_CANARY", "JUNOS_INTERFACE_CANARY"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("terminal status retained secret %q: %q", secret, got)
+		}
+	}
+	if strings.ContainsRune(got, '\x1b') || strings.ContainsRune(got, '\a') {
+		t.Fatalf("terminal status retained a control sequence: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("terminal status omitted its redaction marker: %q", got)
+	}
+}
 
 func TestSummarizeBGPCountsEstablOnly(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{"neighbors": []map[string]string{

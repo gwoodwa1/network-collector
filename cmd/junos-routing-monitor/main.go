@@ -23,6 +23,7 @@ import (
 
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
 	"github.com/gwoodwa1/network-collector/internal/reporting"
+	"github.com/gwoodwa1/network-collector/internal/safeoutput"
 	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 	"github.com/gwoodwa1/network-collector/pkg/credentials"
 )
@@ -166,12 +167,13 @@ func main() {
 	// io.MultiWriter provide no such guarantee on their own, so it's wrapped
 	// in a real mutex to keep concurrent devices' status lines from
 	// splicing together on the terminal or in session.log.
-	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, sessionLogFile), nil)))
+	humanOutput := safeoutput.NewWriter(io.MultiWriter(os.Stderr, sessionLogFile))
+	slog.SetDefault(slog.New(slog.NewTextHandler(humanOutput, nil)))
 	// Plain (non-slog) operational confirmations, like a snapshot having been
 	// written — same style as the onboarding "connected to X" messages, but
 	// mirrored to session.log too, since they happen during the change
 	// window itself rather than during setup.
-	snapshotOut := &syncWriter{w: io.MultiWriter(os.Stderr, sessionLogFile)}
+	snapshotOut := &syncWriter{w: humanOutput}
 
 	reader := bufio.NewReader(os.Stdin)
 	cache := &credentialCache{window: passcodeReuseWindow}
@@ -207,7 +209,7 @@ func main() {
 		return
 	}
 
-	statusOut := newTickStatusPrinter(&syncWriter{w: io.MultiWriter(os.Stdout, sessionLogFile)})
+	statusOut := newTickStatusPrinter(&syncWriter{w: safeoutput.NewWriter(io.MultiWriter(os.Stdout, sessionLogFile))})
 	fmt.Fprintf(os.Stderr, "\n%d device(s) connected; polling every %s, writing to %s/. Press Ctrl+C to stop.\n\n", len(sessions), interval, outputDir)
 	slog.Info("polling started", "device_count", len(sessions), "interval", interval.String())
 

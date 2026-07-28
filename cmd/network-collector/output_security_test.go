@@ -34,7 +34,7 @@ func TestAtomicWriteUsesOwnerOnlyPermissions(t *testing.T) {
 }
 
 func TestProtectedOutputIsOmittedByDefaultAndRedactedWhenEnabled(t *testing.T) {
-	const sensitive = "username admin password=supersecret\n\x1b[31mrouter"
+	const sensitive = "username admin password=supersecret\n\x1b[31mrouter\x1b]2;hostile-title\x07"
 	var defaultLog bytes.Buffer
 	writeProtectedOutput(&stepExecutionContext{jsonOut: true, sessionLog: &defaultLog}, "command", sensitive)
 	if strings.Contains(defaultLog.String(), "supersecret") || !strings.Contains(defaultLog.String(), "output omitted") {
@@ -43,7 +43,9 @@ func TestProtectedOutputIsOmittedByDefaultAndRedactedWhenEnabled(t *testing.T) {
 
 	var transcript bytes.Buffer
 	writeProtectedOutput(&stepExecutionContext{jsonOut: true, sessionOutput: true, sessionLog: &transcript}, "command", sensitive)
-	if strings.Contains(transcript.String(), "supersecret") || strings.ContainsRune(transcript.String(), '\x1b') {
+	if strings.Contains(transcript.String(), "supersecret") ||
+		strings.ContainsRune(transcript.String(), '\x1b') ||
+		strings.ContainsRune(transcript.String(), '\a') {
 		t.Fatalf("protected transcript disclosed secret or terminal control: %q", transcript.String())
 	}
 	if !strings.Contains(transcript.String(), "[REDACTED]") {

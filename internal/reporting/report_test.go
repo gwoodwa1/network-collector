@@ -150,6 +150,52 @@ func TestRenderCompactReportUsesAuditedBuiltInTemplate(t *testing.T) {
 	}
 }
 
+func TestRenderReportEscapesHostileFieldsAndRedactsSecretCanaries(t *testing.T) {
+	runDir := t.TempDir()
+	now := time.Now().UTC()
+	hostile := `<img src=x onerror=alert(1)>`
+	secret := "password=NC_SECRET_CANARY_DO_NOT_LEAK"
+	path, err := Render(Config{RunDir: runDir}, Model{
+		Title: hostile + "\x1b]2;terminal-title\x07",
+		RunID: "run-security", Playbook: hostile, StartedAt: now, CompletedAt: now,
+		Status: "Failed", StatusClass: "danger", GeneratedAt: now,
+		Devices: []Device{{Hostname: hostile, IP: "192.0.2.10", Failed: true, Status: "Failed"}},
+		FailedValidations: []Validation{{
+			Hostname: hostile, Status: "Failed", StatusClass: "danger",
+			Check: "response", Message: secret + " " + hostile,
+		}},
+		Changes: []Change{{
+			Hostname: hostile, Step: hostile, Resource: "configuration",
+			Action: "changed", StatusClass: "warning", Commands: []string{secret},
+			Evidence: secret,
+		}},
+		Warnings: []string{secret},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(content)
+	if strings.Contains(html, hostile) {
+		t.Fatal("hostile device output was rendered as active HTML")
+	}
+	if !strings.Contains(html, `&lt;img src=x onerror=alert`) {
+		t.Fatal("escaped hostile evidence was not retained")
+	}
+	if strings.Contains(html, "NC_SECRET_CANARY_DO_NOT_LEAK") {
+		t.Fatal("known secret form reached the HTML report")
+	}
+	if strings.ContainsRune(html, '\x1b') || strings.ContainsRune(html, '\a') {
+		t.Fatal("terminal control reached the HTML report")
+	}
+	if !strings.Contains(html, "[REDACTED]") {
+		t.Fatal("report did not include a visible redaction marker")
+	}
+}
+
 func TestValidateTemplateFailsClosedForUnknownTemplate(t *testing.T) {
 	for _, name := range []string{"custom", "company.html.tmpl", "../template"} {
 		t.Run(name, func(t *testing.T) {

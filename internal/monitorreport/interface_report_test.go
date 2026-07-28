@@ -46,6 +46,45 @@ func TestGenerateInterfaceReportFromJSONL(t *testing.T) {
 	}
 }
 
+func TestGenerateInterfaceReportEscapesHostileOutputAndRedactsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	hostile := `</script><script>alert(1)</script>`
+	secret := "token=NC_INTERFACE_SECRET_CANARY"
+	line, err := json.Marshal(map[string]interface{}{
+		"timestamp": "2026-07-15T10:00:00Z",
+		"hostname":  hostile,
+		"interfaces": map[string]interface{}{
+			secret: map[string]interface{}{
+				"stats": []map[string]string{{"INPUT_RATE_BPS": "1", "OUTPUT_RATE_BPS": "2"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hostile.jsonl"), append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := GenerateInterfaceReport(dir, mustParseTime(t, "2026-07-15T09:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(content)
+	if strings.Contains(html, hostile) {
+		t.Fatal("hostile device output escaped its script-data context")
+	}
+	if strings.Contains(html, "NC_INTERFACE_SECRET_CANARY") {
+		t.Fatal("known secret form reached the interface report")
+	}
+	if !strings.Contains(html, "[REDACTED]") {
+		t.Fatal("interface report did not retain a redaction marker")
+	}
+}
+
 func TestGenerateInterfaceReportReturnsEmptyWhenNoSamples(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "pe1.jsonl"), []byte(`{"timestamp":"2026-07-15T10:00:00Z","hostname":"pe1"}`+"\n"), 0o644); err != nil {

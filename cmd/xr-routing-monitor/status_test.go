@@ -91,6 +91,31 @@ func TestPrintTickStatusLineHealthyTick(t *testing.T) {
 	}
 }
 
+func TestPrintTickStatusLineNeutralisesHostileDeviceOutput(t *testing.T) {
+	stats, _ := json.Marshal(map[string]any{"stats": []map[string]string{{
+		"INPUT_RATE_BPS": "1", "OUTPUT_RATE_BPS": "2",
+	}}})
+	var buf bytes.Buffer
+	printTickStatusLine(&buf, tickResult{
+		Hostname: "\x1b]2;hostile-title\x07 password=XR_SECRET_CANARY",
+		Interfaces: map[string]json.RawMessage{
+			"token=XR_INTERFACE_CANARY": stats,
+		},
+	}, true, []string{"token=XR_INTERFACE_CANARY"}, nil)
+	got := buf.String()
+	for _, secret := range []string{"XR_SECRET_CANARY", "XR_INTERFACE_CANARY"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("terminal status retained secret %q: %q", secret, got)
+		}
+	}
+	if strings.ContainsRune(got, '\x1b') || strings.ContainsRune(got, '\a') {
+		t.Fatalf("terminal status retained a control sequence: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("terminal status omitted its redaction marker: %q", got)
+	}
+}
+
 // TestTickStatusPrinterBlankLineBetweenRounds proves a blank line is
 // inserted the moment a hostname reports again before every other
 // still-active hostname has reported once, and that a device dropping out

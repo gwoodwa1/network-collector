@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/safeoutput"
 	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
@@ -85,6 +86,16 @@ func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) 
 	}
 	if len(series) == 0 {
 		return "", nil
+	}
+	for index := range series {
+		series[index].Hostname = safeoutput.Sanitize(series[index].Hostname)
+		series[index].Interface = safeoutput.Sanitize(series[index].Interface)
+	}
+	for index := range events {
+		events[index].Hostname = safeoutput.Sanitize(events[index].Hostname)
+		events[index].Table = safeoutput.Sanitize(events[index].Table)
+		events[index].From = safeoutput.Sanitize(events[index].From)
+		events[index].To = safeoutput.Sanitize(events[index].To)
 	}
 
 	data, err := json.Marshal(map[string]any{"series": series, "events": events})

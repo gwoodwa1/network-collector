@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/safeoutput"
 	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
@@ -85,13 +86,25 @@ func GenerateMonitorReport(config MonitorConfig, series []MonitorSeries, events 
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(map[string]interface{}{"series": series, "events": events})
+	safeSeries := append([]MonitorSeries(nil), series...)
+	for index := range safeSeries {
+		safeSeries[index].Hostname = safeoutput.Sanitize(safeSeries[index].Hostname)
+		safeSeries[index].Interface = safeoutput.Sanitize(safeSeries[index].Interface)
+	}
+	safeEvents := append([]MonitorEvent(nil), events...)
+	for index := range safeEvents {
+		safeEvents[index].Hostname = safeoutput.Sanitize(safeEvents[index].Hostname)
+		safeEvents[index].Table = safeoutput.Sanitize(safeEvents[index].Table)
+		safeEvents[index].From = safeoutput.Sanitize(safeEvents[index].From)
+		safeEvents[index].To = safeoutput.Sanitize(safeEvents[index].To)
+	}
+	payload, err := json.Marshal(map[string]interface{}{"series": safeSeries, "events": safeEvents})
 	if err != nil {
 		return "", err
 	}
 	devices := map[string]bool{}
 	samples := 0
-	for _, item := range series {
+	for _, item := range safeSeries {
 		devices[item.Hostname] = true
 		samples += len(item.Points)
 	}
@@ -104,10 +117,10 @@ func GenerateMonitorReport(config MonitorConfig, series []MonitorSeries, events 
 		completed = time.Now()
 	}
 	view := monitorView{
-		Title: title, ChangeReference: strings.TrimSpace(config.ChangeReference),
+		Title: safeoutput.Sanitize(title), ChangeReference: safeoutput.Sanitize(strings.TrimSpace(config.ChangeReference)),
 		StartedAt: config.StartedAt, CompletedAt: completed, Duration: completed.Sub(config.StartedAt),
 		DeviceCount: len(devices), InterfaceCount: len(series), SampleCount: samples, EventCount: len(events),
-		HeaderLogo: header, FooterLogo: footer, Data: template.JS(payload), Events: append([]MonitorEvent(nil), events...),
+		HeaderLogo: header, FooterLogo: footer, Data: template.JS(payload), Events: safeEvents,
 		GeneratedAt: time.Now().UTC(),
 	}
 	sort.Slice(view.Events, func(i, j int) bool { return view.Events[i].Timestamp < view.Events[j].Timestamp })

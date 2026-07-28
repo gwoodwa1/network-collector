@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
+	"github.com/gwoodwa1/network-collector/internal/safeoutput"
 )
 
 // syncWriter serializes concurrent Write calls with a mutex. Every device
@@ -87,12 +88,12 @@ func tickHeaderLine(result tickResult, sessionAlive bool) string {
 // scrollback (and a session.log redirect) stays a faithful, replayable
 // record either way.
 func printTickStatusLine(out io.Writer, result tickResult, sessionAlive bool) {
-	fmt.Fprintln(out, tickHeaderLine(result, sessionAlive))
+	fmt.Fprintln(out, safeoutput.Sanitize(tickHeaderLine(result, sessionAlive)))
 	if !sessionAlive {
 		return
 	}
 	for _, line := range interfaceTableLines(result) {
-		fmt.Fprintln(out, "  "+line)
+		fmt.Fprintln(out, safeoutput.Sanitize("  "+line))
 	}
 }
 
