@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 	"github.com/gwoodwa1/network-collector/pkg/validation"
 )
 
@@ -68,11 +69,8 @@ func prepareRunOutput(config OutputConfig, runID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve output directory: %w", err)
 	}
-	if err := os.MkdirAll(runDir, 0700); err != nil {
+	if err := secureartifact.EnsureDir(runDir); err != nil {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
-	}
-	if err := os.Chmod(runDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to secure output directory: %w", err)
 	}
 	if config.RetentionDays > 0 {
 		if err := pruneManagedOutputs(filepath.Dir(runDir), "run-", config.RetentionDays, time.Now()); err != nil {
@@ -138,30 +136,10 @@ func stepOutputEnabled(global bool, override *bool) bool {
 }
 
 func atomicWriteFile(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := secureartifact.EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".network-collector-*")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	defer os.Remove(tempName)
-	if err := temp.Chmod(0600); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if _, err := temp.Write(content); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tempName, path)
+	return secureartifact.WriteFile(path, content)
 }
 
 func saveStepArtifact(ctx *stepExecutionContext, step StepConfig, stepName string, attempt int, kind, content string) error {
@@ -268,11 +246,8 @@ func openSessionLog(hostname, playbookName string, started time.Time) (*os.File,
 	if _, err := resolveWriteWithin(".", filepath.Join("session_logs", ".permission-check")); err != nil {
 		return nil, "", fmt.Errorf("resolve session log directory: %w", err)
 	}
-	if err := os.MkdirAll("session_logs", 0700); err != nil {
+	if err := secureartifact.EnsureDir("session_logs"); err != nil {
 		return nil, "", fmt.Errorf("failed to create session log directory: %w", err)
-	}
-	if err := os.Chmod("session_logs", 0700); err != nil {
-		return nil, "", fmt.Errorf("failed to secure session log directory: %w", err)
 	}
 	if err := ensureFailureLog(failureLogPath()); err != nil {
 		return nil, "", err
@@ -280,7 +255,7 @@ func openSessionLog(hostname, playbookName string, started time.Time) (*os.File,
 
 	filename := fmt.Sprintf("%s_%s.log", sanitizeLogName(hostname), started.Format("20060102_150405"))
 	path := "session_logs/" + filename
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create session log file: %w", err)
 	}
@@ -301,7 +276,10 @@ func ensureFailureLog(path string) error {
 	if strings.TrimSpace(path) == "" {
 		path = failureLogPath()
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err := secureartifact.EnsureDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("failed to create failure log directory: %w", err)
+	}
+	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("failed to create failure log file: %w", err)
 	}
@@ -360,13 +338,10 @@ func appendFailureRecord(path, hostname, ip, stepName, status, message string, r
 		Message:   strings.TrimSpace(message),
 		Timestamp: time.Now(),
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := secureartifact.EnsureDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("failed to create failure log directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("failed to secure failure log directory: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return fmt.Errorf("failed to open failure log file: %w", err)
 	}

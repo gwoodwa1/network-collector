@@ -80,6 +80,18 @@ func TestLoadDeviceSpecsInvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoadDeviceSpecsRejectsYAMLAnchors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := "devices:\n  - &device\n    hostname: router-1\n  - *device\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, err := loadDeviceSpecs(path); err == nil ||
+		!strings.Contains(err.Error(), "anchors and aliases") {
+		t.Fatalf("XR device YAML anchors were not rejected: %v", err)
+	}
+}
+
 func TestLoadDeviceSpecsInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.yaml")
 	content := `interval: 30s

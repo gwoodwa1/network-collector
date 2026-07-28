@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +85,18 @@ func TestLoadDeviceSpecsInvalidYAML(t *testing.T) {
 	}
 	if _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for malformed YAML")
+	}
+}
+
+func TestLoadDeviceSpecsRejectsYAMLAnchors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := "devices:\n  - &device\n    hostname: router-1\n  - *device\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := loadDeviceSpecs(path); err == nil ||
+		!strings.Contains(err.Error(), "anchors and aliases") {
+		t.Fatalf("Junos device YAML anchors were not rejected: %v", err)
 	}
 }
 

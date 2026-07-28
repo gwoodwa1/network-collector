@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 type Event struct {
@@ -316,13 +318,10 @@ type JSONLSink struct {
 }
 
 func NewJSONLSink(path string) (*JSONLSink, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := secureartifact.EnsureDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("create event output directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
-		return nil, fmt.Errorf("secure event output directory: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return nil, fmt.Errorf("open event output: %w", err)
 	}

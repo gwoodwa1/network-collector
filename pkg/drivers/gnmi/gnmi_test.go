@@ -2,15 +2,19 @@ package gnmi
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	gnmipb "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/openconfig/gnmic/pkg/api/path"
 	"github.com/openconfig/gnmic/pkg/api/target"
+	"github.com/openconfig/gnmic/pkg/formatters"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type testGNMIServer struct {
@@ -28,6 +32,23 @@ type budgetBreachSubscriptionServer struct {
 	gnmipb.UnimplementedGNMIServer
 	canceled      chan struct{}
 	responseValue string
+}
+
+type finiteSubscriptionServer struct {
+	gnmipb.UnimplementedGNMIServer
+	responses []*gnmipb.SubscribeResponse
+}
+
+func (s *finiteSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	for _, response := range s.responses {
+		if err := stream.Send(response); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
@@ -244,6 +265,75 @@ func TestOversizedSubscriptionCancelsGRPCStream(t *testing.T) {
 	}
 }
 
+func subscriptionResponseWithWireSize(t *testing.T, targetBytes int) *gnmipb.SubscribeResponse {
+	t.Helper()
+	makeResponse := func(valueBytes int) *gnmipb.SubscribeResponse {
+		return &gnmipb.SubscribeResponse{
+			Response: &gnmipb.SubscribeResponse_Update{
+				Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
+					Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_BytesVal{
+						BytesVal: make([]byte, valueBytes),
+					}},
+				}}},
+			},
+		}
+	}
+	low, high := 0, targetBytes
+	for low <= high {
+		middle := low + (high-low)/2
+		response := makeResponse(middle)
+		size := proto.Size(response)
+		switch {
+		case size < targetBytes:
+			low = middle + 1
+		case size > targetBytes:
+			high = middle - 1
+		default:
+			return response
+		}
+	}
+	t.Fatalf("could not construct subscription protobuf of exactly %d bytes", targetBytes)
+	return nil
+}
+
+func TestSubscriptionGRPCReceiveBoundaryUsesProductionConstant(t *testing.T) {
+	for _, offset := range []int{-1, 0, 1} {
+		offset := offset
+		t.Run(fmt.Sprintf("limit%+d", offset), func(t *testing.T) {
+			response := subscriptionResponseWithWireSize(t, MaxSubscriptionReceiveMessageBytes+offset)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer()
+			gnmipb.RegisterGNMIServer(server, &finiteSubscriptionServer{
+				responses: []*gnmipb.SubscribeResponse{response},
+			})
+			go func() { _ = server.Serve(listener) }()
+			defer server.Stop()
+
+			client := &GNMIClient{}
+			if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			_, err = client.Subscribe(context.Background(), Subscription{
+				Paths: []string{"/interfaces"},
+				Mode:  "once",
+			})
+			receiveLimitError := err != nil && strings.Contains(err.Error(), "larger than max")
+			if offset <= 0 && receiveLimitError {
+				t.Fatalf("%d-byte protobuf was rejected at the %d-byte receive boundary: %v",
+					proto.Size(response), MaxSubscriptionReceiveMessageBytes, err)
+			}
+			if offset > 0 && !receiveLimitError {
+				t.Fatalf("%d-byte protobuf was not rejected at the %d-byte receive boundary: %v",
+					proto.Size(response), MaxSubscriptionReceiveMessageBytes, err)
+			}
+		})
+	}
+}
+
 func TestAggregateBudgetCancelsStreamWithDeadlinedParent(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -300,17 +390,107 @@ func TestSubscriptionJSONLimitIsPostDecodeProcessingBoundary(t *testing.T) {
 	}
 	defer client.Close()
 
+	var callbacks atomic.Int32
 	_, err = client.SubscribeEvents(context.Background(), Subscription{
 		Paths: []string{"/interfaces"},
 		Mode:  "once",
-	}, nil)
+	}, func(Event) error {
+		callbacks.Add(1)
+		return nil
+	})
 	if err == nil || !strings.Contains(err.Error(), "JSON response") || !strings.Contains(err.Error(), "post-decode") {
 		t.Fatalf("JSON processing boundary was not reported precisely: %v", err)
+	}
+	if callbacks.Load() != 0 {
+		t.Fatalf("oversized decoded response reached %d callbacks", callbacks.Load())
 	}
 	select {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("JSON processing rejection did not cancel the stream")
+	}
+}
+
+func TestSubscriptionAggregateByteAndCountChecksPrecedeRejectedCallback(t *testing.T) {
+	response := &gnmipb.SubscribeResponse{
+		Response: &gnmipb.SubscribeResponse_Update{
+			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
+				Path: &gnmipb.Path{Elem: []*gnmipb.PathElem{{Name: "state"}}},
+				Val:  &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "up"}},
+			}}},
+		},
+	}
+	body, err := (&formatters.MarshalOptions{Multiline: false}).Marshal(response, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name          string
+		responses     []*gnmipb.SubscribeResponse
+		config        Subscription
+		wantError     string
+		wantCallbacks int32
+	}{
+		{
+			name:      "exact-byte-limit",
+			responses: []*gnmipb.SubscribeResponse{response},
+			config: Subscription{
+				Paths: []string{"/interfaces"}, Mode: "once",
+				MaxResponseBytes: len(body),
+			},
+			wantCallbacks: 1,
+		},
+		{
+			name:      "one-byte-over-aggregate-limit",
+			responses: []*gnmipb.SubscribeResponse{response},
+			config: Subscription{
+				Paths: []string{"/interfaces"}, Mode: "once",
+				MaxResponseBytes: len(body) - 1,
+			},
+			wantError: "aggregate response limit",
+		},
+		{
+			name:      "one-response-over-count-limit",
+			responses: []*gnmipb.SubscribeResponse{response, response},
+			config: Subscription{
+				Paths: []string{"/interfaces"}, Mode: "once",
+				MaxResponseCount: 1,
+			},
+			wantError:     "response limit",
+			wantCallbacks: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer()
+			gnmipb.RegisterGNMIServer(server, &finiteSubscriptionServer{responses: test.responses})
+			go func() { _ = server.Serve(listener) }()
+			defer server.Stop()
+
+			client := &GNMIClient{}
+			if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var callbacks atomic.Int32
+			_, err = client.SubscribeEvents(context.Background(), test.config, func(Event) error {
+				callbacks.Add(1)
+				return nil
+			})
+			if test.wantError == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantError != "" && (err == nil || !strings.Contains(err.Error(), test.wantError)) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantError)
+			}
+			if got := callbacks.Load(); got != test.wantCallbacks {
+				t.Fatalf("callbacks = %d, want %d", got, test.wantCallbacks)
+			}
+		})
 	}
 }
 

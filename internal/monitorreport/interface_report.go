@@ -2,6 +2,7 @@ package monitorreport
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -91,16 +92,17 @@ func GenerateInterfaceReport(outputDir string, since time.Time) (string, error) 
 		return "", fmt.Errorf("encode report data: %w", err)
 	}
 
-	path := filepath.Join(outputDir, "interface-traffic.html")
-	file, err := secureartifact.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-	if err != nil {
-		return "", fmt.Errorf("open report: %w", err)
-	}
-	defer file.Close()
-
-	if err := interfaceReportTemplate.Execute(file, map[string]any{
+	var rendered bytes.Buffer
+	if err := interfaceReportTemplate.Execute(&rendered, map[string]any{
 		"Data": template.JS(data),
 	}); err != nil {
+		return "", fmt.Errorf("write report: %w", err)
+	}
+	path := filepath.Join(outputDir, "interface-traffic.html")
+	if err := secureartifact.EnsureDir(filepath.Dir(path)); err != nil {
+		return "", fmt.Errorf("create report directory: %w", err)
+	}
+	if err := secureartifact.WriteFile(path, rendered.Bytes()); err != nil {
 		return "", fmt.Errorf("write report: %w", err)
 	}
 	return path, nil

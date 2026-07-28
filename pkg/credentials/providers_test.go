@@ -62,3 +62,14 @@ func TestCommandProviderIsRejected(t *testing.T) {
 		t.Fatalf("command provider was not rejected: %v", err)
 	}
 }
+
+func TestFileProviderRejectsYAMLAnchorsBeforeCredentialDecode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.yaml")
+	content := "default: &credentials\n  username: admin\n  password: secret\nprofiles:\n  copied: *credentials\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileProvider(path); err == nil || !strings.Contains(err.Error(), "anchors and aliases") {
+		t.Fatalf("credential YAML anchors were not rejected: %v", err)
+	}
+}
