@@ -5,9 +5,15 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    - cron: "41 4 * * 1"
 
 permissions:
   contents: read
+
+env:
+  EXPECTED_GO_VERSION: go1.26.5
+  GOVULNCHECK_VERSION: v1.6.0
 
 jobs:
   test:
@@ -21,6 +27,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          go env GOVERSION GOTOOLCHAIN GOPROXY GOSUMDB
+          test "$(go env GOVERSION)" = "${EXPECTED_GO_VERSION}"
 
       - name: Verify dependency files
         run: |
@@ -36,8 +48,20 @@ jobs:
       - name: Fuzz parser modules
         run: go test ./cmd/network-collector -run=^$ -fuzz=FuzzParserModules -fuzztime=10s
 
-      - name: Go vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Install govulncheck
+        run: |
+          mkdir -p "${RUNNER_TEMP}/security-tools"
+          GOBIN="${RUNNER_TEMP}/security-tools" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "${RUNNER_TEMP}/security-tools" >> "${GITHUB_PATH}"
+
+      - name: Go source vulnerability scan
+        run: govulncheck -show verbose ./...
+
+      - name: Go test vulnerability scan
+        run: govulncheck -test -show verbose ./...
+
+      - name: Build and scan every command binary
+        run: scripts/scan-go-binaries.sh "${RUNNER_TEMP}/security-scan"
 
       - name: Security static analysis
         run: go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated -severity high ./...
@@ -48,3 +72,47 @@ jobs:
           name: go-coverage
           path: coverage.out
           if-no-files-found: error
+
+  container-security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          go env GOVERSION GOTOOLCHAIN GOPROXY GOSUMDB
+          test "$(go env GOVERSION)" = "${EXPECTED_GO_VERSION}"
+
+      - name: Install govulncheck
+        run: |
+          mkdir -p "${RUNNER_TEMP}/security-tools"
+          GOBIN="${RUNNER_TEMP}/security-tools" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "${RUNNER_TEMP}/security-tools" >> "${GITHUB_PATH}"
+
+      - name: Build release image
+        run: docker build --build-arg VERSION=security-scan -t network-collector:security-scan .
+
+      - name: Extract and scan embedded Go binary
+        run: |
+          container_id="$(docker create network-collector:security-scan)"
+          trap 'docker rm -f "${container_id}" >/dev/null' EXIT
+          docker cp "${container_id}:/usr/local/bin/network-collector" "${RUNNER_TEMP}/network-collector"
+          go version -m "${RUNNER_TEMP}/network-collector"
+          govulncheck -mode binary "${RUNNER_TEMP}/network-collector"
+
+      - name: Scan runtime image packages
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: network-collector:security-scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: false
+          severity: CRITICAL,HIGH

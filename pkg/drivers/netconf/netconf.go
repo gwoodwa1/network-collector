@@ -20,13 +20,90 @@ import (
 
 type Option = drivers.Option
 
+const defaultCloseTimeout = 5 * time.Second
+
+type netconfSession interface {
+	Open() error
+	Close() error
+	Abort() error
+	Ready() error
+	RPC(...util.Option) (*response.NetconfResponse, error)
+	EditConfig(string, string) (*response.NetconfResponse, error)
+	Commit(...util.Option) (*response.NetconfResponse, error)
+	Discard() (*response.NetconfResponse, error)
+	Lock(string) (*response.NetconfResponse, error)
+	Unlock(string) (*response.NetconfResponse, error)
+	Validate(string) (*response.NetconfResponse, error)
+	GetConfig(string, ...util.Option) (*response.NetconfResponse, error)
+	CopyConfig(string, string) (*response.NetconfResponse, error)
+	DeleteConfig(string) (*response.NetconfResponse, error)
+}
+
+type scrapligoSession struct {
+	driver *netconf.Driver
+}
+
+func (s *scrapligoSession) Open() error  { return s.driver.Open() }
+func (s *scrapligoSession) Close() error { return s.driver.Close() }
+func (s *scrapligoSession) Abort() (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic while aborting NETCONF channel: %v", recovered)
+		}
+	}()
+	return s.driver.Channel.Close()
+}
+func (s *scrapligoSession) Ready() error {
+	if len(s.driver.ServerCapabilities()) == 0 {
+		return errors.New("NETCONF server hello contained no capabilities")
+	}
+	switch s.driver.SelectedVersion {
+	case netconf.V1Dot0, netconf.V1Dot1:
+		return nil
+	default:
+		return fmt.Errorf("NETCONF capability exchange did not select a protocol version")
+	}
+}
+func (s *scrapligoSession) RPC(options ...util.Option) (*response.NetconfResponse, error) {
+	return s.driver.RPC(options...)
+}
+func (s *scrapligoSession) EditConfig(target, payload string) (*response.NetconfResponse, error) {
+	return s.driver.EditConfig(target, payload)
+}
+func (s *scrapligoSession) Commit(options ...util.Option) (*response.NetconfResponse, error) {
+	return s.driver.Commit(options...)
+}
+func (s *scrapligoSession) Discard() (*response.NetconfResponse, error) {
+	return s.driver.Discard()
+}
+func (s *scrapligoSession) Lock(target string) (*response.NetconfResponse, error) {
+	return s.driver.Lock(target)
+}
+func (s *scrapligoSession) Unlock(target string) (*response.NetconfResponse, error) {
+	return s.driver.Unlock(target)
+}
+func (s *scrapligoSession) Validate(source string) (*response.NetconfResponse, error) {
+	return s.driver.Validate(source)
+}
+func (s *scrapligoSession) GetConfig(source string, options ...util.Option) (*response.NetconfResponse, error) {
+	return s.driver.GetConfig(source, options...)
+}
+func (s *scrapligoSession) CopyConfig(source, target string) (*response.NetconfResponse, error) {
+	return s.driver.CopyConfig(source, target)
+}
+func (s *scrapligoSession) DeleteConfig(target string) (*response.NetconfResponse, error) {
+	return s.driver.DeleteConfig(target)
+}
+
 type ScrapligoNETCONF struct {
 	host          string
-	network       *netconf.Driver
+	network       netconfSession
 	socketTimeout time.Duration
 	opsTimeout    time.Duration
+	closeTimeout  time.Duration
 	hostKeyPolicy hostkey.Policy
 	hostKeyError  error
+	newSession    func(string, ...util.Option) (netconfSession, error)
 }
 
 func WithNetconfTimeouts(socketTimeout, opsTimeout time.Duration) Option {
@@ -106,13 +183,28 @@ func (n *ScrapligoNETCONF) Connect(host, username, password string, opts ...Opti
 		options = append(options, scraplioptions.WithTimeoutOps(n.opsTimeout))
 	}
 
-	d, err := netconf.NewDriver(n.host, options...)
+	newSession := n.newSession
+	if newSession == nil {
+		newSession = func(host string, options ...util.Option) (netconfSession, error) {
+			driver, err := netconf.NewDriver(host, options...)
+			if err != nil {
+				return nil, err
+			}
+			return &scrapligoSession{driver: driver}, nil
+		}
+	}
+	d, err := newSession(n.host, options...)
 	if err != nil {
 		return fmt.Errorf("failed to create NETCONF driver: %w", err)
 	}
 
 	if err := d.Open(); err != nil {
+		_ = d.Abort()
 		return fmt.Errorf("failed to open NETCONF driver: %w", err)
+	}
+	if err := d.Ready(); err != nil {
+		_ = d.Abort()
+		return fmt.Errorf("NETCONF session did not become ready: %w", err)
 	}
 
 	n.network = d
@@ -321,8 +413,37 @@ func (n *ScrapligoNETCONF) Close() error {
 	if n == nil || n.network == nil {
 		return nil
 	}
-	if err := n.network.Close(); err != nil {
-		return fmt.Errorf("failed to close NETCONF client: %w", err)
+	session := n.network
+	n.network = nil
+
+	timeout := n.closeTimeout
+	if timeout <= 0 {
+		timeout = defaultCloseTimeout
 	}
-	return nil
+	result := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				result <- fmt.Errorf("panic while closing NETCONF client: %v", recovered)
+			}
+		}()
+		result <- session.Close()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		if err != nil {
+			_ = session.Abort()
+			return fmt.Errorf("failed to close NETCONF client: %w", err)
+		}
+		return nil
+	case <-timer.C:
+		abortErr := session.Abort()
+		if abortErr != nil {
+			return fmt.Errorf("NETCONF close exceeded %s; forced channel abort also failed: %w", timeout, abortErr)
+		}
+		return fmt.Errorf("NETCONF close exceeded %s; channel was forcibly aborted", timeout)
+	}
 }

@@ -21,7 +21,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -X main.version={{.Version}}
 
   - id: xr-routing-monitor
     main: ./cmd/xr-routing-monitor
@@ -36,7 +36,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -X main.version={{.Version}}
 
   - id: junos-routing-monitor
     main: ./cmd/junos-routing-monitor
@@ -51,7 +51,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -X main.version={{.Version}}
 
 archives:
   - id: network-collector

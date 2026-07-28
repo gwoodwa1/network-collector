@@ -138,7 +138,11 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	defer unix.Close(parent)
-	fd, err := unix.Openat(parent, name, unixOpenFlags(flags), uint32(FileMode))
+	// O_TRUNC changes the inode during open, before the returned descriptor
+	// can be verified. Delay truncation until fstat has proved that the
+	// opened object is a regular file with no additional hard links.
+	openFlags := flags &^ os.O_TRUNC
+	fd, err := unix.Openat(parent, name, unixOpenFlags(openFlags), uint32(FileMode))
 	if err != nil {
 		return nil, fmt.Errorf("open private artifact %q: %w", path, err)
 	}
@@ -157,9 +161,24 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("artifact path %q must be a regular file", path)
 	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		_ = file.Close()
+		return nil, fmt.Errorf("inspect private artifact %q: unsupported file metadata", path)
+	}
+	if stat.Nlink != 1 {
+		_ = file.Close()
+		return nil, fmt.Errorf("artifact path %q must not have additional hard links", path)
+	}
 	if err := file.Chmod(FileMode); err != nil {
 		_ = file.Close()
 		return nil, err
+	}
+	if flags&os.O_TRUNC != 0 {
+		if err := file.Truncate(0); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
 	}
 	return file, nil
 }

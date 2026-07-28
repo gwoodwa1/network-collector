@@ -2,9 +2,32 @@ package ssh
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+type fakeSSHSession struct {
+	output     []byte
+	sendErr    error
+	closeErr   error
+	closePanic interface{}
+	commands   []string
+	closes     int
+}
+
+func (f *fakeSSHSession) SendInput(command string) ([]byte, error) {
+	f.commands = append(f.commands, command)
+	return f.output, f.sendErr
+}
+
+func (f *fakeSSHSession) Close() error {
+	f.closes++
+	if f.closePanic != nil {
+		panic(f.closePanic)
+	}
+	return f.closeErr
+}
 
 func TestNormalizeSecurityProfileDefaultsToModern(t *testing.T) {
 	profile, err := normalizeSecurityProfile("")
@@ -122,5 +145,114 @@ func TestConnectValidation(t *testing.T) {
 	err = client.Connect("127.0.0.1", "user", "pass", "")
 	if err == nil {
 		t.Fatal("expected error for empty driverName")
+	}
+}
+
+func TestExecuteRoutesTrimmedCommandAndReturnsOutput(t *testing.T) {
+	session := &fakeSSHSession{output: []byte("interface is up")}
+	client := NewClient()
+	client.network = session
+	output, err := client.Execute("  show interfaces brief  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "interface is up" {
+		t.Fatalf("output = %q", output)
+	}
+	if len(session.commands) != 1 || session.commands[0] != "show interfaces brief" {
+		t.Fatalf("commands = %#v", session.commands)
+	}
+}
+
+func TestExecuteValidationAndDisconnectErrors(t *testing.T) {
+	var nilClient *Client
+	if _, err := nilClient.Execute("show version"); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("nil execute error = %v", err)
+	}
+	client := NewClient()
+	if _, err := client.Execute("show version"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("disconnected execute error = %v", err)
+	}
+	session := &fakeSSHSession{}
+	client.network = session
+	if _, err := client.Execute(" "); err == nil || !strings.Contains(err.Error(), "command is required") {
+		t.Fatalf("empty execute error = %v", err)
+	}
+	session.sendErr = errors.New("remote side closed")
+	if _, err := client.Execute("show version"); err == nil || !strings.Contains(err.Error(), "remote side closed") {
+		t.Fatalf("disconnect error = %v", err)
+	}
+}
+
+func TestCloseClearsStateOnDependencyErrorAndIsIdempotent(t *testing.T) {
+	session := &fakeSSHSession{closeErr: errors.New("already closed")}
+	client := NewClient()
+	client.network = session
+	err := client.Close()
+	if err == nil || !strings.Contains(err.Error(), "already closed") {
+		t.Fatalf("close error = %v", err)
+	}
+	if client.network != nil || client.platform != nil {
+		t.Fatal("failed close retained stale SSH state")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("second close was not idempotent: %v", err)
+	}
+	if session.closes != 1 {
+		t.Fatalf("close calls = %d, want 1", session.closes)
+	}
+}
+
+func TestCloseRecoversDependencyPanicAndClearsState(t *testing.T) {
+	session := &fakeSSHSession{closePanic: "double close"}
+	client := NewClient()
+	client.network = session
+	err := client.Close()
+	if err == nil || !strings.Contains(err.Error(), "panic while closing") {
+		t.Fatalf("close panic error = %v", err)
+	}
+	if client.network != nil || client.platform != nil {
+		t.Fatal("panic during close retained stale SSH state")
+	}
+}
+
+func TestCloseNilAndSuccessfulSession(t *testing.T) {
+	var nilClient *Client
+	if err := nilClient.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient()
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session := &fakeSSHSession{}
+	client.network = session
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if session.closes != 1 || client.network != nil {
+		t.Fatalf("successful close state: closes=%d network=%v", session.closes, client.network)
+	}
+}
+
+func TestOptionNilReceiversAndSelectedProfile(t *testing.T) {
+	var nilClient *Client
+	for _, option := range []Option{
+		WithSecurityProfile("legacy"),
+		WithHostKeyPolicy("pinned", "known_hosts"),
+		WithChannelLog(nil),
+		WithConnectionTimeout(time.Second),
+		WithOperationTimeout(time.Second),
+		WithPasswordPattern(nil),
+	} {
+		option(nilClient)
+	}
+	if got := nilClient.SelectedSecurityProfile(); got != "" {
+		t.Fatalf("nil selected profile = %q", got)
+	}
+	client := NewClient()
+	client.selectedProfile = "modern"
+	if got := client.SelectedSecurityProfile(); got != "modern" {
+		t.Fatalf("selected profile = %q", got)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gwoodwa1/network-collector/internal/secureartifact"
 )
 
 const maxLogoBytes = 2 * 1024 * 1024
@@ -326,23 +328,10 @@ func Render(config Config, model Model) (string, error) {
 	if err := reportTemplate.Execute(&rendered, model); err != nil {
 		return "", fmt.Errorf("render report: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
+	if err := secureartifact.EnsureDir(filepath.Dir(output)); err != nil {
 		return "", err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(output), ".report-*")
-	if err != nil {
-		return "", err
-	}
-	tempName := temp.Name()
-	defer os.Remove(tempName)
-	if _, err := temp.Write(rendered.Bytes()); err != nil {
-		_ = temp.Close()
-		return "", err
-	}
-	if err := temp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tempName, output); err != nil {
+	if err := secureartifact.WriteFile(output, rendered.Bytes()); err != nil {
 		return "", err
 	}
 	return output, nil

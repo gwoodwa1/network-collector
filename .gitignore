@@ -24,3 +24,4 @@ SECURITY_AUDIT.md
 /.cache/
 /tmp/
 .DS_Store
+/.security-private/

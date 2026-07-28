@@ -20,7 +20,7 @@ type Client struct {
 	driverName      string
 	host            string
 	platform        *platform.Platform
-	network         *network.Driver
+	network         sshSession
 	channelLog      io.Writer
 	socketTimeout   time.Duration
 	opsTimeout      time.Duration
@@ -30,6 +30,23 @@ type Client struct {
 	selectedProfile string
 	passwordPattern *regexp.Regexp
 	connectProfile  func(host, username, password, driverName, profile, hostKeyPolicy string) error
+}
+
+type sshSession interface {
+	SendInput(string) ([]byte, error)
+	Close() error
+}
+
+type scrapligoSSHSession struct {
+	driver *network.Driver
+}
+
+func (s *scrapligoSSHSession) SendInput(command string) ([]byte, error) {
+	return s.driver.Channel.SendInput(command)
+}
+
+func (s *scrapligoSSHSession) Close() error {
+	return s.driver.Close()
 }
 
 // Option is a type-safe option for configuring Client
@@ -295,7 +312,7 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 	c.driverName = driverName
 	c.host = host
 	c.platform = platformConfig
-	c.network = driver
+	c.network = &scrapligoSSHSession{driver: driver}
 	c.selectedProfile = profile
 	return nil
 }
@@ -312,7 +329,7 @@ func (c *Client) Execute(cmd string) (string, error) {
 		return "", errors.New("command is required")
 	}
 
-	output, err := c.network.Channel.SendInput(cmd)
+	output, err := c.network.SendInput(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to send input command: %w", err)
 	}
@@ -328,11 +345,21 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	if err := c.network.Close(); err != nil {
-		return fmt.Errorf("failed to close network driver: %w", err)
-	}
-
+	session := c.network
 	c.network = nil
 	c.platform = nil
+	err := closeSSHSession(session)
+	if err != nil {
+		return fmt.Errorf("failed to close network driver: %w", err)
+	}
 	return nil
+}
+
+func closeSSHSession(session sshSession) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic while closing SSH session: %v", recovered)
+		}
+	}()
+	return session.Close()
 }
