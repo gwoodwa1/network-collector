@@ -4,6 +4,7 @@ package secureartifact
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -331,6 +332,79 @@ func TestWriteFileAtomicNoFollow_ConcurrentReplacement(t *testing.T) {
 	}
 	if content, err := os.ReadFile(outside); err != nil || string(content) != "unchanged" {
 		t.Fatalf("concurrent replacement modified outside object: content=%q error=%v", content, err)
+	}
+}
+
+func TestWriteFileAtomic_FailureBeforeRenamePreservesOldArtifact(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inject func(*testing.T, *os.File, atomicWriteOperations) atomicWriteOperations
+	}{
+		{
+			name: "fsync",
+			inject: func(t *testing.T, _ *os.File, operations atomicWriteOperations) atomicWriteOperations {
+				t.Helper()
+				operations.syncFile = func(file *os.File) error {
+					info, err := file.Stat()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.Mode().Perm()&0o077 != 0 {
+						t.Fatalf("temporary artifact mode = %#o, want owner-only", info.Mode().Perm())
+					}
+					return errors.New("injected fsync failure")
+				}
+				return operations
+			},
+		},
+		{
+			name: "rename",
+			inject: func(t *testing.T, _ *os.File, operations atomicWriteOperations) atomicWriteOperations {
+				t.Helper()
+				originalSync := operations.syncFile
+				operations.syncFile = func(file *os.File) error {
+					info, err := file.Stat()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.Mode().Perm()&0o077 != 0 {
+						t.Fatalf("temporary artifact mode = %#o, want owner-only", info.Mode().Perm())
+					}
+					return originalSync(file)
+				}
+				operations.renameAt = func(int, string, int, string) error {
+					return errors.New("injected rename failure")
+				}
+				return operations
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "result.json")
+			if err := WriteFile(path, []byte("previous-complete-artifact")); err != nil {
+				t.Fatal(err)
+			}
+			operations := test.inject(t, nil, defaultAtomicWriteOperations())
+			err := writeFileAtomicNoFollowWithOperations(path, []byte("new-complete-artifact"), operations)
+			if err == nil || !strings.Contains(err.Error(), "injected "+test.name+" failure") {
+				t.Fatalf("injected %s failure was not returned: %v", test.name, err)
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(content) != "previous-complete-artifact" {
+				t.Fatalf("failure replaced or partially modified old artifact: %q", content)
+			}
+			entries, readDirErr := os.ReadDir(dir)
+			if readDirErr != nil {
+				t.Fatal(readDirErr)
+			}
+			if len(entries) != 1 || entries[0].Name() != "result.json" {
+				t.Fatalf("failure left temporary filesystem objects: %+v", entries)
+			}
+		})
 	}
 }
 
