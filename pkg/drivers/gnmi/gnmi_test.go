@@ -190,6 +190,33 @@ func TestGetRejectsResponseAtGRPCReceiveBoundary(t *testing.T) {
 	}
 }
 
+func TestGetRetainsLargerUnaryReceiveBoundary(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	gnmipb.RegisterGNMIServer(server, &testGNMIServer{
+		t:             t,
+		responseValue: strings.Repeat("x", MaxSubscriptionReceiveMessageBytes+1),
+	})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := &GNMIClient{}
+	if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	output, err := client.Execute("/interfaces")
+	if err != nil {
+		t.Fatalf("unary Get inherited the tighter subscription receive limit: %v", err)
+	}
+	if len(output) <= MaxSubscriptionReceiveMessageBytes {
+		t.Fatalf("unary Get output length = %d, want more than %d", len(output), MaxSubscriptionReceiveMessageBytes)
+	}
+}
+
 func TestOversizedSubscriptionCancelsGRPCStream(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -259,7 +286,7 @@ func TestSubscriptionJSONLimitIsPostDecodeProcessingBoundary(t *testing.T) {
 	canceled := make(chan struct{})
 	server := grpc.NewServer()
 	gnmipb.RegisterGNMIServer(server, &budgetBreachSubscriptionServer{
-		canceled:      canceled,
+		canceled: canceled,
 		// Quotes expand when JSON-encoded, so the protobuf remains below the
 		// 1 MiB receive boundary while its JSON representation exceeds 1 MiB.
 		responseValue: strings.Repeat("\"", MaxSingleResponseJSONBytes/2+1024),
