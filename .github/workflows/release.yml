@@ -53,6 +53,8 @@ jobs:
           distribution: goreleaser
           version: v2.17.1
           args: release --clean --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Scan every draft release binary
         run: scripts/scan-release-binaries.sh dist
@@ -61,5 +63,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${GITHUB_REF_NAME}" --draft=false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
