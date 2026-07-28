@@ -241,6 +241,12 @@ snapshots, running configurations, and reports are owner-only (`0600`).
 Existing reused artifacts are tightened before writing, and symlink artifact
 targets are rejected.
 
+On Unix, artifact paths use descriptor-relative no-follow operations through
+the final open or replacement. The non-Unix fallback performs conservative
+path checks but cannot eliminate the check/open race. Non-Unix operators must
+use an administrator-controlled output directory that untrusted users cannot
+modify; the hardened artifact guarantee applies to supported Unix deployments.
+
 Branding images must be PNG files directly inside `--logo-folder`; absolute
 paths and parent traversal are rejected. For example:
 

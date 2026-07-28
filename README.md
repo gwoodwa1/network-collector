@@ -1575,6 +1575,14 @@ output:
 
 Each invocation creates a timestamped run directory. Raw and parsed output is stored per inventory entry, step, and attempt, so concurrent devices and retries never overwrite one another. `results.json` contains run timestamps, overall failure state, validations, and the paths of all saved artifacts. Files are written atomically.
 
+On Unix deployment platforms, artifact paths are opened relative to trusted
+directory descriptors with no-follow semantics, including the final file
+operation. The non-Unix fallback rejects symlinks found during path checks but
+cannot provide equivalent `openat`/`O_NOFOLLOW` race resistance. On non-Unix
+hosts, place artifact directories on administrator-controlled storage that is
+not writable by untrusted users. The hardened production artifact guarantee
+applies to supported Unix deployments.
+
 When `events_file` is set, lifecycle events are appended as JSON Lines. Relative paths are placed in the run directory. Events include `run.started`, `device.started`, `step.started`, `validation.completed`, `artifact.written`, `device.completed`, and `run.completed`. Event-sink errors are logged as warnings and do not interrupt device work. `--events-jsonl PATH` overrides the configured event file for one invocation.
 
 `event_sinks` sends the same payload to webhooks or RFC 5424 syslog over UDP/TCP. Network sinks use bounded asynchronous queues; delivery failures and full queues are warnings rather than device failures. Webhook HMAC signing uses the named environment variable and sends `X-Network-Collector-Signature: sha256=<hex>`. Keep secrets out of YAML.

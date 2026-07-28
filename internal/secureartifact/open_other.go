@@ -2,6 +2,11 @@
 
 package secureartifact
 
+// Non-Unix platforms do not expose the openat/O_NOFOLLOW operations used by
+// the Unix implementation through Go's portable filesystem API. These checks
+// fail conservatively for visible symlinks, but callers must keep parent
+// directories trusted because another process could race a check and open.
+
 import (
 	"fmt"
 	"os"
