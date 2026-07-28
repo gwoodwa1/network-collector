@@ -35,3 +35,14 @@ func TestUnmarshalReportsNodeCount(t *testing.T) {
 		t.Fatalf("node count = %d, want at least 5", nodes)
 	}
 }
+
+func TestUnmarshalRejectsDocumentOverNodeLimitBeforeDecode(t *testing.T) {
+	var target map[string]interface{}
+	_, err := unmarshalWithNodeLimit([]byte("items:\n  - one\n  - two\n"), &target, 4)
+	if err == nil || !strings.Contains(err.Error(), "4-node limit") {
+		t.Fatalf("oversized YAML syntax tree was not rejected: %v", err)
+	}
+	if target != nil {
+		t.Fatalf("target was decoded before the node limit was enforced: %#v", target)
+	}
+}

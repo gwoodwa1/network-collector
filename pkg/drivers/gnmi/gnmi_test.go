@@ -24,6 +24,11 @@ type oversizedSubscriptionServer struct {
 	canceled chan struct{}
 }
 
+type budgetBreachSubscriptionServer struct {
+	gnmipb.UnimplementedGNMIServer
+	canceled chan struct{}
+}
+
 func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
 	if _, err := stream.Recv(); err != nil {
 		return err
@@ -32,13 +37,32 @@ func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServ
 		Response: &gnmipb.SubscribeResponse_Update{
 			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
 				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{
-					StringVal: strings.Repeat("x", MaxSubscriptionResponseBytes+1),
+					StringVal: strings.Repeat("x", MaxGRPCReceiveMessageBytes+1),
 				}},
 			}}},
 		},
 	}
 	if err := stream.Send(response); err != nil {
 		close(s.canceled)
+		return err
+	}
+	<-stream.Context().Done()
+	close(s.canceled)
+	return stream.Context().Err()
+}
+
+func (s *budgetBreachSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	response := &gnmipb.SubscribeResponse{
+		Response: &gnmipb.SubscribeResponse_Update{
+			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
+				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "up"}},
+			}}},
+		},
+	}
+	if err := stream.Send(response); err != nil {
 		return err
 	}
 	<-stream.Context().Done()
@@ -146,7 +170,7 @@ func TestGetRejectsResponseAtGRPCReceiveBoundary(t *testing.T) {
 	server := grpc.NewServer()
 	gnmipb.RegisterGNMIServer(server, &testGNMIServer{
 		t:             t,
-		responseValue: strings.Repeat("x", MaxSubscriptionResponseBytes+1),
+		responseValue: strings.Repeat("x", MaxGRPCReceiveMessageBytes+1),
 	})
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
@@ -185,6 +209,40 @@ func TestOversizedSubscriptionCancelsGRPCStream(t *testing.T) {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("oversized subscription did not cancel the gRPC stream")
+	}
+}
+
+func TestAggregateBudgetCancelsStreamWithDeadlinedParent(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled := make(chan struct{})
+	server := grpc.NewServer()
+	gnmipb.RegisterGNMIServer(server, &budgetBreachSubscriptionServer{canceled: canceled})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := &GNMIClient{}
+	if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	parent, parentCancel := context.WithTimeout(context.Background(), time.Minute)
+	defer parentCancel()
+	_, err = client.SubscribeEvents(parent, Subscription{
+		Paths:            []string{"/interfaces"},
+		Mode:             "once",
+		MaxResponseBytes: 1,
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "aggregate response limit") {
+		t.Fatalf("aggregate response budget was not enforced: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("budget rejection did not cancel a stream whose parent already had a deadline")
 	}
 }
 

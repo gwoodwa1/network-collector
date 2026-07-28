@@ -31,12 +31,14 @@ type Subscription struct {
 }
 
 const (
-	MaxSubscriptionDuration      = time.Hour
-	MaxSubscriptionUpdates       = 100_000
-	MaxSubscriptionResponseBytes = 10 * 1024 * 1024
-	MaxSingleResponseBytes       = 1024 * 1024
-	MaxSubscriptionResponses     = 100_000
-	DefaultSubscriptionResponses = 10_000
+	MaxSubscriptionDuration        = time.Hour
+	MaxSubscriptionUpdates         = 100_000
+	MaxGRPCReceiveMessageBytes     = 10 * 1024 * 1024
+	MaxGetResponseJSONBytes        = 10 * 1024 * 1024
+	MaxSubscriptionResponseBytes   = 10 * 1024 * 1024
+	MaxSingleResponseJSONBytes     = 1024 * 1024
+	MaxSubscriptionResponses       = 100_000
+	DefaultSubscriptionResponses   = 10_000
 )
 
 type Event struct {
@@ -156,7 +158,9 @@ func (g *GNMIClient) Connect(address, username, password string, opts ...Option)
 	gnmiTarget := target.NewTarget(tc)
 	if err := gnmiTarget.CreateGNMIClient(
 		ctx,
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxSubscriptionResponseBytes)),
+		// This is the pre-unmarshal transport allocation boundary. The
+		// subscription JSON limits below are post-decode processing budgets.
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxGRPCReceiveMessageBytes)),
 	); err != nil {
 		return fmt.Errorf("failed to create gNMI client: %w", err)
 	}
@@ -195,8 +199,8 @@ func (g *GNMIClient) Execute(gnmiPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal gNMI response: %w", err)
 	}
-	if len(jsonOutput) > MaxSubscriptionResponseBytes {
-		return "", fmt.Errorf("gNMI get response exceeds the %d-byte limit", MaxSubscriptionResponseBytes)
+	if len(jsonOutput) > MaxGetResponseJSONBytes {
+		return "", fmt.Errorf("gNMI get JSON response exceeds the %d-byte post-decode limit", MaxGetResponseJSONBytes)
 	}
 
 	return string(jsonOutput), nil
@@ -281,21 +285,23 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	deadline := config.Duration
 	if deadline <= 0 {
 		deadline = g.timeout
 	}
-	if _, exists := ctx.Deadline(); !exists && deadline > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, deadline)
-		defer cancel()
+	if _, exists := streamCtx.Deadline(); !exists && deadline > 0 {
+		var timeoutCancel context.CancelFunc
+		streamCtx, timeoutCancel = context.WithTimeout(streamCtx, deadline)
+		defer timeoutCancel()
 	}
 	var responses <-chan *gnmi.SubscribeResponse
 	var failures <-chan error
 	if mode == "once" {
-		responses, failures = g.target.SubscribeOnceChan(ctx, request)
+		responses, failures = g.target.SubscribeOnceChan(streamCtx, request)
 	} else {
-		responses, failures = g.target.SubscribeStreamChan(ctx, request, "network-collector")
+		responses, failures = g.target.SubscribeStreamChan(streamCtx, request, "network-collector")
 	}
 	encoded := make([]json.RawMessage, 0)
 	responseBytes := 0
@@ -315,8 +321,8 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 			if err != nil {
 				return "", fmt.Errorf("failed to marshal gNMI subscription response: %w", err)
 			}
-			if len(body) > MaxSingleResponseBytes {
-				return "", fmt.Errorf("gNMI subscription response exceeds the %d-byte per-response limit", MaxSingleResponseBytes)
+			if len(body) > MaxSingleResponseJSONBytes {
+				return "", fmt.Errorf("gNMI subscription JSON response exceeds the %d-byte post-decode per-response limit", MaxSingleResponseJSONBytes)
 			}
 			if len(encoded) >= maxResponseCount {
 				return "", fmt.Errorf("gNMI subscription exceeded the %d-response limit", maxResponseCount)
@@ -348,7 +354,7 @@ func (g *GNMIClient) SubscribeEvents(ctx context.Context, config Subscription, h
 				return marshalSubscriptionResponses(encoded)
 			}
 			return "", fmt.Errorf("gNMI subscribe request failed: %w", err)
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return marshalSubscriptionResponses(encoded)
 		}
 	}

@@ -9,7 +9,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const MaxFileBytes = 4 * 1024 * 1024
+const (
+	MaxFileBytes     = 4 * 1024 * 1024
+	MaxDocumentNodes = 500_000
+)
 
 func ReadFile(path string) ([]byte, error) {
 	file, err := os.Open(path)
@@ -35,6 +38,10 @@ func Unmarshal(content []byte, target interface{}) error {
 // UnmarshalWithNodeCount decodes YAML and returns the number of syntax-tree
 // nodes consumed so callers can enforce an aggregate multi-file budget.
 func UnmarshalWithNodeCount(content []byte, target interface{}) (int, error) {
+	return unmarshalWithNodeLimit(content, target, MaxDocumentNodes)
+}
+
+func unmarshalWithNodeLimit(content []byte, target interface{}, maxNodes int) (int, error) {
 	if len(content) > MaxFileBytes {
 		return 0, fmt.Errorf("YAML input exceeds the %d-byte limit", MaxFileBytes)
 	}
@@ -42,38 +49,34 @@ func UnmarshalWithNodeCount(content []byte, target interface{}) (int, error) {
 	if err := yaml.Unmarshal(content, &document); err != nil {
 		return 0, err
 	}
-	if err := rejectAliases(&document); err != nil {
+	nodes, err := inspectDocument(&document, maxNodes)
+	if err != nil {
 		return 0, err
 	}
-	nodes := countNodes(&document)
 	if err := document.Decode(target); err != nil {
 		return 0, err
 	}
 	return nodes, nil
 }
 
-func countNodes(node *yaml.Node) int {
-	if node == nil {
-		return 0
-	}
-	count := 1
-	for _, child := range node.Content {
-		count += countNodes(child)
-	}
-	return count
-}
-
-func rejectAliases(node *yaml.Node) error {
-	if node == nil {
-		return nil
-	}
-	if node.Kind == yaml.AliasNode || node.Anchor != "" {
-		return fmt.Errorf("YAML anchors and aliases are not supported")
-	}
-	for _, child := range node.Content {
-		if err := rejectAliases(child); err != nil {
-			return err
+func inspectDocument(root *yaml.Node, maxNodes int) (int, error) {
+	nodes := 0
+	pending := []*yaml.Node{root}
+	for len(pending) > 0 {
+		index := len(pending) - 1
+		node := pending[index]
+		pending = pending[:index]
+		if node == nil {
+			continue
 		}
+		nodes++
+		if nodes > maxNodes {
+			return 0, fmt.Errorf("YAML document exceeds the %d-node limit", maxNodes)
+		}
+		if node.Kind == yaml.AliasNode || node.Anchor != "" {
+			return 0, fmt.Errorf("YAML anchors and aliases are not supported")
+		}
+		pending = append(pending, node.Content...)
 	}
-	return nil
+	return nodes, nil
 }
