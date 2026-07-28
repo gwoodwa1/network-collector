@@ -26,7 +26,8 @@ type oversizedSubscriptionServer struct {
 
 type budgetBreachSubscriptionServer struct {
 	gnmipb.UnimplementedGNMIServer
-	canceled chan struct{}
+	canceled      chan struct{}
+	responseValue string
 }
 
 func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServer) error {
@@ -55,10 +56,14 @@ func (s *budgetBreachSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeS
 	if _, err := stream.Recv(); err != nil {
 		return err
 	}
+	value := s.responseValue
+	if value == "" {
+		value = "up"
+	}
 	response := &gnmipb.SubscribeResponse{
 		Response: &gnmipb.SubscribeResponse_Update{
 			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
-				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: "up"}},
+				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{StringVal: value}},
 			}}},
 		},
 	}
@@ -243,6 +248,40 @@ func TestAggregateBudgetCancelsStreamWithDeadlinedParent(t *testing.T) {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("budget rejection did not cancel a stream whose parent already had a deadline")
+	}
+}
+
+func TestSubscriptionJSONLimitIsPostDecodeProcessingBoundary(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled := make(chan struct{})
+	server := grpc.NewServer()
+	gnmipb.RegisterGNMIServer(server, &budgetBreachSubscriptionServer{
+		canceled:      canceled,
+		responseValue: strings.Repeat("x", MaxSingleResponseJSONBytes+1),
+	})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := &GNMIClient{}
+	if err := client.Connect(listener.Addr().String(), "admin", "secret", WithSkipTLS(), WithRequestTimeout(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = client.SubscribeEvents(context.Background(), Subscription{
+		Paths: []string{"/interfaces"},
+		Mode:  "once",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "JSON response") || !strings.Contains(err.Error(), "post-decode") {
+		t.Fatalf("JSON processing boundary was not reported precisely: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("JSON processing rejection did not cancel the stream")
 	}
 }
 

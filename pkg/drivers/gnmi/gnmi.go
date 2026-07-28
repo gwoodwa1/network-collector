@@ -31,14 +31,14 @@ type Subscription struct {
 }
 
 const (
-	MaxSubscriptionDuration        = time.Hour
-	MaxSubscriptionUpdates         = 100_000
-	MaxGRPCReceiveMessageBytes     = 10 * 1024 * 1024
-	MaxGetResponseJSONBytes        = 10 * 1024 * 1024
-	MaxSubscriptionResponseBytes   = 10 * 1024 * 1024
-	MaxSingleResponseJSONBytes     = 1024 * 1024
-	MaxSubscriptionResponses       = 100_000
-	DefaultSubscriptionResponses   = 10_000
+	MaxSubscriptionDuration      = time.Hour
+	MaxSubscriptionUpdates       = 100_000
+	MaxGRPCReceiveMessageBytes   = 10 * 1024 * 1024
+	MaxGetResponseJSONBytes      = 10 * 1024 * 1024
+	MaxSubscriptionResponseBytes = 10 * 1024 * 1024
+	MaxSingleResponseJSONBytes   = 1024 * 1024
+	MaxSubscriptionResponses     = 100_000
+	DefaultSubscriptionResponses = 10_000
 )
 
 type Event struct {
