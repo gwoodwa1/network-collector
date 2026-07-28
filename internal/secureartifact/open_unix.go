@@ -47,6 +47,7 @@ func canonicalizeTrustedSystemSymlinks(path string) (string, error) {
 	for attempts := 0; attempts < 16; attempts++ {
 		parts := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
 		prefix := string(filepath.Separator)
+		resolvedComponent := false
 		for index, part := range parts {
 			if part == "" {
 				continue
@@ -64,19 +65,33 @@ func canonicalizeTrustedSystemSymlinks(path string) (string, error) {
 			}
 			stat, ok := info.Sys().(*syscall.Stat_t)
 			parentInfo, parentErr := os.Stat(filepath.Dir(prefix))
-			if !ok || parentErr != nil || stat.Uid != 0 || parentInfo.Mode().Perm()&0o022 != 0 {
+			if !ok || parentErr != nil {
+				return "", fmt.Errorf("inspect artifact symlink component %q: unsupported metadata", prefix)
+			}
+			parentStat, parentOK := parentInfo.Sys().(*syscall.Stat_t)
+			if !parentOK || !trustedSystemSymlinkMetadata(stat.Uid, parentStat.Uid, parentInfo.Mode()) {
 				return "", fmt.Errorf("artifact path %q contains untrusted symlink component %q", path, prefix)
 			}
-			resolved, err := filepath.EvalSymlinks(prefix)
+			target, err := os.Readlink(prefix)
 			if err != nil {
 				return "", err
 			}
-			path = filepath.Join(append([]string{resolved}, parts[index+1:]...)...)
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(prefix), target)
+			}
+			path = filepath.Clean(filepath.Join(append([]string{target}, parts[index+1:]...)...))
+			resolvedComponent = true
 			break
 		}
-		return path, nil
+		if !resolvedComponent {
+			return path, nil
+		}
 	}
 	return "", fmt.Errorf("artifact path %q contains too many symbolic links", path)
+}
+
+func trustedSystemSymlinkMetadata(symlinkUID, parentUID uint32, parentMode os.FileMode) bool {
+	return symlinkUID == 0 && parentUID == 0 && parentMode.Perm()&0o022 == 0
 }
 
 func openDirectoryAt(parent int, name string) (int, error) {
@@ -142,7 +157,11 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 	// can be verified. Delay truncation until fstat has proved that the
 	// opened object is a regular file with no additional hard links.
 	openFlags := flags &^ os.O_TRUNC
-	fd, err := unix.Openat(parent, name, unixOpenFlags(openFlags), uint32(FileMode))
+	// A FIFO can block during open before fstat has a chance to reject it.
+	// Probe every final object non-blockingly, then clear O_NONBLOCK only after
+	// the opened descriptor has been proved to be a single-link regular file.
+	unixFlags := unixOpenFlags(openFlags) | unix.O_NONBLOCK
+	fd, err := unix.Openat(parent, name, unixFlags, uint32(FileMode))
 	if err != nil {
 		return nil, fmt.Errorf("open private artifact %q: %w", path, err)
 	}
@@ -169,6 +188,15 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 	if stat.Nlink != 1 {
 		_ = file.Close()
 		return nil, fmt.Errorf("artifact path %q must not have additional hard links", path)
+	}
+	currentFlags, err := unix.FcntlInt(file.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("inspect private artifact flags %q: %w", path, err)
+	}
+	if _, err := unix.FcntlInt(file.Fd(), unix.F_SETFL, currentFlags&^unix.O_NONBLOCK); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("clear non-blocking artifact flag %q: %w", path, err)
 	}
 	if err := file.Chmod(FileMode); err != nil {
 		_ = file.Close()
