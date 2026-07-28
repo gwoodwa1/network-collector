@@ -250,23 +250,45 @@ func TestRegisterParserOutputSkipsEmptyRegister(t *testing.T) {
 	}
 }
 
-func TestStepOutputBudgetRejectsBeforeRegistration(t *testing.T) {
+func TestStepOutputBudgetRejectsBeforeParserRegistrationAndArtifact(t *testing.T) {
 	failed := false
 	validations := []deviceValidation{}
+	artifacts := []outputArtifact{}
+	runDir := t.TempDir()
+	failureLog := filepath.Join(t.TempDir(), "failures.txt")
 	ctx := &stepExecutionContext{
 		hostname: "router-01", ip: "192.0.2.10", sessionLog: io.Discard,
 		variables: map[string]string{}, runFailed: &failed, aggregated: &validations,
-		sshCommand: echoCommandExecutor{}, failureLog: filepath.Join(t.TempDir(), "failures.txt"),
+		sshCommand: echoCommandExecutor{}, failureLog: failureLog,
+		parsers: map[string]ParserModuleConfig{}, output: OutputConfig{SaveRaw: true},
+		runDir: runDir, artifacts: &artifacts,
 	}
 	executeSteps(ctx, nil, []StepConfig{{
 		Name: "bounded", Command: "oversized-device-response",
-		Register: "device_value", MaxOutputBytes: 4,
+		Parser: "must-not-run", Register: "device_value", MaxOutputBytes: 4,
 	}})
 	if !failed {
 		t.Fatal("oversized device response did not fail the step")
 	}
 	if _, exists := ctx.variables["device_value"]; exists {
 		t.Fatal("oversized device response was registered")
+	}
+	if len(artifacts) != 0 {
+		t.Fatalf("oversized device response produced artifacts: %+v", artifacts)
+	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized device response wrote files under run directory: %+v", entries)
+	}
+	failure, err := os.ReadFile(failureLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(failure), "step output limit") || strings.Contains(string(failure), "must-not-run") {
+		t.Fatalf("unexpected failure boundary: %s", failure)
 	}
 }
 

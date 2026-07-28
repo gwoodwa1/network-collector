@@ -21,7 +21,7 @@ import (
 type Option = drivers.Option
 
 const (
-	defaultCloseTimeout      = 5 * time.Second
+	defaultCloseTimeout     = 5 * time.Second
 	maxNETCONFResponseBytes = 64 * 1024 * 1024
 )
 

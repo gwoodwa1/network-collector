@@ -99,7 +99,12 @@ func TestWriteFileRejectsFIFOAndUnixSocketTargets(t *testing.T) {
 		t.Fatal("FIFO artifact target was accepted")
 	}
 
-	socket := filepath.Join(dir, "artifact.sock")
+	socketDir, err := os.MkdirTemp("/tmp", "nc-artifact-socket-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socket := filepath.Join(socketDir, "artifact.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatalf("create Unix socket: %v", err)
