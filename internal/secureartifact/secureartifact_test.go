@@ -338,11 +338,11 @@ func TestWriteFileAtomicNoFollow_ConcurrentReplacement(t *testing.T) {
 func TestWriteFileAtomic_FailureBeforeRenamePreservesOldArtifact(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		inject func(*testing.T, *os.File, atomicWriteOperations) atomicWriteOperations
+		inject func(*testing.T, atomicWriteOperations) atomicWriteOperations
 	}{
 		{
 			name: "fsync",
-			inject: func(t *testing.T, _ *os.File, operations atomicWriteOperations) atomicWriteOperations {
+			inject: func(t *testing.T, operations atomicWriteOperations) atomicWriteOperations {
 				t.Helper()
 				operations.syncFile = func(file *os.File) error {
 					info, err := file.Stat()
@@ -359,7 +359,7 @@ func TestWriteFileAtomic_FailureBeforeRenamePreservesOldArtifact(t *testing.T) {
 		},
 		{
 			name: "rename",
-			inject: func(t *testing.T, _ *os.File, operations atomicWriteOperations) atomicWriteOperations {
+			inject: func(t *testing.T, operations atomicWriteOperations) atomicWriteOperations {
 				t.Helper()
 				originalSync := operations.syncFile
 				operations.syncFile = func(file *os.File) error {
@@ -385,7 +385,7 @@ func TestWriteFileAtomic_FailureBeforeRenamePreservesOldArtifact(t *testing.T) {
 			if err := WriteFile(path, []byte("previous-complete-artifact")); err != nil {
 				t.Fatal(err)
 			}
-			operations := test.inject(t, nil, defaultAtomicWriteOperations())
+			operations := test.inject(t, defaultAtomicWriteOperations())
 			err := writeFileAtomicNoFollowWithOperations(path, []byte("new-complete-artifact"), operations)
 			if err == nil || !strings.Contains(err.Error(), "injected "+test.name+" failure") {
 				t.Fatalf("injected %s failure was not returned: %v", test.name, err)
