@@ -1,9 +1,10 @@
+//go:build unix
+
 package secureartifact
 
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -26,9 +27,6 @@ func TestPrivateModesAndExistingArtifactRepair(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS == "windows" {
-		return
-	}
 	dirInfo, err := os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -46,9 +44,6 @@ func TestPrivateModesAndExistingArtifactRepair(t *testing.T) {
 }
 
 func TestOpenFileRejectsSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation may require elevated privileges")
-	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
@@ -74,9 +69,6 @@ func TestOpenFileRejectsSymlink(t *testing.T) {
 }
 
 func TestRejectsSymlinkDirectoryComponent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation may require elevated privileges")
-	}
 	dir := t.TempDir()
 	realDir := filepath.Join(dir, "real")
 	if err := os.Mkdir(realDir, 0o700); err != nil {

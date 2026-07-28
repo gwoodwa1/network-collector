@@ -2,6 +2,7 @@
 package secureartifact
 
 import (
+	"errors"
 	"os"
 )
 
@@ -9,6 +10,10 @@ const (
 	DirMode  = 0o700
 	FileMode = 0o600
 )
+
+// ErrUnsupportedPlatform is returned when the operating system cannot provide
+// the descriptor-relative no-follow operations required for secure artifacts.
+var ErrUnsupportedPlatform = errors.New("secure artifact writing requires a supported Unix platform")
 
 // EnsureDir creates path and tightens an existing directory to owner-only access.
 func EnsureDir(path string) error {

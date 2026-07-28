@@ -327,10 +327,9 @@ Existing reused artifacts are tightened before writing, and symlink artifact
 targets are rejected.
 
 On Unix, artifact paths use descriptor-relative no-follow operations through
-the final open or replacement. The non-Unix fallback performs conservative
-path checks but cannot eliminate the check/open race. Non-Unix operators must
-use an administrator-controlled output directory that untrusted users cannot
-modify; the hardened artifact guarantee applies to supported Unix deployments.
+the final open or replacement. Secure artifact writing fails closed on
+non-Unix platforms, so production artifact output is supported only on Unix
+deployments.
 
 ### Every `--interval`, per device (written to `<hostname>.jsonl`, one JSON line per tick)
 

@@ -1577,11 +1577,10 @@ Each invocation creates a timestamped run directory. Raw and parsed output is st
 
 On Unix deployment platforms, artifact paths are opened relative to trusted
 directory descriptors with no-follow semantics, including the final file
-operation. The non-Unix fallback rejects symlinks found during path checks but
-cannot provide equivalent `openat`/`O_NOFOLLOW` race resistance. On non-Unix
-hosts, place artifact directories on administrator-controlled storage that is
-not writable by untrusted users. The hardened production artifact guarantee
-applies to supported Unix deployments.
+operation. Secure artifact writing fails closed on non-Unix platforms because
+Go's portable filesystem API cannot provide equivalent
+`openat`/`O_NOFOLLOW` race resistance. Production artifact output is supported
+only on Unix deployments.
 
 When `events_file` is set, lifecycle events are appended as JSON Lines. Relative paths are placed in the run directory. Events include `run.started`, `device.started`, `step.started`, `validation.completed`, `artifact.written`, `device.completed`, and `run.completed`. Event-sink errors are logged as warnings and do not interrupt device work. `--events-jsonl PATH` overrides the configured event file for one invocation.
 
