@@ -38,7 +38,7 @@ func (s *oversizedSubscriptionServer) Subscribe(stream gnmipb.GNMI_SubscribeServ
 		Response: &gnmipb.SubscribeResponse_Update{
 			Update: &gnmipb.Notification{Update: []*gnmipb.Update{{
 				Val: &gnmipb.TypedValue{Value: &gnmipb.TypedValue_StringVal{
-					StringVal: strings.Repeat("x", MaxGRPCReceiveMessageBytes+1),
+					StringVal: strings.Repeat("x", MaxSubscriptionReceiveMessageBytes+1),
 				}},
 			}}},
 		},
@@ -260,7 +260,9 @@ func TestSubscriptionJSONLimitIsPostDecodeProcessingBoundary(t *testing.T) {
 	server := grpc.NewServer()
 	gnmipb.RegisterGNMIServer(server, &budgetBreachSubscriptionServer{
 		canceled:      canceled,
-		responseValue: strings.Repeat("x", MaxSingleResponseJSONBytes+1),
+		// Quotes expand when JSON-encoded, so the protobuf remains below the
+		// 1 MiB receive boundary while its JSON representation exceeds 1 MiB.
+		responseValue: strings.Repeat("\"", MaxSingleResponseJSONBytes/2+1024),
 	})
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()

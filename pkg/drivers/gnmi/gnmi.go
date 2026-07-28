@@ -31,14 +31,15 @@ type Subscription struct {
 }
 
 const (
-	MaxSubscriptionDuration      = time.Hour
-	MaxSubscriptionUpdates       = 100_000
-	MaxGRPCReceiveMessageBytes   = 10 * 1024 * 1024
-	MaxGetResponseJSONBytes      = 10 * 1024 * 1024
-	MaxSubscriptionResponseBytes = 10 * 1024 * 1024
-	MaxSingleResponseJSONBytes   = 1024 * 1024
-	MaxSubscriptionResponses     = 100_000
-	DefaultSubscriptionResponses = 10_000
+	MaxSubscriptionDuration            = time.Hour
+	MaxSubscriptionUpdates             = 100_000
+	MaxGRPCReceiveMessageBytes         = 10 * 1024 * 1024
+	MaxSubscriptionReceiveMessageBytes = 1024 * 1024
+	MaxGetResponseJSONBytes            = 10 * 1024 * 1024
+	MaxSubscriptionResponseBytes       = 10 * 1024 * 1024
+	MaxSingleResponseJSONBytes         = 1024 * 1024
+	MaxSubscriptionResponses           = 100_000
+	DefaultSubscriptionResponses       = 10_000
 )
 
 type Event struct {
@@ -50,6 +51,25 @@ type Event struct {
 }
 
 type EventHandler func(Event) error
+
+// subscriptionBoundedGNMIClient preserves gnmic's target behavior while
+// applying a tighter receive boundary only to streaming Subscribe RPCs.
+// Unary Get responses retain the larger connection-level limit.
+type subscriptionBoundedGNMIClient struct {
+	gnmi.GNMIClient
+}
+
+func (c *subscriptionBoundedGNMIClient) Subscribe(
+	ctx context.Context,
+	opts ...grpc.CallOption,
+) (gnmi.GNMI_SubscribeClient, error) {
+	boundedOptions := append([]grpc.CallOption(nil), opts...)
+	boundedOptions = append(
+		boundedOptions,
+		grpc.MaxCallRecvMsgSize(MaxSubscriptionReceiveMessageBytes),
+	)
+	return c.GNMIClient.Subscribe(ctx, boundedOptions...)
+}
 
 // Option is a type-safe option for configuring GNMIClient
 type Option func(*GNMIClient)
@@ -158,12 +178,13 @@ func (g *GNMIClient) Connect(address, username, password string, opts ...Option)
 	gnmiTarget := target.NewTarget(tc)
 	if err := gnmiTarget.CreateGNMIClient(
 		ctx,
-		// This is the pre-unmarshal transport allocation boundary. The
-		// subscription JSON limits below are post-decode processing budgets.
+		// This is the pre-unmarshal boundary for unary RPCs. Subscribe calls
+		// receive the tighter per-call boundary installed below.
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxGRPCReceiveMessageBytes)),
 	); err != nil {
 		return fmt.Errorf("failed to create gNMI client: %w", err)
 	}
+	gnmiTarget.Client = &subscriptionBoundedGNMIClient{GNMIClient: gnmiTarget.Client}
 
 	g.target = gnmiTarget
 	return nil
