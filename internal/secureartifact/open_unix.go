@@ -211,7 +211,23 @@ func openFileNoFollow(path string, flags int) (*os.File, error) {
 	return file, nil
 }
 
+type atomicWriteOperations struct {
+	syncFile func(*os.File) error
+	renameAt func(int, string, int, string) error
+}
+
+func defaultAtomicWriteOperations() atomicWriteOperations {
+	return atomicWriteOperations{
+		syncFile: func(file *os.File) error { return file.Sync() },
+		renameAt: unix.Renameat,
+	}
+}
+
 func writeFileAtomicNoFollow(path string, content []byte) error {
+	return writeFileAtomicNoFollowWithOperations(path, content, defaultAtomicWriteOperations())
+}
+
+func writeFileAtomicNoFollowWithOperations(path string, content []byte, operations atomicWriteOperations) error {
 	parent, name, err := walkParentNoFollow(path)
 	if err != nil {
 		return err
@@ -260,13 +276,13 @@ func writeFileAtomicNoFollow(path string, content []byte) error {
 	if _, err := file.Write(content); err != nil {
 		return err
 	}
-	if err := file.Sync(); err != nil {
+	if err := operations.syncFile(file); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := unix.Renameat(parent, tempName, parent, name); err != nil {
+	if err := operations.renameAt(parent, tempName, parent, name); err != nil {
 		return err
 	}
 	renamed = true
