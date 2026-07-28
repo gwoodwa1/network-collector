@@ -288,12 +288,12 @@ func TestNETCONFOperationValidationAndResponseErrors(t *testing.T) {
 	session := &fakeNETCONFSession{}
 	client := &ScrapligoNETCONF{network: session}
 	for name, call := range map[string]func() error{
-		"empty-rpc":         func() error { _, err := client.RPC(" "); return err },
-		"edit-target":       func() error { _, err := client.EditConfig("startup", "<config/>"); return err },
-		"negative-confirm":  func() error { _, err := client.Commit(false, -1); return err },
-		"lock-datastore":    func() error { _, err := client.Lock("invalid"); return err },
-		"copy-source":       func() error { _, err := client.CopyConfig("", "startup"); return err },
-		"delete-datastore":  func() error { _, err := client.DeleteConfig("running"); return err },
+		"empty-rpc":          func() error { _, err := client.RPC(" "); return err },
+		"edit-target":        func() error { _, err := client.EditConfig("startup", "<config/>"); return err },
+		"negative-confirm":   func() error { _, err := client.Commit(false, -1); return err },
+		"lock-datastore":     func() error { _, err := client.Lock("invalid"); return err },
+		"copy-source":        func() error { _, err := client.CopyConfig("", "startup"); return err },
+		"delete-datastore":   func() error { _, err := client.DeleteConfig("running"); return err },
 		"validate-datastore": func() error { _, err := client.Validate("invalid"); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
