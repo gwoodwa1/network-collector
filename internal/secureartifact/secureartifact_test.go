@@ -141,7 +141,11 @@ func TestRejectsSymlinkDirectoryComponent(t *testing.T) {
 }
 
 func TestWriteFileRejectsFIFOAndUnixSocketTargets(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "nc-artifact-open-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	fifo := filepath.Join(dir, "artifact.fifo")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatalf("create FIFO: %v", err)
@@ -175,7 +179,11 @@ func TestOpenFileNoFollow_SpecialFileTargets(t *testing.T) {
 		return
 	}
 
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "nc-artifact-special-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	fifo := filepath.Join(dir, "artifact.fifo")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
