@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -119,6 +120,81 @@ func TestSecureWebhookDialerPinsAndVerifiesConnectedPeer(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "does not match verified address") {
 		t.Fatalf("connected peer mismatch was not rejected: %v", err)
+	}
+}
+
+func TestWebhookSinkRefusesRedirectAtFinalHTTPClient(t *testing.T) {
+	var redirectReached atomic.Bool
+	redirectTarget := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		redirectReached.Store(true)
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer redirectTarget.Close()
+
+	var sourceReached atomic.Bool
+	redirectSource := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		sourceReached.Store(true)
+		http.Redirect(writer, request, redirectTarget.URL, http.StatusFound)
+	}))
+	defer redirectSource.Close()
+
+	sink, err := NewWebhookSinkWithPolicy(
+		redirectSource.URL, nil, "", time.Second,
+		WebhookPolicy{AllowedHosts: []string{"127.0.0.1"}, AllowPrivateNetworks: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := sink.client.Transport.(*http.Transport)
+	transport.TLSClientConfig = redirectSource.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+
+	err = sink.Handle(context.Background(), Event{Type: "run.started"})
+	if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+		t.Fatalf("redirect was not rejected by the final HTTP client: %v", err)
+	}
+	if !sourceReached.Load() {
+		t.Fatal("redirect source was not reached")
+	}
+	if redirectReached.Load() {
+		t.Fatal("redirect destination received a request")
+	}
+}
+
+func TestSecureWebhookDialerRejectsMixedPublicAndPrivateDNSAnswersBeforeDial(t *testing.T) {
+	lookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("203.0.113.10")},
+			{IP: net.ParseIP("127.0.0.1")},
+		}, nil
+	}
+	var dialed atomic.Bool
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		dialed.Store(true)
+		return nil, nil
+	}
+	_, err := secureWebhookDialerWith(false, lookup, dial)(
+		context.Background(), "tcp", "events.example.test:443",
+	)
+	if err == nil || !strings.Contains(err.Error(), "private or local address") {
+		t.Fatalf("mixed DNS answer set was accepted: %v", err)
+	}
+	if dialed.Load() {
+		t.Fatal("dial occurred before the complete DNS answer set was validated")
+	}
+}
+
+func TestWebhookHostAndIPAddressNormalization(t *testing.T) {
+	if !hostAllowed("EXAMPLE.COM.", []string{"example.com"}) {
+		t.Fatal("equivalent case and trailing-dot hostname was not allowlisted")
+	}
+	if hostAllowed("example.com.evil", []string{"example.com"}) {
+		t.Fatal("hostname suffix escaped the exact allowlist")
+	}
+	if !isPrivateDestination(net.ParseIP("::ffff:127.0.0.1")) {
+		t.Fatal("IPv4-mapped IPv6 loopback was not classified as private")
+	}
+	if isPrivateDestination(net.ParseIP("::ffff:203.0.113.10")) {
+		t.Fatal("IPv4-mapped public documentation address was classified as private")
 	}
 }
 

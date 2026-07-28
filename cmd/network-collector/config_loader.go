@@ -389,6 +389,10 @@ func loadConfigMap(path string, depth int, loaded, active map[string]bool, budge
 		return nil, err
 	}
 	absolutePath = filepath.Clean(absolutePath)
+	absolutePath, err = filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config path %q: %w", absolutePath, err)
+	}
 	if active[absolutePath] {
 		return nil, fmt.Errorf("config import cycle detected at %q", absolutePath)
 	}

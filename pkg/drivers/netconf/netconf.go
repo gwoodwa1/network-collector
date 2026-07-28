@@ -20,7 +20,10 @@ import (
 
 type Option = drivers.Option
 
-const defaultCloseTimeout = 5 * time.Second
+const (
+	defaultCloseTimeout      = 5 * time.Second
+	maxNETCONFResponseBytes = 64 * 1024 * 1024
+)
 
 type netconfSession interface {
 	Open() error
@@ -235,8 +238,8 @@ func netconfResult(operation string, r *response.NetconfResponse, err error) (st
 	if r.Failed != nil {
 		return "", fmt.Errorf("NETCONF %s response indicates failure: %+v", operation, r.Failed)
 	}
-	if len(r.Result) > 64*1024*1024 {
-		return "", fmt.Errorf("NETCONF %s response exceeds the 67108864-byte limit", operation)
+	if len(r.Result) > maxNETCONFResponseBytes {
+		return "", fmt.Errorf("NETCONF %s response exceeds the %d-byte limit", operation, maxNETCONFResponseBytes)
 	}
 	return r.Result, nil
 }

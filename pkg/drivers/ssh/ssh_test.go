@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -161,6 +162,22 @@ func TestExecuteRoutesTrimmedCommandAndReturnsOutput(t *testing.T) {
 	}
 	if len(session.commands) != 1 || session.commands[0] != "show interfaces brief" {
 		t.Fatalf("commands = %#v", session.commands)
+	}
+}
+
+func TestExecuteEnforcesExactResponseBoundary(t *testing.T) {
+	payload := bytes.Repeat([]byte{'x'}, maxSSHResponseBytes+1)
+	session := &fakeSSHSession{output: payload[:maxSSHResponseBytes]}
+	client := NewClient()
+	client.network = session
+
+	if output, err := client.Execute("show exact-limit"); err != nil || len(output) != maxSSHResponseBytes {
+		t.Fatalf("exact-limit response rejected: length=%d error=%v", len(output), err)
+	}
+	session.output = payload
+	if output, err := client.Execute("show limit-plus-one"); err == nil ||
+		!strings.Contains(err.Error(), "response exceeds") || output != "" {
+		t.Fatalf("limit+1 response was not rejected cleanly: length=%d error=%v", len(output), err)
 	}
 }
 

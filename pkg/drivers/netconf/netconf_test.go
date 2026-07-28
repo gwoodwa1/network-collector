@@ -323,3 +323,16 @@ func TestNETCONFOperationValidationAndResponseErrors(t *testing.T) {
 		t.Fatalf("unexpected host mutation: %q", got)
 	}
 }
+
+func TestNETCONFResultEnforcesExactResponseBoundary(t *testing.T) {
+	payload := strings.Repeat("x", maxNETCONFResponseBytes+1)
+	exact := &response.NetconfResponse{Result: payload[:maxNETCONFResponseBytes]}
+	if output, err := netconfResult("RPC", exact, nil); err != nil || len(output) != maxNETCONFResponseBytes {
+		t.Fatalf("exact-limit response rejected: length=%d error=%v", len(output), err)
+	}
+	over := &response.NetconfResponse{Result: payload}
+	if output, err := netconfResult("RPC", over, nil); err == nil ||
+		!strings.Contains(err.Error(), "response exceeds") || output != "" {
+		t.Fatalf("limit+1 response was not rejected cleanly: length=%d error=%v", len(output), err)
+	}
+}

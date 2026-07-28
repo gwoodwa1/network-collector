@@ -12,6 +12,8 @@ import (
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
 )
 
+type netconfConnector func(string, string, string, netconfConnectionPolicy) (*netconf.ScrapligoNETCONF, error)
+
 type lazyNETCONFExecutor struct {
 	once           sync.Once
 	client         *netconf.ScrapligoNETCONF
@@ -21,7 +23,7 @@ type lazyNETCONFExecutor struct {
 	timeout        time.Duration
 	hostKeyPolicy  string
 	knownHostsFile string
-	connectClient  func(string, string, string, netconfConnectionPolicy) (*netconf.ScrapligoNETCONF, error)
+	connectClient  netconfConnector
 	err            error
 }
 

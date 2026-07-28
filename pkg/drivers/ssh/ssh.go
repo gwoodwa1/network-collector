@@ -16,6 +16,8 @@ import (
 	"github.com/scrapli/scrapligo/util"
 )
 
+const maxSSHResponseBytes = 64 * 1024 * 1024
+
 type Client struct {
 	driverName      string
 	host            string
@@ -333,8 +335,8 @@ func (c *Client) Execute(cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to send input command: %w", err)
 	}
-	if len(output) > 64*1024*1024 {
-		return "", fmt.Errorf("SSH response exceeds the 67108864-byte limit")
+	if len(output) > maxSSHResponseBytes {
+		return "", fmt.Errorf("SSH response exceeds the %d-byte limit", maxSSHResponseBytes)
 	}
 
 	return string(output), nil

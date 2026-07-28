@@ -3,9 +3,12 @@
 package secureartifact
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestPrivateModesAndExistingArtifactRepair(t *testing.T) {
@@ -83,5 +86,55 @@ func TestRejectsSymlinkDirectoryComponent(t *testing.T) {
 	}
 	if err := EnsureDir(filepath.Join(linkDir, "nested")); err == nil {
 		t.Fatal("symlink directory component was accepted for a directory")
+	}
+}
+
+func TestWriteFileRejectsFIFOAndUnixSocketTargets(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "artifact.fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("create FIFO: %v", err)
+	}
+	if err := WriteFile(fifo, []byte("unsafe")); err == nil {
+		t.Fatal("FIFO artifact target was accepted")
+	}
+
+	socket := filepath.Join(dir, "artifact.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("create Unix socket: %v", err)
+	}
+	defer listener.Close()
+	if err := WriteFile(socket, []byte("unsafe")); err == nil {
+		t.Fatal("Unix socket artifact target was accepted")
+	}
+}
+
+func TestHardLinkOpenIsRejectedAndAtomicWriteDoesNotModifyOtherLink(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "original")
+	artifact := filepath.Join(dir, "artifact")
+	if err := os.WriteFile(original, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(original, artifact); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenFile(artifact, os.O_WRONLY|os.O_TRUNC); err == nil {
+		t.Fatal("artifact with an additional hard link was opened")
+	}
+	if content, err := os.ReadFile(original); err != nil || string(content) != "original" {
+		t.Fatalf("rejected open changed original: content=%q error=%v", content, err)
+	}
+
+	if err := WriteFile(artifact, []byte("replacement")); err != nil {
+		t.Fatalf("atomic replacement of hard-link name failed: %v", err)
+	}
+	if content, err := os.ReadFile(original); err != nil || string(content) != "original" {
+		t.Fatalf("atomic write changed other hard link: content=%q error=%v", content, err)
+	}
+	if content, err := os.ReadFile(artifact); err != nil || string(content) != "replacement" {
+		t.Fatalf("artifact was not safely replaced: content=%q error=%v", content, err)
 	}
 }

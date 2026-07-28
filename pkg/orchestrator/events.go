@@ -161,12 +161,17 @@ func urlpkgParse(rawURL string) (*url.URL, error) {
 }
 
 func hostAllowed(host string, allowed []string) bool {
+	host = normalizeWebhookHost(host)
 	for _, candidate := range allowed {
-		if strings.EqualFold(strings.TrimSpace(candidate), host) {
+		if normalizeWebhookHost(candidate) == host {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeWebhookHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 func isPrivateDestination(ip net.IP) bool {

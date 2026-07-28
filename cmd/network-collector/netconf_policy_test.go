@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,4 +58,49 @@ func TestSequentialAndParallelNETCONFFinalConnectorReceiveEffectivePolicy(t *tes
 		ip: "192.0.2.10", username: "collector", password: "secret", netconfPolicy: policy,
 	})
 	assertNETCONFPolicy(t, captureNETCONFConnect(t, parallel), want)
+}
+
+func TestNestedParallelNETCONFLeafReceivesEffectivePolicyAtFinalConnector(t *testing.T) {
+	var log bytes.Buffer
+	ctx, failed := newControlTestContext(t, &log, map[string]string{})
+	ctx.ip = "192.0.2.10"
+	ctx.username = "collector"
+	ctx.password = "secret"
+	ctx.netconfPolicy = netconfConnectionPolicy{
+		timeout:        53 * time.Second,
+		hostKeyPolicy:  "known_hosts",
+		knownHostsFile: "/etc/network-collector/nested-known-hosts",
+	}
+	var mu sync.Mutex
+	var captured []netconfConnectionPolicy
+	ctx.netconfConnector = func(host, username, password string, policy netconfConnectionPolicy) (*netconf.ScrapligoNETCONF, error) {
+		if host != ctx.ip || username != ctx.username || password != ctx.password {
+			t.Errorf("unexpected connector identity: host=%q username=%q password=%q", host, username, password)
+		}
+		mu.Lock()
+		captured = append(captured, policy)
+		mu.Unlock()
+		return nil, errors.New("test connector stopped before network dial")
+	}
+
+	step := StepConfig{Name: "outer", Parallel: &ParallelConfig{Steps: []StepConfig{{
+		Name: "inner", Parallel: &ParallelConfig{Steps: []StepConfig{{
+			Name: "leaf",
+			NETCONF: &NETCONFStepConfig{
+				Operation: "rpc",
+				Payload:   "<get/>",
+			},
+		}}},
+	}}}}
+	executeSteps(ctx, nil, []StepConfig{step})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("final connector calls = %d, want 1", len(captured))
+	}
+	assertNETCONFPolicy(t, captured[0], ctx.netconfPolicy)
+	if !*failed {
+		t.Fatal("test connector error did not fail the nested leaf")
+	}
 }

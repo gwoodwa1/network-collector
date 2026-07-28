@@ -681,7 +681,9 @@ type parallelBranchResult struct {
 }
 
 func newParallelNETCONFExecutor(ctx *stepExecutionContext) *lazyNETCONFExecutor {
-	return newLazyNETCONFExecutor(ctx.ip, ctx.username, ctx.password, ctx.netconfPolicy)
+	executor := newLazyNETCONFExecutor(ctx.ip, ctx.username, ctx.password, ctx.netconfPolicy)
+	executor.connectClient = ctx.netconfConnector
+	return executor
 }
 
 func executeParallel(ctx *stepExecutionContext, config ParallelConfig, stepName string, depth int) bool {

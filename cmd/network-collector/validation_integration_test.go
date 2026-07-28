@@ -1905,6 +1905,42 @@ func TestLoadConfigRejectsDuplicateImport(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsDuplicateImportThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared.yaml")
+	alias := filepath.Join(dir, "shared-alias.yaml")
+	root := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(shared, []byte("ssh: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(root, []byte("imports: [shared.yaml, shared-alias.yaml]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("expected canonical duplicate import error, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsImportDepthBeyondLimit(t *testing.T) {
+	dir := t.TempDir()
+	for depth := 0; depth <= maxConfigImportDepth+1; depth++ {
+		content := []byte("vars:\n  leaf: reached\n")
+		if depth <= maxConfigImportDepth {
+			content = []byte(fmt.Sprintf("imports: [%02d.yaml]\n", depth+1))
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%02d.yaml", depth)), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := loadConfig(filepath.Join(dir, "00.yaml")); err == nil ||
+		!strings.Contains(err.Error(), fmt.Sprintf("maximum depth of %d", maxConfigImportDepth)) {
+		t.Fatalf("expected import depth error, got %v", err)
+	}
+}
+
 func TestLoadConfigRejectsAggregateImportFileCount(t *testing.T) {
 	dir := t.TempDir()
 	partsDir := filepath.Join(dir, "parts")
