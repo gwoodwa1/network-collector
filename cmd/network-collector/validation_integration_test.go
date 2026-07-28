@@ -2047,6 +2047,82 @@ func TestLoadConfigSharesBudgetWithVarsFilesAndCountsFailedParse(t *testing.T) {
 	}
 }
 
+func TestConfigImportBudget_SharedAcrossImportsAndVarsFiles(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents map[string]string
+	}{
+		{
+			name: "breach-at-nested-vars-file",
+			contents: map[string]string{
+				"root.yaml":    "imports: [level-1.yaml]\n",
+				"level-1.yaml": "imports: [level-2.yaml]\n",
+				"level-2.yaml": "vars_files: [values.yaml]\n",
+				"values.yaml":  "site: london\n",
+			},
+		},
+		{
+			name: "breach-at-third-level-import",
+			contents: map[string]string{
+				"root.yaml":    "vars_files: [values.yaml]\nimports: [level-1.yaml]\n",
+				"values.yaml":  "site: london\n",
+				"level-1.yaml": "imports: [level-2.yaml]\n",
+				"level-2.yaml": "imports: [level-3.yaml]\n",
+				"level-3.yaml": "vars:\n  role: edge\n",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			totalBytes := 0
+			for name, content := range test.contents {
+				totalBytes += len(content)
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			budget := &configImportBudget{maxBytes: totalBytes - 1}
+			_, err := loadConfigMap(filepath.Join(dir, "root.yaml"), 0, map[string]bool{}, map[string]bool{}, budget)
+			if err == nil || !strings.Contains(err.Error(), "byte limit") {
+				t.Fatalf("shared import/vars_file byte budget was not enforced: %v", err)
+			}
+			if budget.bytes != totalBytes || budget.files != len(test.contents) {
+				t.Fatalf("shared budget = %+v, want %d files and %d bytes", budget, len(test.contents), totalBytes)
+			}
+		})
+	}
+}
+
+func TestConfigImportBudget_FailedParseConsumesBudget(t *testing.T) {
+	dir := t.TempDir()
+	contents := map[string]string{
+		"root.yaml":    "imports: [valid-1.yaml, valid-2.yaml, invalid.yaml]\n",
+		"valid-1.yaml": "vars:\n  first: one\n",
+		"valid-2.yaml": "vars:\n  second: two\n",
+		"invalid.yaml": "vars: [unterminated\n",
+	}
+	totalBytes := 0
+	for name, content := range contents {
+		totalBytes += len(content)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	budget := &configImportBudget{}
+	_, err := loadConfigMap(filepath.Join(dir, "root.yaml"), 0, map[string]bool{}, map[string]bool{}, budget)
+	if err == nil || !strings.Contains(err.Error(), "failed to parse config") {
+		t.Fatalf("malformed import was not rejected: %v", err)
+	}
+	if budget.files != len(contents) || budget.bytes != totalBytes {
+		t.Fatalf("failed parse budget = %+v, want %d files and %d bytes", budget, len(contents), totalBytes)
+	}
+	if budget.nodes == 0 {
+		t.Fatal("valid files parsed before the malformed import did not consume the shared node budget")
+	}
+}
+
 func TestModularExampleLoads(t *testing.T) {
 	configPath := filepath.Join("..", "..", "examples", "modular", "config.yaml")
 	config, _, err := loadConfig(configPath)
