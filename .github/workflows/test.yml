@@ -39,6 +39,12 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Test with race detector and coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 

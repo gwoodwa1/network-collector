@@ -14,6 +14,14 @@ Upgrade to the latest v2.0.x release before deployment.
 Security fixes are applied to the latest v2.0.x release and the current `main`
 branch.
 
+## Security engineering
+
+The public
+[security engineering policy](docs/security-engineering-policy.md) defines the
+sink-reaching test evidence, review process, vulnerability scanning, release
+gates, and public/private disclosure boundary used for security-sensitive
+changes.
+
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately through

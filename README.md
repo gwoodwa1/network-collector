@@ -13,6 +13,14 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 
 <img width="1672" height="941" alt="info_graphic" src="https://github.com/user-attachments/assets/7a1fe8ff-9b94-4539-8314-24fcdc5220f7" />
 
+## Security
+
+See [`SECURITY.md`](SECURITY.md) to report vulnerabilities privately. Security
+changes are evaluated under the public
+[security engineering policy](docs/security-engineering-policy.md), which
+prioritises tests that observe final transport, filesystem, parser, credential,
+and execution boundaries.
+
 ## Installation
 
 Download a platform archive from the [GitHub releases page](https://github.com/gwoodwa1/network-collector/releases), extract it, and run:
@@ -44,7 +52,7 @@ To build from source instead:
     go build -o netconf-client ./cmd/netconf-client
     go build -o gnmi-client ./cmd/gnmi-client
     go build -o restconf-client ./cmd/restconf-client
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o xr-routing-monitor ./cmd/xr-routing-monitor
+    CGO_ENABLED=0 go build -trimpath -o xr-routing-monitor ./cmd/xr-routing-monitor
     ```
 
 4. **Provide credentials:**
@@ -255,7 +263,7 @@ an imperative workbook can still validate the current state and fail; use an
 It is separate from the playbook-driven `network-collector` CLI and has its own embedded TextFSM parser set. Build it as a static binary for jump hosts:
 
 ```bash
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o xr-routing-monitor ./cmd/xr-routing-monitor
+CGO_ENABLED=0 go build -trimpath -o xr-routing-monitor ./cmd/xr-routing-monitor
 ```
 
 See [`cmd/xr-routing-monitor/README.md`](cmd/xr-routing-monitor/README.md) for devices-file examples, RSA passcode reuse behavior, VRF auto-detection, snapshot output, and live status formatting.
@@ -267,7 +275,7 @@ See [`cmd/xr-routing-monitor/README.md`](cmd/xr-routing-monitor/README.md) for d
 It is separate from the playbook-driven `network-collector` CLI and has its own embedded TextFSM parser set. Build it as a static binary for jump hosts:
 
 ```bash
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o junos-routing-monitor ./cmd/junos-routing-monitor
+CGO_ENABLED=0 go build -trimpath -o junos-routing-monitor ./cmd/junos-routing-monitor
 ```
 
 See [`cmd/junos-routing-monitor/README.md`](cmd/junos-routing-monitor/README.md) for devices-file examples, passcode reuse behavior, running-config capture and diffing, snapshot output, and live status formatting — and its "Not yet ported from xr-routing-monitor" section for what's deliberately out of scope in this first pass.
