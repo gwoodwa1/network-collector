@@ -20,6 +20,12 @@ All notable changes to Network Collector are documented here.
   connected-peer verification for the IP-pinned webhook dialer.
 - Added adversarial regression coverage proving registered device output
   cannot flow into SSH commands or NETCONF payloads.
+- Dropped Windows from the release builds for `network-collector`,
+  `xr-routing-monitor`, and `junos-routing-monitor`: all three now write
+  every run artifact (output directories, session logs, snapshots) through
+  the Unix-only `internal/secureartifact` package (owner-only permissions,
+  no-symlink-follow), which fails outright on Windows. Linux and macOS
+  builds are unaffected.
 
 ## [2.0.1] - 2026-07-27
 
