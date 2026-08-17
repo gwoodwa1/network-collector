@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  EXPECTED_GO_VERSION: go1.26.5
+  EXPECTED_GO_VERSION: go1.26.6
   GOVULNCHECK_VERSION: v1.6.0
 
 jobs:
