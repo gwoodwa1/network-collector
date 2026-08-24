@@ -20,6 +20,16 @@ All notable changes to Network Collector are documented here.
   connected-peer verification for the IP-pinned webhook dialer.
 - Added adversarial regression coverage proving registered device output
   cannot flow into SSH commands or NETCONF payloads.
+- Added opt-in NETCONF snapshot capture to `junos-routing-monitor`
+  (`--netconf-snapshot`, fleet-wide or per-device via `--devices`). The
+  periodic tick loop stays SSH-only; NETCONF is dialed once alongside SSH at
+  onboarding (reusing the same credentials, so RSA-passcode fleets are
+  unaffected) and used only for the before/after snapshot, adding route
+  information/summary, BGP neighbor detail, ISIS/LDP/MPLS state, interface
+  state, and chassis/system health (route engine, FPC, PIC, alarms, core
+  dumps) on top of the existing route-table and running-config capture. A
+  failed NETCONF dial degrades that one device to SSH-only sections rather
+  than failing its onboarding.
 - Dropped Windows from the release builds for `network-collector`,
   `xr-routing-monitor`, and `junos-routing-monitor`: all three now write
   every run artifact (output directories, session logs, snapshots) through
