@@ -9,16 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
-// snapshotDiffSection is one labeled route table's before/after comparison
-// — a routing table, or one neighbor's received/advertised routes — keyed
-// by prefix (NETWORK) rather than compared positionally: BGP route tables
-// can reorder between two captures with no real change, so a prefix
-// present in both, even at a different index, is not a diff. Only a
-// genuinely new/withdrawn prefix, or one whose next hop changed, is
-// reported.
+// snapshotDiffSection is one labeled section's before/after comparison — a
+// routing table, a neighbor's received/advertised routes, or (when NETCONF
+// snapshot capture is enabled) one of the NETCONF-sourced sections — keyed
+// by a stable field rather than compared positionally: a section's records
+// can reorder between two captures with no real change, so a key present in
+// both, even at a different index, is not a diff. Only a genuinely new/
+// withdrawn key, or one whose watched field(s) changed, is reported.
 type snapshotDiffSection struct {
 	Label   string
 	Skipped bool
@@ -45,88 +46,106 @@ func loadSnapshotFile(path string) (snapshotResult, error) {
 	return result, nil
 }
 
-// decodeRouteRecords unpacks one table's or neighbor route list's raw JSON
-// (as produced by parseOrRaw with the junos_route_table/
-// junos_bgp_neighbor_routes parsers: {"routes": [...]}"). A snapshot whose
-// parse failed at capture time falls back to {"raw": "..."} instead, which
-// decodes to no records here — the section is then reported as unavailable
-// for structured diffing rather than silently comparing nothing as if
-// everything matched.
+// decodeKeyedRecords unpacks one section's raw JSON (as produced by
+// parseOrRaw/decodeNetconfOrRaw: {"<root>": [...]}). A snapshot whose parse
+// failed at capture time falls back to {"raw": "..."} instead, which is
+// detected explicitly below and reported as unavailable for structured
+// diffing rather than silently comparing nothing as if everything matched.
 //
 // Empty/nil/JSON-null raw is also reported as unavailable, not as "a
-// legitimately empty route table": captureSnapshot (snapshot.go) always
-// calls parseOrRaw on a successful command execution, and parseOrRaw always
-// marshals *something* non-empty — either {"routes": [...]} or the
-// {"raw": ...} fallback — so the only way this field is empty or null is
-// that the command itself failed to execute (see captureSnapshot's
-// neighbor loop, which still records a neighborSnapshot entry even when
-// one of its two Execute calls failed, leaving that one field's
-// json.RawMessage at its nil zero value). A nil json.RawMessage marshals
-// to the literal JSON text "null" (RawMessage.MarshalJSON's documented
-// nil behavior) — not an empty value — so a snapshot loaded back from a
-// captured .json file has this field as the 4-byte string "null", not a
-// zero-length byte slice; both must be checked, or a round-tripped nil
-// field parses as "successfully decoded, zero routes" instead of
-// unavailable. Treating that as "zero routes" would make diffSnapshots
-// report every route in the other snapshot as spuriously added or removed.
-func decodeRouteRecords(raw json.RawMessage) ([]map[string]string, bool) {
+// legitimately empty section": captureSnapshot (snapshot.go) always calls
+// parseOrRaw/decodeNetconfOrRaw on a successful command/RPC execution, and
+// both always marshal *something* non-empty — either {"<root>": [...]} or
+// the {"raw": ...} fallback — so the only way this field is empty or null
+// is that the command/RPC itself failed to execute (see captureSnapshot's
+// neighbor loop, which still records a neighborSnapshot entry even when one
+// of its two Execute calls failed, leaving that one field's json.RawMessage
+// at its nil zero value). A nil json.RawMessage marshals to the literal
+// JSON text "null" (RawMessage.MarshalJSON's documented nil behavior) — not
+// an empty value — so a snapshot loaded back from a captured .json file has
+// this field as the 4-byte string "null", not a zero-length byte slice;
+// both must be checked, or a round-tripped nil field parses as
+// "successfully decoded, zero records" instead of unavailable. Treating
+// that as "zero records" would make diffSnapshots report every record in
+// the other snapshot as spuriously added or removed.
+func decodeKeyedRecords(raw json.RawMessage, root string) ([]map[string]string, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil, false
 	}
-	var decoded struct {
-		Routes []map[string]string `json:"routes"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
 		return nil, false
 	}
-	if decoded.Routes == nil {
-		// A raw-fallback record ({"raw": "..."}) still unmarshals into this
-		// struct successfully (Routes just stays nil), so it must be told
-		// apart from "zero routes" so the diff doesn't claim every route in
-		// the other snapshot was added/removed based on a parser failure.
-		var rawFallback struct {
-			Raw *string `json:"raw"`
-		}
-		if err := json.Unmarshal(raw, &rawFallback); err == nil && rawFallback.Raw != nil {
-			return nil, false
-		}
+	if _, isRawFallback := top["raw"]; isRawFallback {
+		return nil, false
 	}
-	return decoded.Routes, true
+	recordsRaw, ok := top[root]
+	if !ok {
+		return nil, false
+	}
+	var records []map[string]string
+	if err := json.Unmarshal(recordsRaw, &records); err != nil {
+		return nil, false
+	}
+	return records, true
 }
 
-// diffRouteRecords compares two route lists by prefix (NETWORK), not
-// position — see snapshotDiffSection. A prefix present on both sides with a
-// different NEXTHOP is reported as changed; AS-path/MED/local-preference
-// churn is not, since next hop is what actually matters operationally
-// during a change window.
-func diffRouteRecords(before, after []map[string]string) (added, removed, changed []string) {
-	beforeByPrefix := make(map[string]map[string]string, len(before))
+// decodeRouteRecords is decodeKeyedRecords scoped to the "routes" root that
+// junos_route_table/junos_bgp_neighbor_routes/get-route-information all
+// produce.
+func decodeRouteRecords(raw json.RawMessage) ([]map[string]string, bool) {
+	return decodeKeyedRecords(raw, "routes")
+}
+
+// diffRecordsByKey compares two record lists by keyField, not position — a
+// section's records can reorder between two captures with no real change.
+// A key present on both sides whose value differs in any of changeFields is
+// reported as changed, formatted as "key (old -> new)" when watching
+// exactly one field (matching the original route-diff format, e.g.
+// "192.0.2.12/24 (192.0.2.1 -> 192.0.2.9)"), or "key (FIELD old -> new,
+// ...)" per differing field when watching more than one, so the reader
+// knows which field moved. No changeFields at all means presence-only
+// diffing (used for alarms/core-dumps, where any appearance is itself the
+// signal, not a field-level change).
+func diffRecordsByKey(before, after []map[string]string, keyField string, changeFields ...string) (added, removed, changed []string) {
+	beforeByKey := make(map[string]map[string]string, len(before))
 	for _, r := range before {
-		if prefix := r["NETWORK"]; prefix != "" {
-			beforeByPrefix[prefix] = r
+		if key := r[keyField]; key != "" {
+			beforeByKey[key] = r
 		}
 	}
-	afterByPrefix := make(map[string]map[string]string, len(after))
+	afterByKey := make(map[string]map[string]string, len(after))
 	for _, r := range after {
-		if prefix := r["NETWORK"]; prefix != "" {
-			afterByPrefix[prefix] = r
+		if key := r[keyField]; key != "" {
+			afterByKey[key] = r
 		}
 	}
 
-	for prefix, a := range afterByPrefix {
-		b, ok := beforeByPrefix[prefix]
+	for key, a := range afterByKey {
+		b, ok := beforeByKey[key]
 		if !ok {
-			added = append(added, prefix)
+			added = append(added, key)
 			continue
 		}
-		if b["NEXTHOP"] != a["NEXTHOP"] {
-			changed = append(changed, fmt.Sprintf("%s (%s -> %s)", prefix, b["NEXTHOP"], a["NEXTHOP"]))
+		var diffs []string
+		for _, field := range changeFields {
+			if b[field] == a[field] {
+				continue
+			}
+			if len(changeFields) == 1 {
+				diffs = append(diffs, fmt.Sprintf("%s -> %s", b[field], a[field]))
+			} else {
+				diffs = append(diffs, fmt.Sprintf("%s %s -> %s", field, b[field], a[field]))
+			}
+		}
+		if len(diffs) > 0 {
+			changed = append(changed, fmt.Sprintf("%s (%s)", key, strings.Join(diffs, ", ")))
 		}
 	}
-	for prefix := range beforeByPrefix {
-		if _, ok := afterByPrefix[prefix]; !ok {
-			removed = append(removed, prefix)
+	for key := range beforeByKey {
+		if _, ok := afterByKey[key]; !ok {
+			removed = append(removed, key)
 		}
 	}
 	sort.Strings(added)
@@ -135,22 +154,61 @@ func diffRouteRecords(before, after []map[string]string) (added, removed, change
 	return added, removed, changed
 }
 
-// diffSnapshots compares every table and neighbor route/advertised-route
-// section present in either snapshot, returning one snapshotDiffSection per
-// section in a stable (sorted-by-label) order. A section that's missing
-// entirely from one side, or whose data didn't decode into structured
-// records on either side (parse failure or capture-time Execute failure —
-// see decodeRouteRecords), gets Skipped: true and a nil
-// Added/Removed/Changed instead of a possibly-misleading empty diff —
-// printSnapshotDiff reports that distinctly from "compared, found no
-// changes".
+// diffRouteRecords compares two route lists by prefix (NETWORK); AS-path/
+// MED/local-preference churn is not watched, since next hop is what
+// actually matters operationally during a change window.
+func diffRouteRecords(before, after []map[string]string) (added, removed, changed []string) {
+	return diffRecordsByKey(before, after, "NETWORK", "NEXTHOP")
+}
+
+// netconfSingleSectionSpec describes one of netconfSnapshotDetail's
+// device-wide (not table-keyed) sections for diffSnapshots below: its
+// report label, the JSON root decodeKeyedRecords should look for, which
+// field uniquely identifies a record, and which fields are worth flagging
+// as changed. A table-driven list here, rather than elevenths of
+// near-identical hand-written diff blocks, is what keeps diffSnapshots
+// itself small as this list grows.
+type netconfSingleSectionSpec struct {
+	label        string
+	root         string
+	keyField     string
+	changeFields []string
+	extract      func(*netconfSnapshotDetail) json.RawMessage
+}
+
+var netconfSingleSections = []netconfSingleSectionSpec{
+	{"netconf bgp neighbor detail", "bgp_neighbors", "PEER_ADDRESS", []string{"PEER_STATE"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.BGPNeighborDetail }},
+	{"netconf isis adjacencies", "isis_adjacencies", "INTERFACE_NAME", []string{"STATE"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.ISISAdjacencies }},
+	{"netconf ldp database", "ldp_bindings", "KEY", []string{"LABEL"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.LDPDatabase }},
+	{"netconf mpls lsp information", "mpls_lsp_sessions", "SESSION_TYPE", []string{"UP_COUNT", "DOWN_COUNT"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.MPLSLSPInformation }},
+	{"netconf interface information", "interfaces", "INTERFACE_NAME", []string{"ADMIN_STATUS", "OPER_STATUS"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.InterfaceInformation }},
+	{"netconf software information", "software", "HOST_NAME", []string{"JUNOS_VERSION", "PRODUCT_MODEL"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.SoftwareInformation }},
+	{"netconf route engine information", "route_engines", "SLOT", []string{"MASTERSHIP_STATE"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.RouteEngineInformation }},
+	{"netconf fpc information", "fpc_information", "SLOT", []string{"STATE", "TEMPERATURE"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.FPCInformation }},
+	{"netconf pic information", "pic_information", "KEY", []string{"PIC_STATE"}, func(d *netconfSnapshotDetail) json.RawMessage { return d.PICInformation }},
+	{"netconf alarm information", "alarms", "KEY", nil, func(d *netconfSnapshotDetail) json.RawMessage { return d.AlarmInformation }},
+	{"netconf core dumps", "core_dumps", "KEY", nil, func(d *netconfSnapshotDetail) json.RawMessage { return d.CoreDumps }},
+}
+
+// diffSnapshots compares every table, neighbor route/advertised-route, and
+// (when present) NETCONF-sourced section in either snapshot, returning one
+// snapshotDiffSection per section in a stable (sorted-by-label) order. A
+// section that's missing entirely from one side, or whose data didn't
+// decode into structured records on either side (parse failure or
+// capture-time Execute failure — see decodeKeyedRecords), gets Skipped:
+// true and a nil Added/Removed/Changed instead of a possibly-misleading
+// empty diff — printSnapshotDiff reports that distinctly from "compared,
+// found no changes".
 func diffSnapshots(before, after snapshotResult) []snapshotDiffSection {
 	type sectionSource struct {
-		label      string
-		beforeRaw  json.RawMessage
-		afterRaw   json.RawMessage
-		haveBefore bool
-		haveAfter  bool
+		label        string
+		beforeRaw    json.RawMessage
+		afterRaw     json.RawMessage
+		haveBefore   bool
+		haveAfter    bool
+		root         string
+		keyField     string
+		changeFields []string
 	}
 	var sources []sectionSource
 
@@ -164,7 +222,7 @@ func diffSnapshots(before, after snapshotResult) []snapshotDiffSection {
 	for table := range tableNames {
 		b, bok := before.Tables[table]
 		a, aok := after.Tables[table]
-		sources = append(sources, sectionSource{label: "table " + table, beforeRaw: b, afterRaw: a, haveBefore: bok, haveAfter: aok})
+		sources = append(sources, sectionSource{label: "table " + table, beforeRaw: b, afterRaw: a, haveBefore: bok, haveAfter: aok, root: "routes", keyField: "NETWORK", changeFields: []string{"NEXTHOP"}})
 	}
 
 	neighborNames := map[string]bool{}
@@ -178,32 +236,100 @@ func diffSnapshots(before, after snapshotResult) []snapshotDiffSection {
 		bNeighbor, bok := before.Neighbors[n]
 		aNeighbor, aok := after.Neighbors[n]
 		sources = append(sources,
-			sectionSource{label: "neighbor " + n + " routes", beforeRaw: bNeighbor.Routes, afterRaw: aNeighbor.Routes, haveBefore: bok, haveAfter: aok},
-			sectionSource{label: "neighbor " + n + " advertised-routes", beforeRaw: bNeighbor.AdvertisedRoutes, afterRaw: aNeighbor.AdvertisedRoutes, haveBefore: bok, haveAfter: aok},
+			sectionSource{label: "neighbor " + n + " routes", beforeRaw: bNeighbor.Routes, afterRaw: aNeighbor.Routes, haveBefore: bok, haveAfter: aok, root: "routes", keyField: "NETWORK", changeFields: []string{"NEXTHOP"}},
+			sectionSource{label: "neighbor " + n + " advertised-routes", beforeRaw: bNeighbor.AdvertisedRoutes, afterRaw: aNeighbor.AdvertisedRoutes, haveBefore: bok, haveAfter: aok, root: "routes", keyField: "NETWORK", changeFields: []string{"NEXTHOP"}},
 		)
+	}
+
+	// NETCONF route-information/route-summary are table-keyed the same way
+	// Tables is, just sourced from NetconfDetail instead — only present at
+	// all for a device that opted into NETCONF snapshot capture.
+	netconfTableNames := map[string]bool{}
+	if before.NetconfDetail != nil {
+		for table := range before.NetconfDetail.RouteInformation {
+			netconfTableNames[table] = true
+		}
+	}
+	if after.NetconfDetail != nil {
+		for table := range after.NetconfDetail.RouteInformation {
+			netconfTableNames[table] = true
+		}
+	}
+	for table := range netconfTableNames {
+		var b, a json.RawMessage
+		var bok, aok bool
+		if before.NetconfDetail != nil {
+			b, bok = before.NetconfDetail.RouteInformation[table]
+		}
+		if after.NetconfDetail != nil {
+			a, aok = after.NetconfDetail.RouteInformation[table]
+		}
+		sources = append(sources, sectionSource{label: "netconf route information " + table, beforeRaw: b, afterRaw: a, haveBefore: bok, haveAfter: aok, root: "routes", keyField: "NETWORK", changeFields: []string{"NEXTHOP"}})
+	}
+	netconfSummaryTableNames := map[string]bool{}
+	if before.NetconfDetail != nil {
+		for table := range before.NetconfDetail.RouteSummary {
+			netconfSummaryTableNames[table] = true
+		}
+	}
+	if after.NetconfDetail != nil {
+		for table := range after.NetconfDetail.RouteSummary {
+			netconfSummaryTableNames[table] = true
+		}
+	}
+	for table := range netconfSummaryTableNames {
+		var b, a json.RawMessage
+		var bok, aok bool
+		if before.NetconfDetail != nil {
+			b, bok = before.NetconfDetail.RouteSummary[table]
+		}
+		if after.NetconfDetail != nil {
+			a, aok = after.NetconfDetail.RouteSummary[table]
+		}
+		sources = append(sources, sectionSource{label: "netconf route summary " + table, beforeRaw: b, afterRaw: a, haveBefore: bok, haveAfter: aok, root: "routes", keyField: "TABLE", changeFields: []string{"TOTAL_ROUTES", "ACTIVE_ROUTES"}})
+	}
+
+	// The remaining NETCONF sections are device-wide, present at most once
+	// per snapshot (not per table/neighbor) — only added when at least one
+	// side actually has a NetconfDetail to read from.
+	if before.NetconfDetail != nil || after.NetconfDetail != nil {
+		for _, spec := range netconfSingleSections {
+			var b, a json.RawMessage
+			if before.NetconfDetail != nil {
+				b = spec.extract(before.NetconfDetail)
+			}
+			if after.NetconfDetail != nil {
+				a = spec.extract(after.NetconfDetail)
+			}
+			sources = append(sources, sectionSource{
+				label: spec.label, beforeRaw: b, afterRaw: a,
+				haveBefore: before.NetconfDetail != nil, haveAfter: after.NetconfDetail != nil,
+				root: spec.root, keyField: spec.keyField, changeFields: spec.changeFields,
+			})
+		}
 	}
 
 	sort.Slice(sources, func(i, j int) bool { return sources[i].label < sources[j].label })
 
 	sections := make([]snapshotDiffSection, 0, len(sources))
 	for _, src := range sources {
-		beforeRecords, beforeOK := decodeRouteRecords(src.beforeRaw)
-		afterRecords, afterOK := decodeRouteRecords(src.afterRaw)
+		beforeRecords, beforeOK := decodeKeyedRecords(src.beforeRaw, src.root)
+		afterRecords, afterOK := decodeKeyedRecords(src.afterRaw, src.root)
 		if !src.haveBefore || !src.haveAfter || !beforeOK || !afterOK {
 			sections = append(sections, snapshotDiffSection{Label: src.label, Skipped: true})
 			continue
 		}
-		added, removed, changed := diffRouteRecords(beforeRecords, afterRecords)
+		added, removed, changed := diffRecordsByKey(beforeRecords, afterRecords, src.keyField, src.changeFields...)
 		sections = append(sections, snapshotDiffSection{Label: src.label, Added: added, Removed: removed, Changed: changed})
 	}
 	return sections
 }
 
-// printSnapshotDiff writes a human-readable before/after route diff to out
-// — a "+N added"/"-N removed"/"~N changed" summary line per section (only
-// for sections with a change), plus every affected prefix, so an operator
-// can see exactly what moved during the change window without eyeballing
-// two raw route table dumps.
+// printSnapshotDiff writes a human-readable before/after diff to out — a
+// "+N added"/"-N removed"/"~N changed" summary line per section (only for
+// sections with a change), plus every affected key, so an operator can see
+// exactly what moved during the change window without eyeballing raw
+// before/after dumps.
 func printSnapshotDiff(out io.Writer, before, after snapshotResult) {
 	fmt.Fprintf(out, "snapshot diff for %s: %s -> %s\n", before.Hostname, before.Timestamp, after.Timestamp)
 	if before.Hostname != after.Hostname {
@@ -243,9 +369,9 @@ func printSnapshotDiff(out io.Writer, before, after snapshotResult) {
 }
 
 // runSnapshotDiff loads two captured snapshot JSON files (see
-// captureSnapshot) and prints their route-level diff to out. Used by
-// main's -diff-before/-diff-after flags, entirely offline — it never opens
-// an SSH session or prompts for credentials.
+// captureSnapshot) and prints their diff to out. Used by main's
+// -diff-before/-diff-after flags, entirely offline — it never opens an SSH
+// or NETCONF session or prompts for credentials.
 func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 	before, err := loadSnapshotFile(beforePath)
 	if err != nil {
@@ -259,7 +385,7 @@ func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 	return nil
 }
 
-// printAutoDiffAfterChange runs the same route-level diff as the standalone
+// printAutoDiffAfterChange runs the same diff as the standalone
 // -diff-before/-diff-after flags, plus (when --capture-running-config is
 // enabled) a config diff, automatically right after the after-change
 // capture on Ctrl+C — so an operator sees what changed immediately, without
@@ -272,10 +398,10 @@ func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 // route snapshots) — the automatic diff on Ctrl+C is the only workflow
 // running-config capture needs.
 //
-// Mirrors captureSnapshot's own "nothing to do" gate: no route-level diff
-// is attempted for a device with no tables and no neighbors configured,
-// since captureSnapshot itself wrote no files to diff in that case.
-// snapshotCapturesOK/configCapturesOK report whether the before *and*
+// Mirrors captureSnapshot's own "nothing to do" gate: no snapshot diff is
+// attempted for a device with no tables, no neighbors, and no NETCONF
+// connection, since captureSnapshot itself wrote no files to diff in that
+// case. snapshotCapturesOK/configCapturesOK report whether the before *and*
 // after captures each diff would read back both actually succeeded (poll.go
 // tracks this from captureSnapshot's/captureRunningConfig's own return
 // values) — skipping a diff attempt when either side failed avoids a
@@ -293,7 +419,7 @@ func runSnapshotDiff(beforePath, afterPath string, out io.Writer) error {
 func printAutoDiffAfterChange(session *deviceSession, outputDir, runLabel string, beforeCapturedAt, afterCapturedAt time.Time, captureRunningConfigEnabled, snapshotCapturesOK, configCapturesOK bool, out io.Writer) {
 	var buf bytes.Buffer
 	wroteAny := false
-	if len(session.tables) > 0 || len(session.neighbors) > 0 {
+	if len(session.tables) > 0 || len(session.neighbors) > 0 || session.netconfClient != nil {
 		if !snapshotCapturesOK {
 			slog.Warn("skipping automatic snapshot diff: before or after capture failed, see prior error", "hostname", session.hostname)
 		} else {

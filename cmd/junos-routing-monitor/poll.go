@@ -120,6 +120,11 @@ func pollDevice(ctx context.Context, session *deviceSession, interval time.Durat
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
 		}
+		if session.netconfClient != nil {
+			if err := session.netconfClient.Close(); err != nil {
+				slog.Warn("error closing NETCONF session", "hostname", session.hostname, "error", err)
+			}
+		}
 	}()
 
 	outputPath := filepath.Join(outputDir, sanitizeFilename(session.hostname)+".jsonl")

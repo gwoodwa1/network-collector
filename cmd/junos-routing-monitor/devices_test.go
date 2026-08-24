@@ -23,7 +23,7 @@ func TestLoadDeviceSpecsValidFile(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	specs, interval, _, err := loadDeviceSpecs(path)
+	specs, interval, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,13 +67,13 @@ func TestLoadDeviceSpecsMissingHostname(t *testing.T) {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
 
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a device spec missing hostname")
 	}
 }
 
 func TestLoadDeviceSpecsMissingFile(t *testing.T) {
-	if _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
 		t.Fatal("expected an error for a missing devices file")
 	}
 }
@@ -83,7 +83,7 @@ func TestLoadDeviceSpecsInvalidYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("devices: [this is not valid: yaml:"), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for malformed YAML")
 	}
 }
@@ -94,7 +94,7 @@ func TestLoadDeviceSpecsRejectsYAMLAnchors(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil ||
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil ||
 		!strings.Contains(err.Error(), "anchors and aliases") {
 		t.Fatalf("Junos device YAML anchors were not rejected: %v", err)
 	}
@@ -110,7 +110,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, interval, _, err := loadDeviceSpecs(path)
+	_, interval, _, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +129,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for an invalid interval")
 	}
 }
@@ -144,7 +144,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a negative interval instead of it being silently discarded")
 	}
 }
@@ -160,7 +160,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a route_command override missing its placeholder")
 	}
 }
@@ -179,7 +179,7 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	_, _, commands, err := loadDeviceSpecs(path)
+	_, _, commands, _, err := loadDeviceSpecs(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,7 +210,100 @@ devices:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	if _, _, _, err := loadDeviceSpecs(path); err == nil {
+	if _, _, _, _, err := loadDeviceSpecs(path); err == nil {
 		t.Fatal("expected an error for a default_route_command override missing its placeholder")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestResolveNetconfSnapshotNilFallsBackToFallback proves configured==nil
+// (unset) is distinguishable from an explicit false — a plain bool can't
+// represent that on its own, mirroring xr-routing-monitor's
+// resolveHubTopInterfaces nil-vs-explicit-zero convention.
+func TestResolveNetconfSnapshotNilFallsBackToFallback(t *testing.T) {
+	if got := resolveNetconfSnapshot(nil, true); got != true {
+		t.Fatalf("expected nil to fall back to fallback=true, got %v", got)
+	}
+	if got := resolveNetconfSnapshot(nil, false); got != false {
+		t.Fatalf("expected nil to fall back to fallback=false, got %v", got)
+	}
+}
+
+func TestResolveNetconfSnapshotExplicitOverridesFallback(t *testing.T) {
+	if got := resolveNetconfSnapshot(boolPtr(false), true); got != false {
+		t.Fatalf("expected explicit false to override fallback=true, got %v", got)
+	}
+	if got := resolveNetconfSnapshot(boolPtr(true), false); got != true {
+		t.Fatalf("expected explicit true to override fallback=false, got %v", got)
+	}
+}
+
+// TestDeviceSpecResolvedNetconfSnapshotPerDeviceOverride proves a
+// per-device netconf_snapshot value wins over the fleet-wide default in
+// either direction.
+func TestDeviceSpecResolvedNetconfSnapshotPerDeviceOverride(t *testing.T) {
+	unset := deviceSpec{}
+	if got := unset.resolvedNetconfSnapshot(true); got != true {
+		t.Fatalf("expected an unset per-device value to use the fleet default, got %v", got)
+	}
+	optOut := deviceSpec{NetconfSnapshot: boolPtr(false)}
+	if got := optOut.resolvedNetconfSnapshot(true); got != false {
+		t.Fatalf("expected an explicit per-device false to override a true fleet default, got %v", got)
+	}
+	optIn := deviceSpec{NetconfSnapshot: boolPtr(true)}
+	if got := optIn.resolvedNetconfSnapshot(false); got != true {
+		t.Fatalf("expected an explicit per-device true to override a false fleet default, got %v", got)
+	}
+}
+
+// TestLoadDeviceSpecsNetconfSnapshotFleetDefaultAndPerDeviceOverride proves
+// the --devices YAML file's top-level netconf_snapshot is returned
+// distinctly from unset (nil), and that a per-device override round-trips
+// through deviceSpec.
+func TestLoadDeviceSpecsNetconfSnapshotFleetDefaultAndPerDeviceOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `netconf_snapshot: true
+
+devices:
+  - hostname: pe-router-1
+  - hostname: pe-router-2
+    netconf_snapshot: false
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	specs, _, _, netconfSnapshotDefault, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if netconfSnapshotDefault == nil || *netconfSnapshotDefault != true {
+		t.Fatalf("expected the fleet-wide netconf_snapshot default to be true, got %v", netconfSnapshotDefault)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs, got %d", len(specs))
+	}
+	if specs[0].resolvedNetconfSnapshot(*netconfSnapshotDefault) != true {
+		t.Fatalf("expected pe-router-1 (no override) to inherit the fleet default")
+	}
+	if specs[1].resolvedNetconfSnapshot(*netconfSnapshotDefault) != false {
+		t.Fatalf("expected pe-router-2's explicit override to win over the fleet default")
+	}
+}
+
+func TestLoadDeviceSpecsNoNetconfSnapshotFieldReturnsNil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, netconfSnapshotDefault, err := loadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if netconfSnapshotDefault != nil {
+		t.Fatalf("expected nil when the file has no top-level netconf_snapshot, got %v", *netconfSnapshotDefault)
 	}
 }

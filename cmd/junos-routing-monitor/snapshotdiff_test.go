@@ -367,6 +367,88 @@ func TestPrintAutoDiffAfterChangeWritesAtomically(t *testing.T) {
 	}
 }
 
+// TestDiffRecordsByKeyMultiFieldFormatsEachChangedField proves that,
+// unlike diffRouteRecords's single-field ("key (old -> new)") format,
+// watching more than one changeFields prefixes each differing field with
+// its name so the reader can tell which one moved.
+func TestDiffRecordsByKeyMultiFieldFormatsEachChangedField(t *testing.T) {
+	before := []map[string]string{{"PEER_ADDRESS": "192.0.2.1", "PEER_STATE": "Established", "ACTIVE_PREFIX_COUNT": "4"}}
+	after := []map[string]string{{"PEER_ADDRESS": "192.0.2.1", "PEER_STATE": "Idle", "ACTIVE_PREFIX_COUNT": "0"}}
+
+	_, _, changed := diffRecordsByKey(before, after, "PEER_ADDRESS", "PEER_STATE", "ACTIVE_PREFIX_COUNT")
+	if len(changed) != 1 {
+		t.Fatalf("expected one changed record, got %v", changed)
+	}
+	if !strings.Contains(changed[0], "PEER_STATE Established -> Idle") || !strings.Contains(changed[0], "ACTIVE_PREFIX_COUNT 4 -> 0") {
+		t.Fatalf("expected both changed fields named in the report, got %q", changed[0])
+	}
+}
+
+// TestDiffRecordsByKeyNoChangeFieldsIsPresenceOnly proves that omitting
+// changeFields entirely (used for alarms/core-dumps) never reports a
+// "changed" entry — only added/removed, since presence is the only signal
+// for those sections.
+func TestDiffRecordsByKeyNoChangeFieldsIsPresenceOnly(t *testing.T) {
+	before := []map[string]string{{"KEY": "Minor|Fan removed"}}
+	after := []map[string]string{{"KEY": "Minor|Fan removed"}, {"KEY": "Major|PSU failed"}}
+
+	added, removed, changed := diffRecordsByKey(before, after, "KEY")
+	if len(changed) != 0 {
+		t.Fatalf("expected no changed entries with zero changeFields, got %v", changed)
+	}
+	if strings.Join(added, ",") != "Major|PSU failed" || len(removed) != 0 {
+		t.Fatalf("expected only the new alarm added, got added=%v removed=%v", added, removed)
+	}
+}
+
+// TestDiffSnapshotsIncludesNetconfBGPNeighborDetailSection proves a
+// NETCONF-sourced section (present only when NetconfDetail is set) is
+// picked up by diffSnapshots and reports a PEER_STATE flap the same way a
+// route table reports a next-hop change.
+func TestDiffSnapshotsIncludesNetconfBGPNeighborDetailSection(t *testing.T) {
+	bgpRaw := func(state string) json.RawMessage {
+		raw, err := json.Marshal(map[string]any{"bgp_neighbors": []map[string]string{{"PEER_ADDRESS": "192.0.2.1", "PEER_STATE": state}}})
+		if err != nil {
+			t.Fatalf("failed to marshal fixture: %v", err)
+		}
+		return raw
+	}
+	before := snapshotResult{Hostname: "pe-router-1", NetconfDetail: &netconfSnapshotDetail{BGPNeighborDetail: bgpRaw("Established")}}
+	after := snapshotResult{Hostname: "pe-router-1", NetconfDetail: &netconfSnapshotDetail{BGPNeighborDetail: bgpRaw("Idle")}}
+
+	sections := diffSnapshots(before, after)
+	var found bool
+	for _, section := range sections {
+		if section.Label != "netconf bgp neighbor detail" {
+			continue
+		}
+		found = true
+		if len(section.Changed) != 1 || !strings.Contains(section.Changed[0], "Established -> Idle") {
+			t.Fatalf("expected the peer state flap reported, got %+v", section)
+		}
+	}
+	if !found {
+		t.Fatalf("expected a %q section, got %+v", "netconf bgp neighbor detail", sections)
+	}
+}
+
+// TestDiffSnapshotsOmitsNetconfSectionsWhenNeitherSideUsedNetconf proves a
+// device that never opted into NETCONF snapshot capture doesn't get 11
+// spurious "skipped" NETCONF sections cluttering its diff report.
+func TestDiffSnapshotsOmitsNetconfSectionsWhenNeitherSideUsedNetconf(t *testing.T) {
+	before := snapshotResult{Hostname: "pe-router-1", Tables: map[string]json.RawMessage{
+		"CUSTOMER-A.inet.0": routeRecordsRaw(t, map[string]string{"NETWORK": "192.0.2.0/24", "NEXTHOP": "192.0.2.1"}),
+	}}
+	after := before
+
+	sections := diffSnapshots(before, after)
+	for _, section := range sections {
+		if strings.HasPrefix(section.Label, "netconf ") {
+			t.Fatalf("expected no netconf sections when NetconfDetail is nil on both sides, got %q", section.Label)
+		}
+	}
+}
+
 func writeSnapshotFixture(t *testing.T, path string, result snapshotResult) {
 	t.Helper()
 	encoded, err := json.Marshal(result)

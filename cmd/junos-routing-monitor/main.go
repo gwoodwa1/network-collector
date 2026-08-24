@@ -40,6 +40,7 @@ func main() {
 	var passcodeReuseWindow time.Duration
 	var diffBeforePath, diffAfterPath string
 	var captureRunningConfigEnabled bool
+	var netconfSnapshotEnabled bool
 	var showVersion bool
 	var reportOutput, reportTitle, changeReference string
 	var logoFolder, headerLogo, footerLogo string
@@ -58,6 +59,7 @@ func main() {
 	flag.StringVar(&diffBeforePath, "diff-before", "", "path to a captured *-before.json snapshot; combine with -diff-after to print a route-level diff and exit, instead of connecting to any device")
 	flag.StringVar(&diffAfterPath, "diff-after", "", "path to a captured *-after.json snapshot; combine with -diff-before")
 	flag.BoolVar(&captureRunningConfigEnabled, "capture-running-config", false, "also capture \"show configuration\" before and after the change window; diffed automatically alongside the route snapshot when the window ends")
+	flag.BoolVar(&netconfSnapshotEnabled, "netconf-snapshot", false, "also dial NETCONF (static credentials only, not RSA-passcode fleets) alongside SSH and use it for extra before/after snapshot sections (route info, BGP neighbor detail, ISIS/LDP/MPLS, interface/chassis/system health); fleet-wide default, overridable per device via --devices")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
 	if showVersion {
@@ -84,12 +86,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Tracked so an interval set at the top of a --devices file can be
-	// overridden by an explicit CLI flag, but not by its own default.
+	// Tracked so an interval (or netconf-snapshot default) set at the top of
+	// a --devices file can be overridden by an explicit CLI flag, but not by
+	// its own default.
 	intervalSetOnCLI := false
+	netconfSnapshotSetOnCLI := false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "interval" {
+		switch f.Name {
+		case "interval":
 			intervalSetOnCLI = true
+		case "netconf-snapshot":
+			netconfSnapshotSetOnCLI = true
 		}
 	})
 
@@ -183,14 +190,18 @@ func main() {
 	var deviceSpecsFromFile []deviceSpec
 	var haveDevicesFile bool
 	if strings.TrimSpace(devicesFile) != "" {
-		specs, fileInterval, fileCommands, err := loadDeviceSpecs(devicesFile)
+		specs, fileInterval, fileCommands, fileNetconfSnapshot, err := loadDeviceSpecs(devicesFile)
 		if err != nil {
 			slog.Error("failed to load devices file", "devices_file", devicesFile, "error", err)
 			os.Exit(1)
 		}
-		// An explicit -interval flag always wins over the file's default.
+		// An explicit -interval/-netconf-snapshot flag always wins over the
+		// file's default.
 		if fileInterval > 0 && !intervalSetOnCLI {
 			interval = fileInterval
+		}
+		if !netconfSnapshotSetOnCLI {
+			netconfSnapshotEnabled = resolveNetconfSnapshot(fileNetconfSnapshot, netconfSnapshotEnabled)
 		}
 		commands = fileCommands
 		deviceSpecsFromFile = specs
@@ -198,12 +209,12 @@ func main() {
 	}
 	spec := resolveCollectionSpec(commands)
 	if haveDevicesFile {
-		sessions = append(sessions, onboardDevicesFromSpecs(reader, deviceSpecsFromFile, deviceType, cache, registry, connectDevice)...)
+		sessions = append(sessions, onboardDevicesFromSpecs(reader, deviceSpecsFromFile, deviceType, netconfSnapshotEnabled, cache, registry, connectDevice)...)
 	}
 	// Always fall through to interactive onboarding afterward: blank
 	// hostname finishes immediately if the file already covered everything,
 	// or lets the operator add ad hoc devices not listed in it.
-	sessions = append(sessions, onboardDevices(reader, deviceType, cache, registry, connectDevice)...)
+	sessions = append(sessions, onboardDevices(reader, deviceType, netconfSnapshotEnabled, cache, registry, connectDevice)...)
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "no devices connected, exiting")
 		return
@@ -250,7 +261,12 @@ type sessionExecutor interface {
 // connectFunc abstracts connectDevice so onboarding's claim-after-success,
 // no-claim-on-failure sequencing (see hostnameRegistry and connectDevice's
 // no-retry docs) can be tested end-to-end without a real SSH connection.
-type connectFunc func(reader *bufio.Reader, host, deviceType string, cache *credentialCache) (sessionExecutor, error)
+// netconfSnapshot requests a second, NETCONF connection alongside the
+// always-required SSH one (see connectDevice); netconfClient is nil when
+// netconfSnapshot was false, or when the NETCONF dial itself failed (a
+// warning is logged, but that alone never fails the device's onboarding —
+// see connectDevice).
+type connectFunc func(reader *bufio.Reader, host, deviceType string, netconfSnapshot bool, cache *credentialCache) (client sessionExecutor, netconfClient sessionExecutor, err error)
 
 // deviceSession holds one device's already-authenticated persistent SSH
 // session plus the collection parameters gathered for it during onboarding.
@@ -259,12 +275,19 @@ type connectFunc func(reader *bufio.Reader, host, deviceType string, cache *cred
 // There is no auto-detection here (unlike cmd/xr-routing-monitor's VRF
 // auto-detect) — everything is exactly what the operator typed or listed in
 // a --devices file.
+//
+// netconfClient is an optional second, NETCONF connection dialed alongside
+// client (SSH) at onboarding, used only by captureSnapshot's NETCONF-sourced
+// sections (see snapshot.go) — nil when NETCONF snapshot capture wasn't
+// opted in for this device, or when the NETCONF dial failed. The periodic
+// tick loop (poll.go) never touches it; it only ever uses client.
 type deviceSession struct {
-	hostname   string
-	tables     []string
-	interfaces []string
-	neighbors  []string
-	client     sessionExecutor
+	hostname      string
+	tables        []string
+	interfaces    []string
+	neighbors     []string
+	client        sessionExecutor
+	netconfClient sessionExecutor
 }
 
 func splitCommaList(line string) []string {
@@ -279,7 +302,13 @@ func splitCommaList(line string) []string {
 }
 
 // onboardDevices interactively prompts for each device to monitor.
-func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc) []*deviceSession {
+// netconfSnapshot is the fleet-wide default (-netconf-snapshot /
+// devicesDocument.NetconfSnapshot, already resolved by the caller) applied
+// to every device onboarded this way — interactive onboarding has no
+// per-device override prompt for it, unlike tables/interfaces/neighbors; an
+// operator who needs a per-device override should describe that device in a
+// --devices file instead.
+func onboardDevices(reader *bufio.Reader, deviceType string, netconfSnapshot bool, cache *credentialCache, registry *hostnameRegistry, connect connectFunc) []*deviceSession {
 	var sessions []*deviceSession
 	for {
 		fmt.Fprintf(os.Stderr, "Router hostname/IP (blank to finish onboarding): ")
@@ -305,7 +334,7 @@ func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCa
 		neighborLine, _ := reader.ReadString('\n')
 		neighbors := dedupeSorted(splitCommaList(neighborLine))
 
-		client, err := connect(reader, host, deviceType, cache)
+		client, netconfClient, err := connect(reader, host, deviceType, netconfSnapshot, cache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "skipping %s: %v\n\n", host, err)
 			continue
@@ -314,7 +343,7 @@ func onboardDevices(reader *bufio.Reader, deviceType string, cache *credentialCa
 
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", host)
 		slog.Info("device connected", "hostname", host, "tables", tables, "interfaces", interfaces, "neighbors", neighbors)
-		sessions = append(sessions, &deviceSession{hostname: host, tables: tables, interfaces: interfaces, neighbors: neighbors, client: client})
+		sessions = append(sessions, &deviceSession{hostname: host, tables: tables, interfaces: interfaces, neighbors: neighbors, client: client, netconfClient: netconfClient})
 	}
 	return sessions
 }
@@ -356,27 +385,47 @@ func resolveCredentials(reader *bufio.Reader, cache *credentialCache) (username,
 }
 
 // connectDevice prompts for credentials (offering passcode reuse via cache
-// first) and makes exactly one connection attempt. It deliberately does not
-// retry on failure: a one-time-passcode backend commonly locks the account
-// after a handful of consecutive bad attempts, so an easy inline "retry?"
-// prompt is a real way to lock yourself out under pressure during a change
-// window. A failed attempt invalidates the cache (a rejected passcode is
-// never trustworthy to reuse) and returns the error immediately — trying
-// again for this host requires a fresh, deliberate onboarding attempt.
-func connectDevice(reader *bufio.Reader, host, deviceType string, cache *credentialCache) (sessionExecutor, error) {
+// first) and makes exactly one SSH connection attempt. It deliberately does
+// not retry on failure: a one-time-passcode backend commonly locks the
+// account after a handful of consecutive bad attempts, so an easy inline
+// "retry?" prompt is a real way to lock yourself out under pressure during a
+// change window. A failed SSH attempt invalidates the cache (a rejected
+// passcode is never trustworthy to reuse) and returns the error immediately
+// — trying again for this host requires a fresh, deliberate onboarding
+// attempt.
+//
+// When netconfSnapshot is true, a second connection is dialed immediately
+// afterward via connectJunosNetconfDevice, using the exact same
+// username/password that just authenticated the SSH session — no
+// additional prompt, and safe for a one-time passcode specifically because
+// it's reused within the same moment it was accepted, not later (see
+// connectJunosNetconfDevice's doc comment). Unlike the SSH connection, a
+// failed NETCONF dial does not fail the device's onboarding: it's an
+// opt-in, additive capability, so a warning is logged and the device
+// proceeds with netconfClient == nil — its snapshot capture falls back to
+// SSH-only sections for that one device (see captureSnapshot).
+func connectDevice(reader *bufio.Reader, host, deviceType string, netconfSnapshot bool, cache *credentialCache) (client sessionExecutor, netconfClient sessionExecutor, err error) {
 	username, password, fresh, err := resolveCredentials(reader, cache)
 	if err != nil {
-		return nil, fmt.Errorf("read credentials: %w", err)
+		return nil, nil, fmt.Errorf("read credentials: %w", err)
 	}
-	client, err := connectJunosDevice(host, username, password, deviceType)
+	client, err = connectJunosDevice(host, username, password, deviceType)
 	if err != nil {
 		if cache != nil {
 			*cache = credentialCache{window: cache.window}
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if cache != nil && fresh {
 		*cache = credentialCache{username: username, password: password, capturedAt: time.Now(), window: cache.window}
 	}
-	return client, nil
+	if netconfSnapshot {
+		nc, ncErr := connectJunosNetconfDevice(host, username, password)
+		if ncErr != nil {
+			slog.Warn("failed to establish NETCONF connection for snapshot capture; falling back to SSH-only snapshots for this device", "hostname", host, "error", ncErr)
+		} else {
+			netconfClient = nc
+		}
+	}
+	return client, netconfClient, nil
 }

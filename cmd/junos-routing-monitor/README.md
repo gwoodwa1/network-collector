@@ -73,6 +73,7 @@ files are required.
 | `--header-logo`, `--footer-logo` | *(automatic)* | PNG filenames inside `--logo-folder`; defaults to `header.png` and `footer.png` when present. |
 | `--diff-before`, `--diff-after` | *(none)*   | Paths to a captured before/after `.json` snapshot pair. When both are set, prints a route-level diff and exits instead of connecting to any device. See [below](#once-at-the-start-and-once-at-the-end). |
 | `--capture-running-config` | `false` | Also capture `show configuration` before and after the change window, as a separate `<base>-running-config.txt` file per label. Diffed automatically alongside the route snapshot on Ctrl+C. See [below](#running-config-optional). |
+| `--netconf-snapshot` | `false` | Also dial NETCONF (static credentials only — not RSA-passcode fleets) alongside SSH, and use it for extra before/after snapshot sections (route info, BGP neighbor detail, ISIS/LDP/MPLS, interface/chassis/system health). Fleet-wide default, overridable per device via `--devices`. See [below](#netconf-snapshot-capture-optional). |
 | `--version` | `false` | Print the build version and exit, instead of connecting to any device. |
 
 ### Onboarding (once at startup)
@@ -124,6 +125,7 @@ every device, list them once in a file and pass `--devices path/to/file.yaml`:
 
 ```yaml
 interval: 30s
+netconf_snapshot: true
 
 devices:
   - hostname: pe-router-1
@@ -133,12 +135,18 @@ devices:
   - hostname: pe-router-2
     tables: [inet.0]
     interfaces: [ae10]
+    netconf_snapshot: false
 ```
 
 Only `hostname` is required. `tables`/`interfaces`/`neighbors` are each
 optional exactly like their interactive-prompt equivalents (`table:` —
 singular — also works as an alias for a one-item `tables:` list; both may
-be set and are merged). **Credentials are never part of this file** — a
+be set and are merged). The top-level `netconf_snapshot` sets the
+fleet-wide default (same as `--netconf-snapshot`); a device's own
+`netconf_snapshot` overrides it — e.g. leave the fleet default on but opt
+one NETCONF-incapable device back out, as in the example above. See
+[NETCONF snapshot capture (optional)](#netconf-snapshot-capture-optional).
+**Credentials are never part of this file** — a
 one-time passcode is single-use/time-limited, so the tool always prompts
 for them interactively (with reuse offered per [Passcode
 reuse](#passcode-reuse)) regardless of `--devices`. After the file is
@@ -384,6 +392,56 @@ config diff is printed automatically, right alongside the route-level diff,
 the moment you hit Ctrl+C. Unlike the route-level snapshot diff (diffed by
 prefix, order-independent), this is an ordinary unified line diff, since
 config text doesn't reduce meaningfully to a by-key comparison.
+
+### NETCONF snapshot capture (optional)
+
+Pass `--netconf-snapshot` (or set `netconf_snapshot: true` fleet-wide, with
+per-device overrides — see [above](#providing-devices-via-a-yaml-file-optional))
+to also dial NETCONF for every device, alongside the SSH session that's
+always opened. **The periodic tick loop (BGP summary, interface stats,
+protocol next hop) always stays on SSH** — NETCONF is used only for the
+before/after snapshot, adding these sections on top of the route-table
+snapshot and config capture above:
+
+| Section | Junos RPC | What it catches |
+|---|---|---|
+| Route information | `get-route-information` | NETCONF counterpart of the SSH route-table capture above (same prefix/next-hop diff) |
+| Route summary | `get-route-summary-information` | Per-table route counts (new — no SSH equivalent) |
+| BGP neighbor detail | `get-bgp-neighbor-information` | Per-peer state and prefix counts — flags a session flap during the change |
+| ISIS adjacencies | `get-isis-adjacency-information` | Per-interface adjacency state |
+| LDP database | `get-ldp-database-information` | LDP label bindings |
+| MPLS LSP information | `get-mpls-lsp-information` | Per-session-type LSP up/down counts |
+| Interface information | `get-interface-information` | Admin/oper status and logical-interface addresses |
+| Software information | `get-software-information` | Junos version/model — should never change during a routine window |
+| Route engine information | `get-route-engine-information` | RE mastership state — flags an unexpected failover |
+| FPC information | `get-fpc-information` | Per-slot linecard state/temperature |
+| PIC information | `get-pic-information` | Per-PIC state |
+| Alarm information | `get-alarm-information` | New/cleared chassis alarms |
+| Core dumps | CLI-passthrough (`show system core-dumps routing-engine both`) | New core-dump files — a strong signal something crashed during the change |
+
+Route information and route summary are captured per table (same as the SSH
+route-table capture); everything else is captured once per device,
+regardless of how many tables/interfaces/neighbors are configured. All of
+it is diffed automatically alongside the existing sections the moment you
+hit Ctrl+C — no separate flag or invocation needed.
+
+**Not for RSA-passcode fleets.** NETCONF is dialed once, immediately after
+SSH, reusing the exact same just-entered credentials — safe for a one-time
+passcode specifically because it's reused within the same moment it was
+accepted, not later. But the underlying NETCONF client only supports
+static/reusable passwords (no interactive passcode-prompt handling the way
+the SSH path has); if your fleet uses RSA SecurID or similar, leave
+`--netconf-snapshot` off. A failed NETCONF dial doesn't fail the device's
+onboarding either way — it's logged as a warning, and that device's
+snapshot silently falls back to SSH-only sections.
+
+**Unverified against real hardware.** The RPC bodies and response shapes
+above are grounded in a working reference implementation (a separate,
+existing Python project that already runs these exact RPCs against Junos
+devices in production), not invented from scratch — but they haven't been
+observed against a device reachable from this repo. Validate against your
+own fleet before relying on this operationally, the same caution this
+README already gives the TextFSM templates above.
 
 ### `session.log`
 

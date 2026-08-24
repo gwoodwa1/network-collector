@@ -25,6 +25,35 @@ type deviceSpec struct {
 	Tables     []string `yaml:"tables"`
 	Interfaces []string `yaml:"interfaces"`
 	Neighbors  []string `yaml:"neighbors"`
+	// NetconfSnapshot overrides the fleet-wide default (see
+	// devicesDocument.NetconfSnapshot / -netconf-snapshot) for this one
+	// device — e.g. one device that doesn't support NETCONF can opt back
+	// out while the rest of the fleet uses it. nil means "use the fleet
+	// default", not "false" — see resolveNetconfSnapshot.
+	NetconfSnapshot *bool `yaml:"netconf_snapshot"`
+}
+
+// resolvedNetconfSnapshot returns whether NETCONF snapshot capture is
+// enabled for this device: its own override when set, otherwise
+// fleetDefault (see resolveNetconfSnapshot for the nil-vs-explicit-false
+// distinction).
+func (spec deviceSpec) resolvedNetconfSnapshot(fleetDefault bool) bool {
+	return resolveNetconfSnapshot(spec.NetconfSnapshot, fleetDefault)
+}
+
+// resolveNetconfSnapshot falls back to fallback when configured is unset
+// (nil). configured == nil is "unset", not "false" — a plain bool can't
+// represent that distinction on its own, mirroring the nil-vs-explicit-zero
+// convention xr-routing-monitor/discover.go's resolveHubTopInterfaces
+// already uses for hub_top_interfaces. Shared by both resolution steps this
+// tool needs: devicesDocument.NetconfSnapshot vs. the -netconf-snapshot CLI
+// default (main.go), and deviceSpec.NetconfSnapshot vs. that resolved
+// fleet-wide default (resolvedNetconfSnapshot above).
+func resolveNetconfSnapshot(configured *bool, fallback bool) bool {
+	if configured == nil {
+		return fallback
+	}
+	return *configured
 }
 
 // tables returns spec's Table and Tables fields merged into one
@@ -60,7 +89,14 @@ type devicesDocument struct {
 	// device list instead of retyped on the command line every time.
 	Interval string           `yaml:"interval"`
 	Commands commandOverrides `yaml:"commands"`
-	Devices  []deviceSpec     `yaml:"devices"`
+	// NetconfSnapshot sets the fleet-wide default for whether the
+	// before/after snapshot capture also dials NETCONF (see
+	// deviceSession.netconfClient); the -netconf-snapshot CLI flag takes
+	// precedence when passed explicitly, mirroring Interval's precedence
+	// against -interval. nil means "not set in this file" — see
+	// resolveNetconfSnapshot.
+	NetconfSnapshot *bool        `yaml:"netconf_snapshot"`
+	Devices         []deviceSpec `yaml:"devices"`
 }
 
 func countStringPlaceholders(format string) (count int, ok bool) {
@@ -109,15 +145,18 @@ func validateCommandTemplate(path, field, value string) error {
 //	    interfaces: [ae10]
 //
 // The returned duration is zero when the file has no top-level interval
-// set, signaling the caller should fall back to its own default.
-func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, commands commandOverrides, err error) {
+// set, signaling the caller should fall back to its own default. The
+// returned netconfSnapshotDefault is nil when the file has no top-level
+// netconf_snapshot set, signaling the caller should fall back to the
+// -netconf-snapshot CLI flag's own value (see resolveNetconfSnapshot).
+func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, commands commandOverrides, netconfSnapshotDefault *bool, err error) {
 	b, err := safeyaml.ReadFile(path)
 	if err != nil {
-		return nil, 0, commandOverrides{}, err
+		return nil, 0, commandOverrides{}, nil, err
 	}
 	var doc devicesDocument
 	if err := safeyaml.Unmarshal(b, &doc); err != nil {
-		return nil, 0, commandOverrides{}, fmt.Errorf("parse %s: %w", path, err)
+		return nil, 0, commandOverrides{}, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	// Collected across every device rather than returning on the first hit,
 	// so a file with more than one problem reports both in one pass instead
@@ -139,18 +178,18 @@ func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, c
 		errs = append(errs, err)
 	}
 	if err := errors.Join(errs...); err != nil {
-		return nil, 0, commandOverrides{}, err
+		return nil, 0, commandOverrides{}, nil, err
 	}
 	if raw := strings.TrimSpace(doc.Interval); raw != "" {
 		interval, err = time.ParseDuration(raw)
 		if err != nil {
-			return nil, 0, commandOverrides{}, fmt.Errorf("%s: invalid interval %q: %w", path, raw, err)
+			return nil, 0, commandOverrides{}, nil, fmt.Errorf("%s: invalid interval %q: %w", path, raw, err)
 		}
 		if interval <= 0 {
-			return nil, 0, commandOverrides{}, fmt.Errorf("%s: interval %q must be positive", path, raw)
+			return nil, 0, commandOverrides{}, nil, fmt.Errorf("%s: interval %q must be positive", path, raw)
 		}
 	}
-	return doc.Devices, interval, doc.Commands, nil
+	return doc.Devices, interval, doc.Commands, doc.NetconfSnapshot, nil
 }
 
 // onboardDevicesFromSpecs connects to each device from a --devices file in
@@ -159,8 +198,10 @@ func loadDeviceSpecs(path string) (specs []deviceSpec, interval time.Duration, c
 // does not stop the remaining devices in the file from being tried. A
 // hostname already claimed in registry (e.g. duplicated within the file, or
 // present more than once for any other reason) is skipped without
-// attempting to connect again.
-func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceType string, cache *credentialCache, registry *hostnameRegistry, connect connectFunc) []*deviceSession {
+// attempting to connect again. netconfSnapshotDefault is the fleet-wide
+// default (already resolved from -netconf-snapshot / devicesDocument); each
+// spec's own resolvedNetconfSnapshot overrides it per device.
+func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceType string, netconfSnapshotDefault bool, cache *credentialCache, registry *hostnameRegistry, connect connectFunc) []*deviceSession {
 	var sessions []*deviceSession
 	for _, spec := range specs {
 		if exists, existing := registry.has(spec.Hostname); exists {
@@ -168,7 +209,8 @@ func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceTyp
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "Connecting to %s (tables=%v interfaces=%v neighbors=%v)\n", spec.Hostname, spec.tables(), spec.Interfaces, spec.Neighbors)
-		client, err := connect(reader, spec.Hostname, deviceType, cache)
+		netconfSnapshot := spec.resolvedNetconfSnapshot(netconfSnapshotDefault)
+		client, netconfClient, err := connect(reader, spec.Hostname, deviceType, netconfSnapshot, cache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "skipping %s: %v\n\n", spec.Hostname, err)
 			continue
@@ -177,11 +219,12 @@ func onboardDevicesFromSpecs(reader *bufio.Reader, specs []deviceSpec, deviceTyp
 
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", spec.Hostname)
 		sessions = append(sessions, &deviceSession{
-			hostname:   spec.Hostname,
-			tables:     spec.tables(),
-			interfaces: dedupeSorted(spec.Interfaces),
-			neighbors:  dedupeSorted(spec.Neighbors),
-			client:     client,
+			hostname:      spec.Hostname,
+			tables:        spec.tables(),
+			interfaces:    dedupeSorted(spec.Interfaces),
+			neighbors:     dedupeSorted(spec.Neighbors),
+			client:        client,
+			netconfClient: netconfClient,
 		})
 	}
 	return sessions
