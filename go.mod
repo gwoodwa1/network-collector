@@ -6,17 +6,17 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/itchyny/gojq v0.12.19
 	github.com/openconfig/gnmi v0.14.1
-	github.com/openconfig/gnmic v0.46.0
+	github.com/openconfig/gnmic v0.47.0
 	github.com/openconfig/gnmic/pkg/api v0.1.11
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
-	github.com/scrapli/scrapligo v1.4.0
+	github.com/scrapli/scrapligo v1.4.1
 	github.com/sirikothe/gotextfsm v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/tidwall/gjson v1.19.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
-	google.golang.org/grpc v1.82.1
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/grpc v1.83.1
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -52,6 +52,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
