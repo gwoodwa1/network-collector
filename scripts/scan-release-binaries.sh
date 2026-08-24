@@ -8,7 +8,8 @@ scanner="${GOVULNCHECK:-govulncheck}"
 find "$release_root" -type f \( \
 	-name network-collector -o -name network-collector.exe -o \
 	-name xr-routing-monitor -o -name xr-routing-monitor.exe -o \
-	-name junos-routing-monitor -o -name junos-routing-monitor.exe \
+	-name junos-routing-monitor -o -name junos-routing-monitor.exe -o \
+	-name routing-monitor -o -name routing-monitor.exe \
 \) -print |
 while IFS= read -r binary; do
 	echo "=== metadata ${binary} ==="
@@ -22,7 +23,8 @@ done
 if ! find "$release_root" -type f \( \
 	-name network-collector -o -name network-collector.exe -o \
 	-name xr-routing-monitor -o -name xr-routing-monitor.exe -o \
-	-name junos-routing-monitor -o -name junos-routing-monitor.exe \
+	-name junos-routing-monitor -o -name junos-routing-monitor.exe -o \
+	-name routing-monitor -o -name routing-monitor.exe \
 \) -print -quit | grep -q .; then
 	echo "no release binaries found under ${release_root}" >&2
 	exit 1

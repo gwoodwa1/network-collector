@@ -6,15 +6,18 @@ traffic — plus a before/after snapshot of monitored route tables and BGP
 neighbor routes so you can confirm nothing moved except what you meant to
 change.
 
-It is self-contained: this directory's `parsers.yaml` and `templates/` are
-compiled into the binary via `go:embed`, so `go build` produces a single
+It is self-contained: `internal/junosmonitor`'s `parsers.yaml` and `templates/`
+are compiled into the binary via `go:embed`, so `go build` produces a single
 file with nothing else to copy to the jumphost. It does not use or modify
 anything under `cmd/network-collector`.
 
 This tool is a sibling to [`cmd/xr-routing-monitor`](../xr-routing-monitor/README.md)
 (same change-window workflow, retargeted at Junos CLI syntax) — see
 [Not yet ported from xr-routing-monitor](#not-yet-ported-from-xr-routing-monitor)
-for what's deliberately out of scope in this first pass.
+for what's deliberately out of scope in this first pass. Both binaries are thin
+wrappers over their own `internal/` package (`internal/junosmonitor` and
+`internal/xrmonitor`); [`cmd/routing-monitor`](../routing-monitor/README.md)
+uses both packages together for mixed-fleet runs.
 
 ## Why this exists
 

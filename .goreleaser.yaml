@@ -50,12 +50,27 @@ builds:
     ldflags:
       - -X main.version={{.Version}}
 
+  - id: routing-monitor
+    main: ./cmd/routing-monitor
+    binary: routing-monitor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -X main.version={{.Version}}
+
 archives:
   - id: network-collector
     ids:
       - network-collector
       - xr-routing-monitor
       - junos-routing-monitor
+      - routing-monitor
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}

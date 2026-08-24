@@ -6,10 +6,15 @@ core-facing Bundle-Ether interfaces — plus a before/after snapshot of the
 full BGP route table so you can confirm nothing moved except what you meant
 to change.
 
-It is self-contained: this directory's `parsers.yaml` and `templates/` are
+It is self-contained: `internal/xrmonitor`'s `parsers.yaml` and `templates/` are
 compiled into the binary via `go:embed`, so `go build` produces a single
 file with nothing else to copy to the jumphost. It does not use or modify
 anything under `cmd/network-collector`.
+
+This binary is a thin wrapper over `internal/xrmonitor` — the same package
+[`cmd/routing-monitor`](../routing-monitor/README.md) uses for mixed
+Cisco IOS-XR/Juniper Junos fleets. Use this tool directly for an IOS-XR-only
+run; use `routing-monitor` when a change window touches both platforms.
 
 ## Why this exists
 

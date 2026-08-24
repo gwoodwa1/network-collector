@@ -209,6 +209,7 @@ if err := client.Close(); err != nil {
 - `cmd/restconf-client`: RESTCONF example using `pkg/drivers/restconf`
 - `cmd/xr-routing-monitor`: standalone Cisco IOS-XR change-window monitor
 - `cmd/junos-routing-monitor`: standalone Juniper Junos change-window monitor
+- `cmd/routing-monitor`: mixed-fleet front-end covering both, one output folder and one `--devices` file
 
 ## CLI validation and output
 
@@ -279,6 +280,25 @@ CGO_ENABLED=0 go build -trimpath -o junos-routing-monitor ./cmd/junos-routing-mo
 ```
 
 See [`cmd/junos-routing-monitor/README.md`](cmd/junos-routing-monitor/README.md) for devices-file examples, passcode reuse behavior, running-config capture and diffing, snapshot output, and live status formatting — and its "Not yet ported from xr-routing-monitor" section for what's deliberately out of scope in this first pass.
+
+## Routing Monitor (mixed fleet)
+
+`cmd/routing-monitor` is the mixed-fleet front-end for the two tools above: if a change
+window touches both Cisco IOS-XR and Juniper Junos devices at once, this gives you one
+output folder and one `--devices` YAML file instead of running the two platform-specific
+binaries separately. It doesn't reimplement any collection logic — it shares
+`internal/xrmonitor`/`internal/junosmonitor` (the same code `xr-routing-monitor`/
+`junos-routing-monitor` use; both keep working standalone, unchanged) across one
+onboarding flow, one output folder, and one HTML report covering every device on both
+platforms.
+
+```bash
+CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
+```
+
+See [`cmd/routing-monitor/README.md`](cmd/routing-monitor/README.md) for the combined
+`--devices` schema and why onboarding is sequential (platform by platform) rather than
+concurrent.
 
 ## Configuration
 
