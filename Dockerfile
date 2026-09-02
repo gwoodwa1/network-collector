@@ -18,7 +18,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
 
-RUN apk add --no-cache ca-certificates openssh-client tzdata \
+RUN apk update \
+    && apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates openssh-client tzdata \
     && addgroup -S network-collector \
     && adduser -S -G network-collector -h /workspace network-collector \
     && mkdir -p /workspace/artifacts /workspace/session_logs \
