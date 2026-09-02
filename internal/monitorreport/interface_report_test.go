@@ -251,6 +251,81 @@ func TestGenerateProfessionalInterfaceReport(t *testing.T) {
 	}
 }
 
+func TestGenerateProfessionalInterfaceReportPreservesExplicitSinceForWindow(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"timestamp":"2026-07-15T10:05:00Z","hostname":"pe1","interfaces":{"ae0":{"stats":[{"INPUT_RATE_BPS":"1000","OUTPUT_RATE_BPS":"2000"}]}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "pe1.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	path, err := GenerateProfessionalInterfaceReport(
+		dir,
+		mustParseTime(t, "2026-07-15T10:00:00Z"),
+		ProfessionalReportConfig{
+			Output:      "professional.html",
+			CompletedAt: mustParseTime(t, "2026-07-15T10:20:00Z"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("GenerateProfessionalInterfaceReport returned error: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `<div class="value">20m0s</div>`) {
+		t.Fatalf("expected the report window to use the explicit since time, got:\n%s", got)
+	}
+	if strings.Contains(got, `<div class="value">15m0s</div>`) {
+		t.Fatalf("report window was clamped to the first sample instead of explicit since, got:\n%s", got)
+	}
+}
+
+func TestGenerateProfessionalInterfaceReportEscapesCombinedLegendLabels(t *testing.T) {
+	dir := t.TempDir()
+	hostileHost := `<img src=x onerror=alert(1)>`
+	hostileInterface := `<b>ae0</b>`
+	line, err := json.Marshal(map[string]interface{}{
+		"timestamp": "2026-07-15T10:05:00Z",
+		"hostname":  hostileHost,
+		"interfaces": map[string]interface{}{
+			hostileInterface: map[string]interface{}{
+				"stats": []map[string]string{{"INPUT_RATE_BPS": "1000", "OUTPUT_RATE_BPS": "2000"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hostile.jsonl"), append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := GenerateProfessionalInterfaceReport(
+		dir,
+		mustParseTime(t, "2026-07-15T10:00:00Z"),
+		ProfessionalReportConfig{Output: "professional.html", CompletedAt: mustParseTime(t, "2026-07-15T10:10:00Z")},
+	)
+	if err != nil {
+		t.Fatalf("GenerateProfessionalInterfaceReport returned error: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `esc(item.hostname)+" / "+esc(item.interface)`) {
+		t.Fatalf("combined legend does not escape hostname/interface labels, got:\n%s", got)
+	}
+	if strings.Contains(got, `+item.hostname+" / "+item.interface`) {
+		t.Fatalf("combined legend still injects raw hostname/interface labels, got:\n%s", got)
+	}
+	if strings.Contains(got, hostileHost) || strings.Contains(got, hostileInterface) {
+		t.Fatalf("hostile labels appeared as raw markup in professional report, got:\n%s", got)
+	}
+}
+
 func TestFirstInterfaceStat(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{"stats": []map[string]string{{"INPUT_RATE_BPS": "1000"}}})
 	if err != nil {

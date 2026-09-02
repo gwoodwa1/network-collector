@@ -363,6 +363,17 @@ vertical dashed line, so the traffic shift around the migration can be read
 in context. Older samples already present in an accumulated `.jsonl` from a
 previous run against the same `--devices` file are ignored.
 
+To view a run before stopping it, use `monitor-report` from a second terminal
+against the same artifact folder:
+
+```bash
+./monitor-report -output-dir artifacts/CHG-2026-0042
+```
+
+The renderer only reads the `.jsonl` ticks that have already landed and
+rewrites the HTML report atomically. Use `--since <RFC3339>` when the output
+folder contains earlier runs that should stay out of the live report.
+
 Branding images must be PNG files directly inside `--logo-folder`; absolute
 logo filenames and `..` traversal are refused. When explicit filenames are
 omitted, `header.png` and `footer.png` are used if present. For example:

@@ -36,6 +36,13 @@ All notable changes to Network Collector are documented here.
   the Unix-only `internal/secureartifact` package (owner-only permissions,
   no-symlink-follow), which fails outright on Windows. Linux and macOS
   builds are unaffected.
+- Added `monitor-report`, a standalone renderer that can safely rebuild a
+  monitor output folder's `interface-traffic.html` while the monitor is still
+  running, and included it in release archives and release-binary scans.
+- Added a combined normalized interface chart and per-device filters to the
+  professional monitor report. Hostname/interface labels are escaped before
+  entering generated report HTML, and live report rendering preserves explicit
+  `--since` windows.
 
 ## [2.0.1] - 2026-07-27
 

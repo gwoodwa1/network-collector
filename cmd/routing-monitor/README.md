@@ -122,6 +122,30 @@ per-tick fields (`hostname`, `interfaces`, `default_route_next_hops`) both platf
 tick records already produce identically, with no platform-specific code needed to
 combine them.
 
+## Watching interface traffic while it's still running
+
+The HTML report is only written once, when the run stops (Ctrl+C or natural
+end) — nothing regenerates it automatically while devices are still being
+polled. To see the traffic plotted from a *live* run without stopping it, use
+[`cmd/monitor-report`](../monitor-report) from a second terminal, pointed at
+the same output folder:
+
+```bash
+./monitor-report -output-dir artifacts/CRQXXX
+```
+
+It only reads the `.jsonl` tick files already on disk and (over)writes the
+HTML report — it never touches the running `routing-monitor` process, so it's
+safe to run as often as you like, e.g. on a loop:
+
+```bash
+watch -n 30 ./monitor-report -output-dir artifacts/CRQXXX
+```
+
+This works identically against `xr-routing-monitor`'s and
+`junos-routing-monitor`'s own output folders too — `monitor-report` doesn't
+care which binary is writing the ticks it's reading.
+
 ## Relationship to the standalone tools
 
 `cmd/xr-routing-monitor` and `cmd/junos-routing-monitor` are unaffected by this tool's

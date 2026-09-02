@@ -210,6 +210,7 @@ if err := client.Close(); err != nil {
 - `cmd/xr-routing-monitor`: standalone Cisco IOS-XR change-window monitor
 - `cmd/junos-routing-monitor`: standalone Juniper Junos change-window monitor
 - `cmd/routing-monitor`: mixed-fleet front-end covering both, one output folder and one `--devices` file
+- `cmd/monitor-report`: renders the HTML report from a monitor's output folder on demand, safe to run against a still-running monitor
 
 ## CLI validation and output
 
@@ -299,6 +300,23 @@ CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 See [`cmd/routing-monitor/README.md`](cmd/routing-monitor/README.md) for the combined
 `--devices` schema and why onboarding is sequential (platform by platform) rather than
 concurrent.
+
+## Monitor Report (view a live run without stopping it)
+
+Every monitor tool above writes its HTML report only once, when the run stops. To see
+interface traffic plotted from a run that's still in progress, `cmd/monitor-report`
+renders the report on demand from an existing output folder — safe to run repeatedly
+from a second session against a folder a monitor is still writing into, since it only
+reads the `.jsonl` tick files already on disk and never touches the running process.
+
+```bash
+CGO_ENABLED=0 go build -trimpath -o monitor-report ./cmd/monitor-report
+./monitor-report -output-dir artifacts/CRQXXX
+```
+
+See [`cmd/monitor-report/README.md`](cmd/monitor-report/README.md) for the full flag
+list, including `--since` to scope the plot to one run when an output folder holds
+ticks from more than one.
 
 ## Configuration
 

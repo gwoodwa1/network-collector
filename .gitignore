@@ -13,6 +13,8 @@ SECURITY_AUDIT.md
 /cmd/junos-routing-monitor/junos-routing-monitor
 /routing-monitor
 /cmd/routing-monitor/routing-monitor
+/monitor-report
+/cmd/monitor-report/monitor-report
 /dist/
 /artifacts/
 /session_logs/

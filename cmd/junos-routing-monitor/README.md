@@ -247,6 +247,17 @@ protocol next hop changed is marked as a labeled vertical line so the traffic
 shift around a migration can be read in context. Older samples already present
 in an accumulated `.jsonl` from a previous run are ignored.
 
+To view a run before stopping it, use `monitor-report` from a second terminal
+against the same artifact folder:
+
+```bash
+./monitor-report -output-dir artifacts/CHG-2026-0042
+```
+
+The renderer only reads the `.jsonl` ticks that have already landed and
+rewrites the HTML report atomically. Use `--since <RFC3339>` when the output
+folder contains earlier runs that should stay out of the live report.
+
 The run artifact directory is owner-only (`0700`), and JSONL, session logs,
 snapshots, running configurations, and reports are owner-only (`0600`).
 Existing reused artifacts are tightened before writing, and symlink artifact
