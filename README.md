@@ -304,10 +304,20 @@ concurrent.
 ## Monitor Report (view a live run without stopping it)
 
 Every monitor tool above writes its HTML report only once, when the run stops. To see
-interface traffic plotted from a run that's still in progress, `cmd/monitor-report`
-renders the report on demand from an existing output folder — safe to run repeatedly
-from a second session against a folder a monitor is still writing into, since it only
-reads the `.jsonl` tick files already on disk and never touches the running process.
+interface traffic plotted from a run that's still in progress, regenerate it on demand
+from an existing output folder — safe to run repeatedly from a second session against a
+folder a monitor is still writing into, since it only reads the `.jsonl` tick files
+already on disk and never touches the running process.
+
+`cmd/routing-monitor` has this built in as `-report-only`:
+
+```bash
+./routing-monitor -report-only -devices CRQXXX.yaml
+```
+
+For a folder written by the standalone `xr-routing-monitor`/`junos-routing-monitor`
+tools, use the separate `cmd/monitor-report` binary instead — it takes the output
+folder directly rather than `-devices`/`-output-dir`:
 
 ```bash
 CGO_ENABLED=0 go build -trimpath -o monitor-report ./cmd/monitor-report

@@ -35,12 +35,12 @@ juniper_junos:
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write fixture: %v", err)
 	}
-	doc, interval, err := loadMixedFleetDocument(path)
+	doc, intervals, err := loadMixedFleetDocument(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if interval != 30*time.Second {
-		t.Fatalf("expected 30s interval, got %v", interval)
+	if intervals.TopLevel != 30*time.Second {
+		t.Fatalf("expected 30s top-level interval, got %v", intervals.TopLevel)
 	}
 	if doc.CiscoIOSXR == nil || len(doc.CiscoIOSXR.Devices) != 1 || doc.CiscoIOSXR.Devices[0].Hostname != "xr-router-1" {
 		t.Fatalf("unexpected cisco_iosxr section: %+v", doc.CiscoIOSXR)
@@ -50,6 +50,90 @@ juniper_junos:
 	}
 	if doc.JuniperJunos.NetconfSnapshot == nil || !*doc.JuniperJunos.NetconfSnapshot {
 		t.Fatalf("expected juniper_junos.netconf_snapshot true, got %v", doc.JuniperJunos.NetconfSnapshot)
+	}
+}
+
+// TestLoadMixedFleetDocumentPerPlatformInterval proves a section's own
+// interval: is parsed and returned independently of the shared top-level
+// one, so cmd/routing-monitor's main() can let cisco_iosxr/juniper_junos
+// poll on different cadences in the same run.
+func TestLoadMixedFleetDocumentPerPlatformInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "per-platform-interval.yaml")
+	content := `interval: 60s
+
+cisco_iosxr:
+  interval: 15s
+  devices:
+    - hostname: xr-router-1
+      vrfs: [CUSTOMER-A]
+
+juniper_junos:
+  devices:
+    - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, intervals, err := loadMixedFleetDocument(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if intervals.TopLevel != 60*time.Second {
+		t.Fatalf("expected 60s top-level interval, got %v", intervals.TopLevel)
+	}
+	if intervals.CiscoIOSXR != 15*time.Second {
+		t.Fatalf("expected 15s cisco_iosxr interval override, got %v", intervals.CiscoIOSXR)
+	}
+	if intervals.JuniperJunos != 0 {
+		t.Fatalf("expected no juniper_junos interval override, got %v", intervals.JuniperJunos)
+	}
+}
+
+func TestResolveMixedFleetIntervalsUsesSectionOverrides(t *testing.T) {
+	xrInterval, junosInterval := resolveMixedFleetIntervals(60*time.Second, false, mixedFleetIntervals{
+		TopLevel:     30 * time.Second,
+		CiscoIOSXR:   15 * time.Second,
+		JuniperJunos: 45 * time.Second,
+	})
+	if xrInterval != 15*time.Second {
+		t.Fatalf("expected IOS-XR section interval to win, got %v", xrInterval)
+	}
+	if junosInterval != 45*time.Second {
+		t.Fatalf("expected Junos section interval to win, got %v", junosInterval)
+	}
+}
+
+func TestResolveMixedFleetIntervalsFallsBackToTopLevel(t *testing.T) {
+	xrInterval, junosInterval := resolveMixedFleetIntervals(60*time.Second, false, mixedFleetIntervals{
+		TopLevel: 30 * time.Second,
+	})
+	if xrInterval != 30*time.Second {
+		t.Fatalf("expected IOS-XR to use top-level interval, got %v", xrInterval)
+	}
+	if junosInterval != 30*time.Second {
+		t.Fatalf("expected Junos to use top-level interval, got %v", junosInterval)
+	}
+}
+
+func TestResolveMixedFleetIntervalsCLIWins(t *testing.T) {
+	xrInterval, junosInterval := resolveMixedFleetIntervals(10*time.Second, true, mixedFleetIntervals{
+		TopLevel:     30 * time.Second,
+		CiscoIOSXR:   15 * time.Second,
+		JuniperJunos: 45 * time.Second,
+	})
+	if xrInterval != 10*time.Second {
+		t.Fatalf("expected IOS-XR to use explicit CLI interval, got %v", xrInterval)
+	}
+	if junosInterval != 10*time.Second {
+		t.Fatalf("expected Junos to use explicit CLI interval, got %v", junosInterval)
+	}
+}
+
+func TestReportOnlyRunFolderMatchesSetupRunLabel(t *testing.T) {
+	got := reportOnlyRunFolder("artifacts", "/tmp/changes/CRQXXX.yaml")
+	want := filepath.Join("artifacts", "CRQXXX")
+	if got != want {
+		t.Fatalf("expected report-only folder %q, got %q", want, got)
 	}
 }
 

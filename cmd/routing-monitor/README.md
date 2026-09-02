@@ -49,11 +49,13 @@ CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 | Flag | Default | Meaning |
 |---|---|---|
 | `--devices` | *(none)* | **Required.** Combined YAML file — see below. |
-| `--interval` | `60s` | Polling interval for every device, both platforms. Overridden by the file's top-level `interval:` unless set explicitly here. |
+| `--interval` | `60s` | Polling interval, both platforms. Overridden by the file's top-level `interval:`, which is itself overridden by a section's own `interval:` (see [The combined --devices file](#the-combined---devices-file)) — unless `--interval` is passed explicitly, which always wins for both platforms. |
 | `--output-dir` | `artifacts` | Parent directory for the shared output folder, named after `--devices` (same convention as the two standalone tools). |
 | `--passcode-reuse-window` | `45s` | How long a just-entered passcode may be offered for reuse on the *next* device, across both platforms. `0` disables reuse. |
 | `--capture-running-config` | `false` | Also capture the running configuration before/after, on every device, both platforms. |
 | `--netconf-snapshot` | `false` | **Junos devices only.** Also dial NETCONF for extra before/after snapshot sections — see [junos-routing-monitor's README](../junos-routing-monitor/README.md#netconf-snapshot-capture-optional). No effect on IOS-XR devices. |
+| `--report-only` | `false` | Regenerate the HTML report from this run's existing output folder and exit — no onboarding, no polling, no device contacted. Use with the same `--devices`/`--output-dir` as the live run. See [Watching interface traffic while it's still running](#watching-interface-traffic-while-its-still-running). |
+| `--since` | *(none, meaning every tick on disk)* | Only used with `--report-only`. RFC3339 timestamp; only plot ticks at or after this time. |
 | `--report-output` | `interface-traffic.html` | HTML report filename. |
 | `--report-title` | `Change Monitoring Report` | Report title. |
 | `--change-reference` | *(none)* | Change/ticket reference shown in the report. |
@@ -76,13 +78,15 @@ One shared top-level `interval:`, plus a `cisco_iosxr:` and/or `juniper_junos:`
 section — each using **exactly** the same schema as that platform's own standalone
 `--devices` file (see [xr-routing-monitor's](../xr-routing-monitor/README.md#providing-devices-via-a-yaml-file-optional)
 and [junos-routing-monitor's](../junos-routing-monitor/README.md#providing-devices-via-a-yaml-file-optional)
-own documentation for every per-device field). At least one of the two sections must be
-present; either can be omitted if that run is single-platform.
+own documentation for every per-device field, including each section's own `interval:`).
+At least one of the two sections must be present; either can be omitted if that run is
+single-platform.
 
 ```yaml
 interval: 30s
 
 cisco_iosxr:
+  interval: 15s
   customer_gateway_prefix: 192.0.2.
   hub_top_interfaces: 2
   devices:
@@ -107,6 +111,12 @@ YAML key with **completely different, incompatible sub-fields** (IOS-XR's
 `route_command`/`default_route_command`/etc. vs. Junos's own set) — nesting keeps them
 apart without any renaming.
 
+A section's own `interval:` overrides the shared top-level one for just that platform —
+in the example above, IOS-XR devices poll every 15s while Junos devices poll every 30s
+(the shared default). Useful when one platform's devices need a tighter or looser
+cadence than the other in the same run. The `--interval` CLI flag, if passed explicitly,
+still wins over both for every device regardless of platform.
+
 Credentials are, as always, never part of this file — prompted interactively per device,
 per platform, in section order.
 
@@ -126,25 +136,29 @@ combine them.
 
 The HTML report is only written once, when the run stops (Ctrl+C or natural
 end) — nothing regenerates it automatically while devices are still being
-polled. To see the traffic plotted from a *live* run without stopping it, use
-[`cmd/monitor-report`](../monitor-report) from a second terminal, pointed at
-the same output folder:
+polled. To see the traffic plotted from a *live* run without stopping it, run
+`routing-monitor -report-only` from a second terminal, with the same
+`-devices`/`-output-dir` as the live run so it resolves to the same output
+folder:
 
 ```bash
-./monitor-report -output-dir artifacts/CRQXXX
+./routing-monitor -report-only -devices CRQXXX.yaml
 ```
 
 It only reads the `.jsonl` tick files already on disk and (over)writes the
-HTML report — it never touches the running `routing-monitor` process, so it's
-safe to run as often as you like, e.g. on a loop:
+HTML report — no onboarding, no polling, no device contacted, and it never
+touches the actual running `routing-monitor` process, so it's safe to run as
+often as you like, e.g. on a loop:
 
 ```bash
-watch -n 30 ./monitor-report -output-dir artifacts/CRQXXX
+watch -n 30 ./routing-monitor -report-only -devices CRQXXX.yaml
 ```
 
-This works identically against `xr-routing-monitor`'s and
-`junos-routing-monitor`'s own output folders too — `monitor-report` doesn't
-care which binary is writing the ticks it's reading.
+For an existing folder written by the standalone `xr-routing-monitor`/
+`junos-routing-monitor` tools instead, use
+[`cmd/monitor-report`](../monitor-report) the same way — it takes the output
+folder directly rather than `-devices`/`-output-dir`, so it works regardless
+of which binary wrote the ticks it's reading.
 
 ## Relationship to the standalone tools
 

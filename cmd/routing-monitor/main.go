@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,6 +50,8 @@ func main() {
 	var captureRunningConfigEnabled bool
 	var netconfSnapshotEnabled bool
 	var showVersion bool
+	var reportOnly bool
+	var sinceFlag string
 	var reportOutput, reportTitle, changeReference string
 	var logoFolder, headerLogo, footerLogo string
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device, both platforms")
@@ -57,6 +60,8 @@ func main() {
 	flag.DurationVar(&passcodeReuseWindow, "passcode-reuse-window", 45*time.Second, "how long an entered passcode may be offered for reuse on the next device, across both platforms; 0 disables reuse")
 	flag.BoolVar(&captureRunningConfigEnabled, "capture-running-config", false, "also capture the running configuration before and after the change window, for every device on both platforms")
 	flag.BoolVar(&netconfSnapshotEnabled, "netconf-snapshot", false, "Junos devices only: also dial NETCONF (static credentials only, not RSA-passcode fleets) for extra before/after snapshot sections; no effect on IOS-XR devices")
+	flag.BoolVar(&reportOnly, "report-only", false, "regenerate the HTML report from this run's existing output folder and exit, without onboarding or polling any device; use with the same -devices/-output-dir as the live run")
+	flag.StringVar(&sinceFlag, "since", "", "RFC3339 timestamp; with -report-only, only plot ticks at or after this time (default: every tick already on disk for this --devices file)")
 	flag.StringVar(&reportOutput, "report-output", "interface-traffic.html", "professional HTML report filename")
 	flag.StringVar(&reportTitle, "report-title", "Change Monitoring Report", "professional report title")
 	flag.StringVar(&changeReference, "change-reference", "", "change/ticket reference shown in the report")
@@ -78,6 +83,33 @@ func main() {
 	}); err != nil {
 		slog.Error("invalid report branding", "error", err)
 		os.Exit(1)
+	}
+
+	if reportOnly {
+		runFolder := reportOnlyRunFolder(outputDir, devicesFile)
+		var since time.Time
+		if trimmed := strings.TrimSpace(sinceFlag); trimmed != "" {
+			parsed, err := time.Parse(time.RFC3339, trimmed)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid -since %q: %v (expected RFC3339, e.g. 2026-09-02T09:00:00Z)\n", trimmed, err)
+				os.Exit(1)
+			}
+			since = parsed
+		}
+		reportPath, err := monitorreport.GenerateProfessionalInterfaceReport(runFolder, since, monitorreport.ProfessionalReportConfig{
+			Output: reportOutput, Title: reportTitle, ChangeReference: changeReference,
+			LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo, CompletedAt: time.Now(),
+		})
+		if err != nil {
+			slog.Error("failed to write report", "output_dir", runFolder, "error", err)
+			os.Exit(1)
+		}
+		if reportPath == "" {
+			fmt.Fprintf(os.Stderr, "no interface samples found yet in %s\n", runFolder)
+			return
+		}
+		fmt.Println(reportPath)
+		return
 	}
 
 	intervalSetOnCLI := false
@@ -110,14 +142,16 @@ func main() {
 	}
 	defer run.SessionLogFile.Close()
 
-	doc, fileInterval, err := loadMixedFleetDocument(devicesFile)
+	doc, intervals, err := loadMixedFleetDocument(devicesFile)
 	if err != nil {
 		slog.Error("failed to load devices file", "devices_file", devicesFile, "error", err)
 		os.Exit(1)
 	}
-	if fileInterval > 0 && !intervalSetOnCLI {
-		interval = fileInterval
-	}
+	// -interval on the CLI beats everything, for both platforms uniformly
+	// (one flag, one override — same "explicit flag always wins" pattern as
+	// -netconf-snapshot above). Otherwise a platform's own YAML interval:
+	// beats the shared top-level interval:, which beats the flag's default.
+	xrInterval, junosInterval := resolveMixedFleetIntervals(interval, intervalSetOnCLI, intervals)
 
 	reader := bufio.NewReader(os.Stdin)
 	cache := monitorsetup.NewCredentialCache(passcodeReuseWindow)
@@ -160,8 +194,12 @@ func main() {
 	xrStatusOut := xrmonitor.NewTickStatusPrinter(statusWriter)
 	junosStatusOut := junosmonitor.NewTickStatusPrinter(statusWriter)
 
-	fmt.Fprintf(os.Stderr, "\n%d device(s) connected (%d IOS-XR, %d Junos); polling every %s, writing to %s/. Press Ctrl+C to stop.\n\n", len(xrSessions)+len(junosSessions), len(xrSessions), len(junosSessions), interval, run.OutputDir)
-	slog.Info("polling started", "xr_device_count", len(xrSessions), "junos_device_count", len(junosSessions), "interval", interval.String())
+	intervalDescription := xrInterval.String()
+	if xrInterval != junosInterval {
+		intervalDescription = fmt.Sprintf("XR %s, Junos %s", xrInterval, junosInterval)
+	}
+	fmt.Fprintf(os.Stderr, "\n%d device(s) connected (%d IOS-XR, %d Junos); polling every %s, writing to %s/. Press Ctrl+C to stop.\n\n", len(xrSessions)+len(junosSessions), len(xrSessions), len(junosSessions), intervalDescription, run.OutputDir)
+	slog.Info("polling started", "xr_device_count", len(xrSessions), "junos_device_count", len(junosSessions), "xr_interval", xrInterval.String(), "junos_interval", junosInterval.String())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -171,14 +209,14 @@ func main() {
 		wg.Add(1)
 		go func(s *xrmonitor.DeviceSession) {
 			defer wg.Done()
-			xrmonitor.PollDevice(ctx, s, interval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled)
+			xrmonitor.PollDevice(ctx, s, xrInterval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled)
 		}(session)
 	}
 	for _, session := range junosSessions {
 		wg.Add(1)
 		go func(s *junosmonitor.DeviceSession) {
 			defer wg.Done()
-			junosmonitor.PollDevice(ctx, s, interval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled)
+			junosmonitor.PollDevice(ctx, s, junosInterval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled)
 		}(session)
 	}
 	wg.Wait()
@@ -198,4 +236,29 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")
+}
+
+func reportOnlyRunFolder(outputDir, devicesFile string) string {
+	base := filepath.Base(strings.TrimSpace(devicesFile))
+	return filepath.Join(outputDir, strings.TrimSuffix(base, filepath.Ext(base)))
+}
+
+func resolveMixedFleetIntervals(defaultInterval time.Duration, intervalSetOnCLI bool, intervals mixedFleetIntervals) (time.Duration, time.Duration) {
+	xrInterval, junosInterval := defaultInterval, defaultInterval
+	if intervalSetOnCLI {
+		return xrInterval, junosInterval
+	}
+	switch {
+	case intervals.CiscoIOSXR > 0:
+		xrInterval = intervals.CiscoIOSXR
+	case intervals.TopLevel > 0:
+		xrInterval = intervals.TopLevel
+	}
+	switch {
+	case intervals.JuniperJunos > 0:
+		junosInterval = intervals.JuniperJunos
+	case intervals.TopLevel > 0:
+		junosInterval = intervals.TopLevel
+	}
+	return xrInterval, junosInterval
 }
