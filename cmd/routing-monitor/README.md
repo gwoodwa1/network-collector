@@ -32,6 +32,12 @@ can be offered for reuse on the very next Junos device too (if your fleet's one-
 token backend is shared), and the same hostname can't be claimed under both sections by
 accident.
 
+That shared cache also remembers the username itself for the rest of onboarding,
+independently of the passcode: even when passcode reuse is declined or has expired, the
+next prompt shows `Username [your-username]:` as a default you can keep with Enter, so
+switching to a Junos device — or just needing a fresh RSA code — never means retyping
+the username too. Type a different username at any prompt to switch accounts.
+
 ## Build
 
 ```bash

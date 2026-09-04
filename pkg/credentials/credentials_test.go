@@ -99,11 +99,41 @@ func TestResolveCredentialsWithTerminalFallsBackToBufferedReading(t *testing.T) 
 	defer notATTY.Close()
 
 	var output bytes.Buffer
-	username, password, err := ResolveCredentialsWithTerminal(true, strings.NewReader("alice\nsecret\n"), notATTY, &output)
+	username, password, err := ResolveCredentialsWithTerminal(true, strings.NewReader("alice\nsecret\n"), notATTY, &output, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if username != "alice" || password != "secret" {
 		t.Fatalf("unexpected credentials: username=%q password=%q", username, password)
+	}
+}
+
+// TestResolveCredentialsWithTerminalOffersDefaultUsername covers the
+// multi-device flow (internal/monitorsetup.ResolveCredentials): once a
+// username has been entered, later devices should let the operator keep it
+// by pressing Enter, while still requiring a fresh passcode every time.
+func TestResolveCredentialsWithTerminalOffersDefaultUsername(t *testing.T) {
+	t.Setenv("NET_USER", "")
+	t.Setenv("NET_PASSWORD", "")
+
+	notATTY, err := os.CreateTemp(t.TempDir(), "not-a-tty")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer notATTY.Close()
+
+	var output bytes.Buffer
+	username, password, err := ResolveCredentialsWithTerminal(true, strings.NewReader("\nnewpasscode\n"), notATTY, &output, "alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if username != "alice" {
+		t.Fatalf("expected the default username to be kept when the operator presses Enter, got %q", username)
+	}
+	if password != "newpasscode" {
+		t.Fatalf("expected a freshly entered password, got %q", password)
+	}
+	if !strings.Contains(output.String(), "Username [alice]:") {
+		t.Fatalf("expected the prompt to show the default username, got %q", output.String())
 	}
 }

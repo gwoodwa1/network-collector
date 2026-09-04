@@ -25,6 +25,13 @@ type CredentialCache struct {
 	password   string
 	capturedAt time.Time
 	Window     time.Duration
+
+	// lastUsername is the most recently entered username, offered as the
+	// default at every subsequent prompt for the rest of the run. Unlike
+	// username/password above, it survives RecordFailure: a rejected or
+	// expired one-time passcode says nothing about whether the username was
+	// wrong, so there's no reason to make the operator retype it too.
+	lastUsername string
 }
 
 // NewCredentialCache returns a cache with no captured credentials yet,
@@ -52,17 +59,37 @@ func ResolveCredentials(reader *bufio.Reader, cache *CredentialCache) (username,
 			return cache.username, cache.password, false, nil
 		}
 	}
-	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr)
+	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr, cache.defaultUsername())
+	if err == nil {
+		cache.setLastUsername(username)
+	}
 	return username, password, true, err
 }
 
+// defaultUsername returns the username to offer at the next prompt, or ""
+// on a nil cache or before any username has ever been entered.
+func (c *CredentialCache) defaultUsername() string {
+	if c == nil {
+		return ""
+	}
+	return c.lastUsername
+}
+
+func (c *CredentialCache) setLastUsername(username string) {
+	if c == nil || username == "" {
+		return
+	}
+	c.lastUsername = username
+}
+
 // RecordFailure invalidates the cache after a failed connection attempt (a
-// rejected passcode is never trustworthy to reuse), preserving Window.
+// rejected passcode is never trustworthy to reuse), preserving Window and
+// lastUsername — see the lastUsername field comment.
 func (c *CredentialCache) RecordFailure() {
 	if c == nil {
 		return
 	}
-	*c = CredentialCache{Window: c.Window}
+	*c = CredentialCache{Window: c.Window, lastUsername: c.lastUsername}
 }
 
 // RecordSuccess updates the cache with a freshly-entered, successfully-used
@@ -73,5 +100,5 @@ func (c *CredentialCache) RecordSuccess(username, password string) {
 	if c == nil {
 		return
 	}
-	*c = CredentialCache{username: username, password: password, capturedAt: time.Now(), Window: c.Window}
+	*c = CredentialCache{username: username, password: password, capturedAt: time.Now(), Window: c.Window, lastUsername: username}
 }

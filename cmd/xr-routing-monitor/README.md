@@ -287,6 +287,12 @@ immediately invalidates the cache (a rejected passcode isn't trustworthy to
 offer again). Set `--passcode-reuse-window 0` to disable the prompt
 entirely and always require a fresh passcode.
 
+Even when reuse is declined (or disabled), the username itself is still
+remembered: the prompt shows it as a default you can keep with Enter, e.g.
+`Username [automation]:`, so an expired or rejected RSA passcode only
+costs you a retyped passcode, not the username too. Type a different
+username at that prompt at any point to switch accounts.
+
 **No automatic retry.** A failed connection (bad passcode, network issue,
 anything) is never retried inline — the tool reports it and moves on. RSA/
 ISE commonly locks the account after 3 consecutive bad attempts, and an

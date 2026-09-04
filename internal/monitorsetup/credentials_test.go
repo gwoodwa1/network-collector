@@ -91,3 +91,34 @@ func TestCredentialCacheRecordSuccessOnNilIsNoop(t *testing.T) {
 	cache.RecordSuccess("alice", "s3cret") // must not panic
 	cache.RecordFailure()                  // must not panic
 }
+
+// TestResolveCredentialsKeepsUsernameAcrossAnExpiredPasscode covers the
+// actual multi-device scenario this is for: an RSA passcode expires or gets
+// rejected partway through a run (RecordFailure), and the operator is
+// prompted again for the next device. They should be able to keep the same
+// username by pressing Enter and only have to type a fresh passcode —
+// disabling reuse (Window: 0) isolates this from the separate
+// full-credential-reuse prompt covered above.
+func TestResolveCredentialsKeepsUsernameAcrossAnExpiredPasscode(t *testing.T) {
+	cache := NewCredentialCache(0)
+
+	reader := bufio.NewReader(strings.NewReader("alice\nfirstpasscode\n"))
+	username, password, fresh, err := ResolveCredentials(reader, cache)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fresh || username != "alice" || password != "firstpasscode" {
+		t.Fatalf("unexpected first prompt result: fresh=%v username=%q password=%q", fresh, username, password)
+	}
+	cache.RecordFailure() // e.g. the passcode was rejected as expired
+
+	// The operator presses Enter to keep "alice" and types a new passcode.
+	reader2 := bufio.NewReader(strings.NewReader("\nnewpasscode\n"))
+	username2, password2, fresh2, err := ResolveCredentials(reader2, cache)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fresh2 || username2 != "alice" || password2 != "newpasscode" {
+		t.Fatalf("unexpected second prompt result: fresh=%v username=%q password=%q", fresh2, username2, password2)
+	}
+}

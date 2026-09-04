@@ -13,7 +13,7 @@ import (
 // ResolveCredentials returns username/password using environment variables by default,
 // or prompts interactively when requested.
 func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) (string, string, error) {
-	return resolveCredentials(promptForCreds, input, nil, output)
+	return resolveCredentials(promptForCreds, input, nil, output, "")
 }
 
 // ResolveCredentialsWithTerminal behaves like ResolveCredentials, but lets the
@@ -25,11 +25,16 @@ func ResolveCredentials(promptForCreds bool, input io.Reader, output io.Writer) 
 // *bufio.Reader as input to ResolveCredentials would never satisfy its
 // internal input.(*os.File) check, silently disabling password masking even
 // at a real interactive terminal.
-func ResolveCredentialsWithTerminal(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer) (string, string, error) {
-	return resolveCredentials(promptForCreds, input, terminal, output)
+//
+// defaultUsername, when non-empty, is offered at the username prompt as
+// "Username [defaultUsername]: " — pressing Enter keeps it. Callers polling
+// several devices in one run use this so the operator only has to retype a
+// fresh one-time passcode per device, not the username too.
+func ResolveCredentialsWithTerminal(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer, defaultUsername string) (string, string, error) {
+	return resolveCredentials(promptForCreds, input, terminal, output, defaultUsername)
 }
 
-func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer) (string, string, error) {
+func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File, output io.Writer, defaultUsername string) (string, string, error) {
 	username := strings.TrimSpace(os.Getenv("NET_USER"))
 	password := strings.TrimSpace(os.Getenv("NET_PASSWORD"))
 
@@ -49,6 +54,11 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 	username = ""
 	password = ""
 
+	usernamePrompt := "Username: "
+	if defaultUsername != "" {
+		usernamePrompt = fmt.Sprintf("Username [%s]: ", defaultUsername)
+	}
+
 	terminalFile := terminal
 	if terminalFile == nil {
 		terminalFile, _ = input.(*os.File)
@@ -57,9 +67,17 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 	// x/term requires that descriptor as int.
 	terminalInput := terminalFile != nil && term.IsTerminal(int(terminalFile.Fd()))
 	if terminalInput {
-		fmt.Fprint(output, "Username: ")
-		if _, err := fmt.Fscanln(terminalFile, &username); err != nil {
+		fmt.Fprint(output, usernamePrompt)
+		line, err := readLineFromFile(terminalFile)
+		if err != nil {
 			return "", "", fmt.Errorf("read username: %w", err)
+		}
+		username = strings.TrimSpace(line)
+		if username == "" {
+			if defaultUsername == "" {
+				return "", "", fmt.Errorf("read username: %w", io.EOF)
+			}
+			username = defaultUsername
 		}
 
 		fmt.Fprint(output, "Password (input hidden): ")
@@ -73,14 +91,18 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 		password = string(passwordBytes)
 	} else {
 		reader := bufio.NewReader(input)
-		fmt.Fprint(output, "Username: ")
+		fmt.Fprint(output, usernamePrompt)
 		var err error
 		username, err = reader.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return "", "", fmt.Errorf("read username: %w", err)
 		}
-		if err == io.EOF && username == "" {
-			return "", "", fmt.Errorf("read username: %w", io.EOF)
+		username = strings.TrimSpace(username)
+		if username == "" {
+			if err == io.EOF && defaultUsername == "" {
+				return "", "", fmt.Errorf("read username: %w", io.EOF)
+			}
+			username = defaultUsername
 		}
 
 		fmt.Fprint(output, "Password (input hidden): ")
@@ -94,4 +116,30 @@ func resolveCredentials(promptForCreds bool, input io.Reader, terminal *os.File,
 	}
 
 	return strings.TrimSpace(username), strings.TrimRight(password, "\r\n"), nil
+}
+
+// readLineFromFile reads a single newline-terminated line directly from f,
+// one byte at a time. It deliberately avoids wrapping f in a bufio.Reader:
+// the caller immediately follows this with a raw term.ReadPassword on the
+// same file descriptor, and a bufio.Reader could read ahead past the
+// username's newline and swallow bytes the password read still needs.
+func readLineFromFile(f *os.File) (string, error) {
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		n, err := f.Read(b)
+		if n > 0 {
+			if b[0] == '\n' {
+				break
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return string(line), err
+		}
+	}
+	return strings.TrimRight(string(line), "\r"), nil
 }
