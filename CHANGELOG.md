@@ -4,6 +4,14 @@ All notable changes to Network Collector are documented here.
 
 ## [Unreleased]
 
+- Added TACACS command-authorization failure detection and interactive SSH
+  reauthentication to IOS-XR, Junos, and mixed-fleet routing monitors. Fleet
+  `commands.authz_failure_pattern` overrides are validated Go regexes with
+  case-insensitive matching by default. Reconnect prompts are serialized
+  across platforms, cancellation lets shutdown proceed, and connections
+  completed after an abandoned attempt are closed. Failed reconnects stop
+  only the affected device; dropped transports are not retried.
+
 - Added fail-closed gNMI subscription budgets for duration, updates, response
   size/count, trigger executions, and repeat-action cooldowns. Trigger actions
   now default to once per canonical path and require `repeat: true` for

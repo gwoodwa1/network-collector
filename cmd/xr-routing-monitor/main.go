@@ -136,6 +136,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	cache := monitorsetup.NewCredentialCache(passcodeReuseWindow)
 	registry := monitorsetup.NewHostnameRegistry()
+	reauth := xrmonitor.NewReauthCoordinator(make(chan struct{}, 1), reader, cache, xrmonitor.ConnectDevice, deviceType)
 	var sessions []*xrmonitor.DeviceSession
 	var gatewayPrefix string
 	var commands xrmonitor.CommandOverrides
@@ -184,7 +185,7 @@ func main() {
 		wg.Add(1)
 		go func(s *xrmonitor.DeviceSession) {
 			defer wg.Done()
-			xrmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled)
+			xrmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled, reauth)
 		}(session)
 	}
 	wg.Wait()

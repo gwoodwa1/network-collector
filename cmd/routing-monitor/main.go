@@ -156,6 +156,16 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	cache := monitorsetup.NewCredentialCache(passcodeReuseWindow)
 	registry := monitorsetup.NewHostnameRegistry()
+	// One shared semaphore for both platforms' reauth coordinators: both
+	// share this same os.Stdin reader once concurrent polling starts below,
+	// and without a shared semaphore an XR reconnect prompt and a Junos
+	// reconnect prompt could interleave on the same terminal. It's a size-1
+	// channel rather than a sync.Mutex so a queued or in-flight reconnect
+	// can still be abandoned on Ctrl+C instead of blocking shutdown — see
+	// ReauthCoordinator.Reconnect in both packages.
+	reauthSem := make(chan struct{}, 1)
+	xrReauth := xrmonitor.NewReauthCoordinator(reauthSem, reader, cache, xrmonitor.ConnectDevice, "cisco_iosxr")
+	junosReauth := junosmonitor.NewReauthCoordinator(reauthSem, reader, cache, junosmonitor.ConnectDeviceForReauth, "juniper_junos")
 
 	// Onboarded strictly sequentially, platform by platform (not
 	// concurrently): both tools' credential prompts read from os.Stdin one
@@ -209,14 +219,14 @@ func main() {
 		wg.Add(1)
 		go func(s *xrmonitor.DeviceSession) {
 			defer wg.Done()
-			xrmonitor.PollDevice(ctx, s, xrInterval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled)
+			xrmonitor.PollDevice(ctx, s, xrInterval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled, xrReauth)
 		}(session)
 	}
 	for _, session := range junosSessions {
 		wg.Add(1)
 		go func(s *junosmonitor.DeviceSession) {
 			defer wg.Done()
-			junosmonitor.PollDevice(ctx, s, junosInterval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled)
+			junosmonitor.PollDevice(ctx, s, junosInterval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled, junosReauth)
 		}(session)
 	}
 	wg.Wait()

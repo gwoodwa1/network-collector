@@ -126,6 +126,40 @@ still wins over both for every device regardless of platform.
 Credentials are, as always, never part of this file — prompted interactively per device,
 per platform, in section order.
 
+## TACACS reauthorization
+
+If a periodic polling command returns text matching `authorization failed`
+(case-insensitive), the monitor prompts to reconnect that device using the
+onboarding credential flow, including cached-passcode reuse when available.
+Both platforms share one prompt semaphore and credential cache. Other devices
+continue polling; a failed connection attempt stops only the affected device.
+Dropped SSH connections still stop polling without a reconnect attempt.
+
+Override denial wording separately in each platform section:
+
+```yaml
+cisco_iosxr:
+  commands:
+    authz_failure_pattern: "authorization failed"
+  devices:
+    - hostname: xr-router-1
+juniper_junos:
+  commands:
+    authz_failure_pattern: "authorization failed"
+  devices:
+    - hostname: pe-router-1
+```
+
+Patterns are Go regular expressions, case-insensitive by default and validated
+at load time. The default comes from confirmed IOS-XR output; use your fleet's
+actual denial text when it differs, particularly on Junos.
+
+Ctrl+C stops waiting for reauthentication so shutdown and report generation can
+proceed. An abandoned prompt retains exclusive access to input until its connect
+call returns; any unclaimed connection is closed. Reauthorization applies to
+periodic SSH polling only; snapshot/config captures do not trigger it, and an
+existing Junos NETCONF session is retained.
+
 ## What gets collected, and where
 
 Identical to what each standalone tool already writes — the same `<hostname>.jsonl`

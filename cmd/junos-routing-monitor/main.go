@@ -127,6 +127,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	cache := monitorsetup.NewCredentialCache(passcodeReuseWindow)
 	registry := monitorsetup.NewHostnameRegistry()
+	reauth := junosmonitor.NewReauthCoordinator(make(chan struct{}, 1), reader, cache, junosmonitor.ConnectDeviceForReauth, deviceType)
 	var sessions []*junosmonitor.DeviceSession
 	var commands junosmonitor.CommandOverrides
 	var deviceSpecsFromFile []junosmonitor.DeviceSpec
@@ -169,7 +170,7 @@ func main() {
 		wg.Add(1)
 		go func(s *junosmonitor.DeviceSession) {
 			defer wg.Done()
-			junosmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled)
+			junosmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled, reauth)
 		}(session)
 	}
 	wg.Wait()

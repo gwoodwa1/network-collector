@@ -23,16 +23,18 @@ uses both packages together for mixed-fleet runs.
 
 - Authentication on these routers is assumed to be a one-time passcode
   (RSA SecurID or similar), so **every device is connected and
-  authenticated individually**, and the tool **never reconnects
-  automatically** — a dropped session needs a human to type a fresh
-  passcode. Each device's SSH session is opened once and kept open for the
-  whole run; the periodic polling below reuses that same session instead of
-  reconnecting, so you're never prompted for credentials more than once per
-  device per run (see [Passcode reuse](#passcode-reuse) for reusing one
-  passcode across several devices within its cache window). If your fleet
-  instead uses reusable password/key auth, this still works fine — you'll
-  just never be offered a reuse prompt beyond the first entry, since nothing
-  ever expires.
+  authenticated individually**, and a **dropped SSH session is never
+  reconnected automatically** — a human has to type a fresh passcode. Each
+  device's SSH session is kept open between polling ticks; the
+  periodic polling below reuses that same session instead of reconnecting,
+  with credentials prompted again only when reauthorization is needed
+  (see [Passcode reuse](#passcode-reuse) for reusing one passcode across
+  several devices within its cache window). Fleets using reusable passwords
+  use the same credential prompt flow.
+  A **TACACS command-authorization failure mid-session** (the SSH transport
+  is fine, but AAA starts rejecting commands — see [TACACS
+  reauthorization](#tacacs-reauthorization)) is different: the tool detects
+  it and *does* prompt you to restart that one device's session.
 - You can watch **multiple devices at once**, each on its own independent
   polling loop, so one device dropping doesn't stop monitoring the others.
 
@@ -176,11 +178,53 @@ commands:
   default_route_parser: junos_default_route_nexthop
   interface_command: 'show interfaces %s extensive | match "Description:|Input|Output"'
   interface_parser: junos_interface_stats
+  authz_failure_pattern: "authorization failed"
 ```
 
 Every field is optional; only the ones you set are overridden.
 `route_command`, `default_route_command`, and `interface_command` must each
 contain exactly one `%s` placeholder for the table or interface name.
+`authz_failure_pattern` overrides the regex used to detect a TACACS
+command-authorization denial — see [TACACS
+reauthorization](#tacacs-reauthorization) — and must be a valid Go regex.
+
+### TACACS reauthorization
+
+On a long-lived session, TACACS+ command authorization can start failing
+independently of the SSH transport: the session is still connected, but the
+router replies to every command with an authorization-denial banner instead
+of real output. Each command's output is checked against this pattern (not
+just whether `Execute` returned an error), so this is caught on the very
+tick it starts happening rather than being recorded silently as garbage
+data.
+
+When detected, the tool prints a notice and reuses the same
+username/passcode prompt flow as onboarding to restart *that one device's*
+SSH session — other devices keep polling uninterrupted, and prompts from
+different devices are serialized so they never interleave on your terminal.
+Exactly one reconnect attempt is made per failure (no retry loop, for the
+same reason a fresh onboarding attempt is never retried automatically); if
+it fails, polling stops for that device only. Pressing Ctrl+C while a reauth
+prompt is sitting unanswered stops that device immediately too, rather than
+hanging the shutdown on a prompt no one is going to answer — the rest of the
+run's report generation still proceeds normally. The optional NETCONF
+connection used for snapshot capture (see `--netconf-snapshot`) is separate
+from the polled SSH session and is never touched by this reconnect.
+
+The prompt offers cached-passcode reuse within the configured window. A successful
+replacement connection is opened before the stale SSH session is closed. Ctrl+C
+stops waiting for queued or active reauthentication prompts so shutdown can
+proceed; a connection that finishes after its attempt was abandoned is closed.
+
+Detection covers periodic polling commands; before/after snapshots and running
+configuration captures do not trigger reauthentication. The default is based on
+the confirmed IOS-XR denial text; configure an override for other denial wording,
+including Junos responses that differ. Overrides are case-insensitive by default
+and validated when the devices file is loaded.
+
+The detection pattern is a built-in, case-insensitive regex matching
+`authorization failed`, overridable per fleet via `authz_failure_pattern`
+above if your AAA server phrases the rejection differently.
 
 ### Passcode reuse
 
@@ -477,8 +521,12 @@ credentials are never written to it. The filename is
   configured idle-timeout, the router — not this tool — will drop the
   session for inactivity between ticks. Keep the interval comfortably below
   whatever timeout is configured on these boxes.
-- **A dropped session is not recovered automatically.** If a device's
-  polling stops early, re-run the tool for that device.
+- **A dropped SSH session is not recovered automatically.** If a device's
+  polling stops early with "session appears to have dropped," re-run the
+  tool for that device. A TACACS command-authorization failure is
+  different — see [TACACS reauthorization](#tacacs-reauthorization) — the
+  tool prompts you to restart that device's session itself, without a
+  separate re-run.
 - Run it somewhere that survives you being disconnected (`tmux`/`screen` on
   the jumphost), since it's a long-running foreground process for the
   duration of the change window.

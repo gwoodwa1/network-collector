@@ -269,7 +269,7 @@ func TestPollDeviceCapturesBeforeAndAfterSnapshots(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false)
+		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false, nil)
 		close(done)
 	}()
 
@@ -305,7 +305,7 @@ func TestPollDeviceAutomaticallyPrintsSnapshotDiffOnCtrlC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, false)
+		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, false, nil)
 		close(done)
 	}()
 
@@ -335,7 +335,7 @@ func TestPollDeviceAutomaticallyPrintsRunningConfigDiffOnCtrlC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, true)
+		PollDevice(ctx, session, 10*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), &syncWriter{w: &buf}, "", defaultSpec, true, nil)
 		close(done)
 	}()
 

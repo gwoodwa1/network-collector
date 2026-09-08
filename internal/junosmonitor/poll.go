@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +28,31 @@ type CollectionSpec struct {
 	DefaultRouteParser  string
 	InterfaceCommand    string // %s is replaced with the interface name
 	InterfaceParser     string
+	// AuthzFailurePattern matches a TACACS/AAA command-authorization denial
+	// in command output (see collectTick) — the session is still alive, but
+	// the device rejected the command, which means the SSH session needs to
+	// be restarted with fresh credentials rather than kept alive. See
+	// defaultAuthzFailurePattern and CommandOverrides.AuthzFailurePattern.
+	AuthzFailurePattern *regexp.Regexp
+}
+
+// defaultAuthzFailurePattern matches the general "authorization failed"
+// phrasing TACACS/AAA command-authorization denials commonly use,
+// case-insensitively (see internal/xrmonitor's identical default, confirmed
+// against real IOS-XR rejection text — Junos fleets using per-command AAA
+// authorization typically phrase it similarly).
+var defaultAuthzFailurePattern = regexp.MustCompile(`(?i)authorization failed`)
+
+// compileAuthzFailurePattern compiles pattern with a leading "(?i)" applied
+// unconditionally, so an operator-provided authz_failure_pattern override
+// matches case-insensitively just like defaultAuthzFailurePattern — without
+// this, a documented override such as "authorization failed" would miss a
+// device's actual mixed-case response. Used both here (to compile a real
+// override) and by validateRegexPattern (devices.go), so a pattern that's
+// valid at --devices-file load time is compiled the exact same way at
+// collection time.
+func compileAuthzFailurePattern(pattern string) (*regexp.Regexp, error) {
+	return regexp.Compile("(?i)" + pattern)
 }
 
 // defaultSpec's RouteCommand/RouteParser deliberately take a full routing
@@ -61,8 +87,9 @@ var defaultSpec = CollectionSpec{
 	// rate — the parser keys on that trailing rate, so the rate-less
 	// Traffic/Local statistics lines the filter also lets through are
 	// ignored rather than misparsed.
-	InterfaceCommand: `show interfaces %s extensive | match "Description:|Input|Output"`,
-	InterfaceParser:  "junos_interface_stats",
+	InterfaceCommand:    `show interfaces %s extensive | match "Description:|Input|Output"`,
+	InterfaceParser:     "junos_interface_stats",
+	AuthzFailurePattern: defaultAuthzFailurePattern,
 }
 
 // ResolveCollectionSpec merges any non-empty overrides from a --devices
@@ -96,6 +123,15 @@ func ResolveCollectionSpec(overrides CommandOverrides) CollectionSpec {
 	if v := strings.TrimSpace(overrides.InterfaceParser); v != "" {
 		spec.InterfaceParser = v
 	}
+	if v := strings.TrimSpace(overrides.AuthzFailurePattern); v != "" {
+		// Already validated as a compilable regex by ValidateDevicesDocument
+		// in the real --devices-file load path; a compile failure here (e.g.
+		// a caller that skipped validation) falls back to the default rather
+		// than panicking or silently matching nothing.
+		if compiled, err := compileAuthzFailurePattern(v); err == nil {
+			spec.AuthzFailurePattern = compiled
+		}
+	}
 	return spec
 }
 
@@ -113,9 +149,15 @@ type tickResult struct {
 // against the device's already-open session, until ctx is cancelled or the
 // session appears to have dropped (detected via the BGP command's Execute
 // error, since BGP is collected on every tick and acts as a session
-// liveness canary). It never reconnects: a dropped session requires fresh
-// credentials, which this loop cannot supply unattended.
-func PollDevice(ctx context.Context, session *DeviceSession, interval time.Duration, outputDir string, parsers map[string]ParserModule, statusOut *TickStatusPrinter, snapshotOut io.Writer, runLabel string, spec CollectionSpec, captureRunningConfigEnabled bool) {
+// liveness canary) and reauth is nil or fails to restart it. A TACACS
+// command-authorization failure (session alive, but the device rejects
+// commands — see collectTick's needsReauth) is treated differently: reauth,
+// when non-nil, is used to close the stale session and open a fresh one
+// with freshly-prompted credentials, and polling resumes on success. The
+// NETCONF connection (session.netconfClient, if any) is never touched by
+// reauth — it uses static credentials unrelated to the polled SSH session's
+// TACACS command authorization (see DeviceSession's doc comment).
+func PollDevice(ctx context.Context, session *DeviceSession, interval time.Duration, outputDir string, parsers map[string]ParserModule, statusOut *TickStatusPrinter, snapshotOut io.Writer, runLabel string, spec CollectionSpec, captureRunningConfigEnabled bool, reauth *ReauthCoordinator) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -138,7 +180,10 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 	defer writer.Flush()
 
 	tick := func() bool {
-		result, sessionAlive := collectTick(session, parsers, spec)
+		result, sessionAlive, needsReauth := collectTick(session, parsers, spec)
+		if needsReauth {
+			sessionAlive = reauthenticate(ctx, session, reauth)
+		}
 		encoded, err := json.Marshal(result)
 		if err != nil {
 			slog.Error("failed to encode tick result", "hostname", session.hostname, "error", err)
@@ -204,14 +249,24 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 // collectTick runs the BGP, route, and interface commands for one device.
 // It returns sessionAlive=false only when the BGP command itself failed to
 // execute (a proxy for the SSH session having dropped); parser lookup/parse
-// failures are recorded per-field and do not stop polling.
-func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec CollectionSpec) (tickResult, bool) {
-	result := tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname}
+// failures are recorded per-field and do not stop polling. needsReauth is
+// true when any command's output matched spec.AuthzFailurePattern — the
+// session is still alive (err == nil), but the device rejected the command,
+// meaning TACACS/AAA command authorization has failed mid-session and the
+// SSH session needs to be restarted with fresh credentials. The tick returns
+// immediately on the first authorization-failure match rather than running
+// the remaining commands against a session that's already been denied.
+func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec CollectionSpec) (result tickResult, sessionAlive bool, needsReauth bool) {
+	result = tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname}
 
 	bgpOutput, err := session.client.Execute(spec.BGPCommand)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("bgp: execute failed: %v", err))
-		return result, false
+		return result, false, false
+	}
+	if authorizationFailed(spec, bgpOutput) {
+		result.Errors = append(result.Errors, "bgp: TACACS command authorization failed")
+		return result, true, true
 	}
 	result.BGP = parseOrRaw(bgpOutput, spec.BGPParser, parsers, &result.Errors, "bgp")
 
@@ -222,6 +277,9 @@ func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec C
 			routeOutput, err := session.client.Execute(fmt.Sprintf(spec.RouteCommand, table))
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("route table %s: execute failed: %v", table, err))
+			} else if authorizationFailed(spec, routeOutput) {
+				result.Errors = append(result.Errors, fmt.Sprintf("route table %s: TACACS command authorization failed", table))
+				return result, true, true
 			} else {
 				result.Tables[table] = parseOrRaw(routeOutput, spec.RouteParser, parsers, &result.Errors, "route table "+table)
 			}
@@ -238,6 +296,10 @@ func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec C
 				result.Errors = append(result.Errors, fmt.Sprintf("default route next hop %s: execute failed: %v", table, err))
 				continue
 			}
+			if authorizationFailed(spec, nextHopOutput) {
+				result.Errors = append(result.Errors, fmt.Sprintf("default route next hop %s: TACACS command authorization failed", table))
+				return result, true, true
+			}
 			result.DefaultRouteNextHops[table] = parseOrRaw(nextHopOutput, spec.DefaultRouteParser, parsers, &result.Errors, "default route next hop "+table)
 		}
 	}
@@ -250,11 +312,24 @@ func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec C
 				result.Errors = append(result.Errors, fmt.Sprintf("interface %s: execute failed: %v", ifaceName, err))
 				continue
 			}
+			if authorizationFailed(spec, ifaceOutput) {
+				result.Errors = append(result.Errors, fmt.Sprintf("interface %s: TACACS command authorization failed", ifaceName))
+				return result, true, true
+			}
 			result.Interfaces[ifaceName] = parseOrRaw(ifaceOutput, spec.InterfaceParser, parsers, &result.Errors, "interface "+ifaceName)
 		}
 	}
 
-	return result, true
+	return result, true, false
+}
+
+// authorizationFailed reports whether output looks like a TACACS/AAA
+// command-authorization denial rather than real command output (see
+// CollectionSpec.AuthzFailurePattern). A nil pattern (only possible if a
+// caller builds a CollectionSpec by hand instead of via ResolveCollectionSpec)
+// never matches.
+func authorizationFailed(spec CollectionSpec, output string) bool {
+	return spec.AuthzFailurePattern != nil && spec.AuthzFailurePattern.MatchString(output)
 }
 
 func parseOrRaw(output, parserName string, parsers map[string]ParserModule, errs *[]string, label string) json.RawMessage {

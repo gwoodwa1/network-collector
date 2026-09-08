@@ -58,6 +58,13 @@ type CommandOverrides struct {
 	DefaultRouteParser  string `yaml:"default_route_parser"`
 	InterfaceCommand    string `yaml:"interface_command"`
 	InterfaceParser     string `yaml:"interface_parser"`
+	// AuthzFailurePattern overrides the default regex (see
+	// defaultAuthzFailurePattern in poll.go) used to detect a TACACS/AAA
+	// command-authorization denial in command output — e.g. "Command
+	// authorization failed" — so a fleet whose AAA server phrases the
+	// rejection differently can match it without a rebuild. Case-insensitive
+	// regex syntax; blank keeps the built-in default.
+	AuthzFailurePattern string `yaml:"authz_failure_pattern"`
 }
 
 type DevicesDocument struct {
@@ -123,6 +130,23 @@ func validateCommandTemplate(path, field, value string) error {
 	return nil
 }
 
+// validateRegexPattern checks that value (if non-empty) compiles as a Go
+// regex, so a typo'd authz_failure_pattern fails fast at startup rather than
+// silently never matching mid-run.
+func validateRegexPattern(path, field, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	// Compiled the same way ResolveCollectionSpec compiles it for real
+	// (see compileAuthzFailurePattern in poll.go), so a pattern that's
+	// rejected or accepted here behaves identically at collection time.
+	if _, err := compileAuthzFailurePattern(value); err != nil {
+		return fmt.Errorf("%s: commands.%s is not a valid regex: %w", path, field, err)
+	}
+	return nil
+}
+
 // LoadDeviceSpecs reads an optional --devices YAML file, e.g.:
 //
 //	interval: 30s
@@ -171,6 +195,9 @@ func ValidateDevicesDocument(path string, doc DevicesDocument) (time.Duration, e
 		errs = append(errs, err)
 	}
 	if err := validateCommandTemplate(path, "interface_command", doc.Commands.InterfaceCommand); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateRegexPattern(path, "authz_failure_pattern", doc.Commands.AuthzFailurePattern); err != nil {
 		errs = append(errs, err)
 	}
 	if doc.HubTopInterfaces != nil && *doc.HubTopInterfaces < 0 {

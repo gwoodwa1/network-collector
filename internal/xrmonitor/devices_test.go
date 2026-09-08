@@ -208,6 +208,46 @@ devices:
 	}
 }
 
+// TestLoadDeviceSpecsAuthzFailurePatternOverride proves a --devices file can
+// override the built-in TACACS/AAA command-authorization-denial regex (see
+// defaultAuthzFailurePattern in poll.go), and that an invalid regex is
+// rejected at load time instead of silently never matching mid-run.
+func TestLoadDeviceSpecsAuthzFailurePatternOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `commands:
+  authz_failure_pattern: "Command authorization denied"
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	_, _, _, commands, _, _, err := LoadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if commands.AuthzFailurePattern != "Command authorization denied" {
+		t.Fatalf("unexpected authz_failure_pattern: %q", commands.AuthzFailurePattern)
+	}
+}
+
+func TestLoadDeviceSpecsRejectsInvalidAuthzFailurePattern(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `commands:
+  authz_failure_pattern: "["
+
+devices:
+  - hostname: pe-router-1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	if _, _, _, _, _, _, err := LoadDeviceSpecs(path); err == nil {
+		t.Fatal("expected an error for an invalid authz_failure_pattern regex")
+	}
+}
+
 // TestLoadDeviceSpecsHubTopInterfaces proves hub_top_interfaces round-trips
 // when set, comes back nil (not zero) when unset so the caller can tell
 // "unset" apart from an explicit "0" (see ResolveHubTopInterfaces), and is

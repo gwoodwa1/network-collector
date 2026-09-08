@@ -301,6 +301,11 @@ See [`cmd/routing-monitor/README.md`](cmd/routing-monitor/README.md) for the com
 `--devices` schema and why onboarding is sequential (platform by platform) rather than
 concurrent.
 
+All three routing monitors detect TACACS command-authorization denials during
+periodic polling and prompt to reconnect the affected device. See the
+[mixed-fleet reauthorization documentation](cmd/routing-monitor/README.md#tacacs-reauthorization)
+for cancellation behavior and per-platform denial-pattern overrides.
+
 ## Monitor Report (view a live run without stopping it)
 
 Every monitor tool above writes its HTML report only once, when the run stops. To see

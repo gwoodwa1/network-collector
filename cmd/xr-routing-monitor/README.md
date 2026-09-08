@@ -19,13 +19,17 @@ run; use `routing-monitor` when a change window touches both platforms.
 ## Why this exists
 
 - Authentication on these routers is RSA SecurID (one-time passcode), so
-  **every device is connected and authenticated individually**, and the tool
-  **never reconnects automatically** — a dropped session needs a human to
-  type a fresh passcode. Each device's SSH session is opened once and kept
-  open for the whole run; the periodic polling below reuses that same
-  session instead of reconnecting, so you're never prompted for a passcode
-  more than once per device per run (see [Passcode reuse](#passcode-reuse)
-  for reusing one passcode across several devices within its cache window).
+  **every device is connected and authenticated individually**, and a
+  **dropped SSH session is never reconnected automatically** — a human has
+  to type a fresh passcode. Each device's SSH session is kept
+  open between polling ticks; the periodic polling below reuses that same
+  session instead of reconnecting on every tick (see
+  [Passcode reuse](#passcode-reuse) for reusing one passcode across several
+  devices within its cache window).
+  A **TACACS command-authorization failure mid-session** (the SSH transport
+  is fine, but AAA starts rejecting commands — see [TACACS
+  reauthorization](#tacacs-reauthorization)) is different: the tool detects
+  it and *does* prompt you to restart that one device's session.
 - You can watch **multiple devices at once**, each on its own independent
   polling loop, so one device dropping doesn't stop monitoring the others.
 
@@ -165,6 +169,7 @@ commands:
   default_route_parser: xr_route_vrf_default_nexthop
   interface_command: 'show int %s | inc "rate|Description:"'
   interface_parser: xr_bundle_interface_stats
+  authz_failure_pattern: "authorization failed"
 ```
 
 - `exclude_interface_prefixes` overrides which (lowercase) interface-name
@@ -185,6 +190,9 @@ commands:
   a `... detail` variant — without patching Go source and rebuilding.
   `route_command`, `default_route_command`, and `interface_command` must
   each contain exactly one `%s` placeholder for the VRF or interface name.
+  `authz_failure_pattern` overrides the regex used to detect a TACACS
+  command-authorization denial — see [TACACS
+  reauthorization](#tacacs-reauthorization) — and must be a valid Go regex.
 
 ### Auto-detecting a customer VRF
 
@@ -356,6 +364,47 @@ command itself fails to execute, that device's session is assumed to have
 dropped and polling for that device stops (the other devices keep going).
 Everything else falls back to raw text in the same JSON line if its parser
 lookup fails, so a tick is never silently lost.
+
+### TACACS reauthorization
+
+On a long-lived session, TACACS+ command authorization can start failing
+independently of the SSH transport: the session is still connected, but the
+router replies to every command with something like `Command authorization
+failed`. Each command's output is checked against this pattern (not just
+whether `Execute` returned an error), so this is caught on the very tick it
+starts happening rather than being recorded silently as garbage data.
+
+When detected, the tool prints a notice and reuses the same
+username/passcode prompt flow as onboarding to restart *that one device's*
+SSH session — other devices keep polling uninterrupted, and prompts from
+different devices are serialized so they never interleave on your terminal.
+Exactly one reconnect attempt is made per failure (no retry loop, for the
+same reason a fresh onboarding attempt is never retried automatically — see
+[Passcode reuse](#passcode-reuse)); if it fails, polling stops for that
+device only. Pressing Ctrl+C while a reauth prompt is sitting unanswered
+stops that device immediately too, rather than hanging the shutdown on a
+prompt no one is going to answer — the rest of the run's report generation
+still proceeds normally.
+
+The prompt offers cached-passcode reuse within the configured window. A successful
+replacement connection is opened before the stale SSH session is closed. Ctrl+C
+stops waiting for queued or active reauthentication prompts so shutdown can
+proceed; a connection that finishes after its attempt was abandoned is closed.
+
+Detection covers periodic polling commands; before/after snapshots and running
+configuration captures do not trigger reauthentication. The default is based on
+the confirmed IOS-XR denial text; configure an override for other denial wording,
+including Junos responses that differ. Overrides are case-insensitive by default
+and validated when the devices file is loaded.
+
+The detection pattern is a built-in, case-insensitive regex matching
+`authorization failed`, overridable per fleet via `--devices` if your AAA
+server phrases the rejection differently:
+
+```yaml
+commands:
+  authz_failure_pattern: "Command authorization failed"
+```
 
 After Ctrl+C, the tool reads this run's samples from the `.jsonl` files and
 writes a professional `interface-traffic.html` report in the same artifact
@@ -648,9 +697,13 @@ change-2026-07-08/
   configured exec-timeout, the router — not this tool — will drop the
   session for inactivity between ticks. Keep the interval comfortably below
   whatever exec-timeout is configured on these boxes.
-- **A dropped session is not recovered automatically.** Since RSA SecurID
-  needs a fresh human-entered passcode, there is no unattended reconnect.
-  If a device's polling stops early, re-run the tool for that device.
+- **A dropped SSH session is not recovered automatically.** Since RSA
+  SecurID needs a fresh human-entered passcode, there is no unattended
+  reconnect. If a device's polling stops early with "session appears to
+  have dropped," re-run the tool for that device. A TACACS
+  command-authorization failure is different — see [TACACS
+  reauthorization](#tacacs-reauthorization) — the tool prompts you to
+  restart that device's session itself, without a separate re-run.
 - Run it somewhere that survives you being disconnected (`tmux`/`screen` on
   the jumphost), since it's a long-running foreground process for the
   duration of the change window.
