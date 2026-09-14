@@ -44,6 +44,14 @@ the username too. Type a different username at any prompt to switch accounts.
 CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 ```
 
+**`CGO_ENABLED=0` is required.** A plain native build can dynamically link
+libc and fail on an older jumphost with `GLIBC_2.34 not found`. Verify the
+Linux artifact before copying it:
+
+```sh
+file routing-monitor # expected: statically linked
+```
+
 ## Run
 
 ```bash

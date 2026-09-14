@@ -140,6 +140,7 @@ func TestReleaseScansEveryConfiguredBinaryBeforePublication(t *testing.T) {
 		"toolchain metadata inspection":  `go version -m "$binary"`,
 		"binary vulnerability scanning":  `"$scanner" -mode binary "$binary"`,
 		"failure when no binaries exist": "no release binaries found",
+		"static Linux release binaries": `grep -q 'statically linked'`,
 	})
 }
 

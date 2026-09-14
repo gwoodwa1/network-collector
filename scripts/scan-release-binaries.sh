@@ -13,6 +13,17 @@ find "$release_root" -type f \( \
 	-name monitor-report -o -name monitor-report.exe \
 \) -print |
 while IFS= read -r binary; do
+	# Linux monitor binaries target older jumphosts as well as the current
+	# runner. Dynamic libc linkage can introduce a newer GLIBC requirement.
+	file_description="$(file "$binary")"
+	case "$file_description" in
+		*ELF*)
+			if ! printf '%s\n' "$file_description" | grep -q 'statically linked'; then
+				echo "release ELF is not statically linked: ${binary}: ${file_description}" >&2
+				exit 1
+			fi
+			;;
+	esac
 	echo "=== metadata ${binary} ==="
 	go version -m "$binary"
 	echo "=== vulnerability scan ${binary} ==="

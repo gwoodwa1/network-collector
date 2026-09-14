@@ -297,6 +297,9 @@ platforms.
 CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 ```
 
+Keep `CGO_ENABLED=0`: this creates a static Linux binary and avoids older
+jumphost failures such as `GLIBC_2.34 not found`.
+
 See [`cmd/routing-monitor/README.md`](cmd/routing-monitor/README.md) for the combined
 `--devices` schema and why onboarding is sequential (platform by platform) rather than
 concurrent.
