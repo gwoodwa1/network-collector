@@ -15,12 +15,21 @@ import (
 )
 
 type GNMIConfig struct {
-	Hostname  string               `mapstructure:"hostname"`
-	IP        string               `mapstructure:"ip"`
-	Path      string               `mapstructure:"path"`
-	SkipTLS   bool                 `mapstructure:"skip_tls"`
-	Timeout   int                  `mapstructure:"timeout"`
-	Subscribe *GNMISubscribeConfig `mapstructure:"subscribe"`
+	Hostname string `mapstructure:"hostname"`
+	IP       string `mapstructure:"ip"`
+	Path     string `mapstructure:"path"`
+	// Insecure is plaintext gRPC. It is intentionally opt-in for controlled
+	// lab/testing use only; TLS certificate verification is the default.
+	Insecure bool `mapstructure:"insecure"`
+	// SkipTLS is retained only for older config files. It has the same
+	// plaintext meaning as Insecure and should be migrated to insecure.
+	SkipTLS    bool                 `mapstructure:"skip_tls"`
+	CAFile     string               `mapstructure:"ca_file"`
+	CertFile   string               `mapstructure:"cert_file"`
+	KeyFile    string               `mapstructure:"key_file"`
+	ServerName string               `mapstructure:"server_name"`
+	Timeout    int                  `mapstructure:"timeout"`
+	Subscribe  *GNMISubscribeConfig `mapstructure:"subscribe"`
 }
 
 type GNMISubscribeConfig struct {
@@ -48,7 +57,9 @@ func init() {
 
 func main() {
 	var promptForCreds bool
+	var insecureForTesting bool
 	flag.BoolVar(&promptForCreds, "creds_input", false, "prompt for username and password interactively")
+	flag.BoolVar(&insecureForTesting, "insecure", false, "use plaintext gNMI for controlled testing only; overrides TLS for every configured device")
 	flag.Parse()
 
 	username, password, err := credentials.ResolveCredentials(promptForCreds, nil, nil)
@@ -77,12 +88,10 @@ func main() {
 			continue
 		}
 
-		opts := []gnmi.Option{}
-		if device.SkipTLS {
-			opts = append(opts, gnmi.WithSkipTLS())
-		}
-		if device.Timeout > 0 {
-			opts = append(opts, gnmi.WithGNMITimeout(time.Duration(device.Timeout)*time.Second))
+		opts, err := optionsForDevice(device, insecureForTesting)
+		if err != nil {
+			slog.Error("invalid gNMI TLS configuration", "hostname", hostname, "ip", ip, "error", err)
+			continue
 		}
 
 		client := &gnmi.GNMIClient{}
@@ -90,11 +99,6 @@ func main() {
 			slog.Error("error connecting to gNMI device", "hostname", hostname, "ip", ip, "error", err)
 			continue
 		}
-		defer func(c *gnmi.GNMIClient, h, i string) {
-			if err := c.Close(); err != nil {
-				slog.Error("error closing gNMI client", "hostname", h, "ip", i, "error", err)
-			}
-		}(client, hostname, ip)
 		var output string
 		if device.Subscribe != nil {
 			output, err = client.Subscribe(context.Background(), gnmi.Subscription{Paths: device.Subscribe.Paths, Mode: device.Subscribe.Mode, StreamMode: device.Subscribe.StreamMode, SampleInterval: time.Duration(device.Subscribe.SampleIntervalSeconds) * time.Second, Duration: time.Duration(device.Subscribe.DurationSeconds) * time.Second, MaxUpdates: device.Subscribe.MaxUpdates})
@@ -111,4 +115,28 @@ func main() {
 			slog.Error("error closing gNMI client", "hostname", hostname, "ip", ip, "error", err)
 		}
 	}
+}
+
+func optionsForDevice(device GNMIConfig, forceInsecure bool) ([]gnmi.Option, error) {
+	caFile, certFile := strings.TrimSpace(device.CAFile), strings.TrimSpace(device.CertFile)
+	keyFile, serverName := strings.TrimSpace(device.KeyFile), strings.TrimSpace(device.ServerName)
+	if (certFile == "") != (keyFile == "") {
+		return nil, fmt.Errorf("cert_file and key_file must be configured together")
+	}
+	insecure := forceInsecure || device.Insecure || device.SkipTLS
+	if insecure && (caFile != "" || certFile != "" || keyFile != "" || serverName != "") {
+		return nil, fmt.Errorf("insecure plaintext mode cannot be combined with TLS certificate settings")
+	}
+	opts := []gnmi.Option{gnmi.WithInsecure(insecure)}
+	if insecure {
+		slog.Warn("using plaintext gNMI for testing", "hostname", strings.TrimSpace(device.Hostname))
+	} else {
+		// Empty CAFile deliberately means the host trust store; verification is
+		// still enabled. CAFile is for a private router CA and cert/key enable mTLS.
+		opts = append(opts, gnmi.WithTLSCredentials(caFile, certFile, keyFile, serverName))
+	}
+	if device.Timeout > 0 {
+		opts = append(opts, gnmi.WithGNMITimeout(time.Duration(device.Timeout)*time.Second))
+	}
+	return opts, nil
 }

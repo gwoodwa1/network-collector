@@ -55,6 +55,24 @@ To build from source instead:
     CGO_ENABLED=0 go build -trimpath -o xr-routing-monitor ./cmd/xr-routing-monitor
     ```
 
+   `gnmi-client` uses verified TLS by default. Configure a private CA and
+   optional mutual-TLS client certificate in `config.yaml` when needed:
+
+   ```yaml
+   gnmi:
+     - hostname: router-1
+       ip: router-1.example.net:57400
+       path: /system/state/hostname
+       ca_file: certs/gnmi-ca.pem
+       server_name: router-1.example.net
+       # cert_file: certs/client.pem
+       # key_file: certs/client-key.pem
+   ```
+
+   For a controlled lab only, use `insecure: true` per device or
+   `gnmi-client --insecure`; plaintext mode cannot be combined with any TLS
+   certificate setting.
+
 4. **Provide credentials:**
 
     Set credentials using environment variables:
