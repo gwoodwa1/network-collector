@@ -4,6 +4,14 @@ All notable changes to Network Collector are documented here.
 
 ## [Unreleased]
 
+## [2.0.2]
+
+- Added optional `tacacs_timeout_reminder: [1500, 5000, 8000]` YAML schedules
+  to the routing monitors. Earlier stages warn operators; the final stage
+  proactively closes and reconnects the SSH session, prompting for fresh RSA
+  credentials before TACACS command authorization expires. Authorization
+  failures still trigger the same immediate, fail-closed reconnect path.
+
 - Added TACACS command-authorization failure detection and interactive SSH
   reauthentication to IOS-XR, Junos, and mixed-fleet routing monitors. Fleet
   `commands.authz_failure_pattern` overrides are validated Go regexes with

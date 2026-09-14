@@ -977,25 +977,15 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		}
 
 		if step.Facts != nil {
-			if strings.TrimSpace(step.Command) != "" || step.GNMISubscribe != nil || step.NETCONF != nil || step.Ensure != nil || step.WaitSeconds != 0 || step.SSHProbe != nil || len(stepValidations(step)) > 0 {
+			if strings.TrimSpace(step.Command) != "" || step.GNMISubscribe != nil || step.NETCONF != nil || step.Ensure != nil || step.WaitSeconds != 0 || step.SSHProbe != nil {
 				*ctx.runFailed = true
-				recordStepFailure(ctx, stepName, "facts step cannot also define cmd, local, wait_seconds, ssh_probe, or validations")
+				recordStepFailure(ctx, stepName, "facts step cannot also define cmd, gnmi_subscribe, netconf, ensure, wait_seconds, or ssh_probe")
 				continue
 			}
 			if ctx.checkMode {
 				writeSessionf(ctx.sessionLog, "[step:%s] [check] facts collection skipped\n", stepName)
 				continue
 			}
-			if _, err := deviceOutputLimit(step.MaxOutputBytes); err != nil {
-				*ctx.runFailed = true
-				recordStepFailure(ctx, stepName, err.Error())
-				continue
-			}
-			if err := executeFactsStep(ctx, client, step, stepName); err != nil {
-				*ctx.runFailed = true
-				recordStepFailure(ctx, stepName, err.Error())
-			}
-			continue
 		}
 		if step.GNMISubscribe != nil && (strings.TrimSpace(step.Command) != "" || step.WaitSeconds != 0 || step.SSHProbe != nil) {
 			*ctx.runFailed = true
@@ -1105,15 +1095,18 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if step.Ensure != nil {
 			executableCount++
 		}
+		if step.Facts != nil {
+			executableCount++
+		}
 		if executableCount > 1 {
 			*ctx.runFailed = true
-			err := fmt.Errorf("step must define at most one of cmd, gnmi_subscribe, netconf, or ensure")
+			err := fmt.Errorf("step must define at most one of cmd, gnmi_subscribe, netconf, ensure, or facts")
 			slog.Error("invalid step", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 			recordStepFailure(ctx, stepName, err.Error())
 			continue
 		}
 		cmd := ""
-		if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil {
+		if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && step.Facts == nil {
 			cmd, err = renderTemplate(strings.TrimSpace(step.Command), ctx.variables)
 			if err != nil {
 				*ctx.runFailed = true
@@ -1122,7 +1115,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				continue
 			}
 		}
-		if cmd == "" && step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil {
+		if cmd == "" && step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && step.Facts == nil {
 			if wait > 0 || step.SSHProbe != nil || strings.TrimSpace(step.Message) != "" {
 				continue
 			}
@@ -1171,7 +1164,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			attempt++
 
 			sshExecutor := commandExecutor(ctx, client)
-			if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && sshExecutor == nil {
+			if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && step.Facts == nil && sshExecutor == nil {
 				*ctx.runFailed = true
 				slog.Error("cannot execute step without an active SSH session", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName)
 				writeSessionf(ctx.sessionLog, "\n[step:%s] command error: no active SSH session\n", stepName)
@@ -1181,7 +1174,10 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 
 			var output string
 			var commandDisplay string
-			if step.GNMISubscribe != nil {
+			if step.Facts != nil {
+				commandDisplay = "facts"
+				output, err = collectFactsOutput(ctx, client, step)
+			} else if step.GNMISubscribe != nil {
 				commandDisplay = strings.Join(step.GNMISubscribe.Paths, ",")
 				output, err = executeGNMISubscribe(ctx, client, *step.GNMISubscribe, depth)
 			} else if step.NETCONF != nil {
@@ -1208,7 +1204,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 						writeSessionf(ctx.sessionLog, "[step:%s] report evidence error: %v\n", stepName, artifactErr)
 					}
 				}
-				if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
+				if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && step.Facts == nil && !shouldReturnToPrompt(step.ReturnToPrompt) {
 					slog.Info("step ended without prompt as expected", "hostname", ctx.hostname, "ip", ctx.ip, "step", stepName, "error", err)
 					writeSessionf(ctx.sessionLog, "\n[step:%s] command ended without prompt as expected: %v\n", stepName, err)
 					if err := closeSSHClient(*client); err != nil {
@@ -1227,7 +1223,9 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 
 			commandKind := "device"
-			if step.GNMISubscribe != nil {
+			if step.Facts != nil {
+				commandKind = "facts"
+			} else if step.GNMISubscribe != nil {
 				commandKind = "gnmi_subscribe"
 			} else if step.NETCONF != nil {
 				commandKind = "netconf"
@@ -1269,7 +1267,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				validationOutput = enrichedOutput
 				writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] enriched output:", stepName), enrichedOutput)
 			}
-			if strings.TrimSpace(step.Parser) != "" || step.Enrich != nil {
+			if strings.TrimSpace(step.Parser) != "" || step.Enrich != nil || step.Facts != nil {
 				if err := saveStepArtifact(ctx, step, stepName, attempt, "parsed", validationOutput); err != nil {
 					*ctx.runFailed = true
 					slog.Error("error saving structured command output", "hostname", ctx.hostname, "step", stepName, "error", err)
@@ -1322,7 +1320,7 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 			}
 
 			for _, vres := range results {
-				if step.Register != "" && vres.RawExtract != "" {
+				if step.Register != "" && vres.RawExtract != "" && step.Facts == nil {
 					ctx.variables[step.Register] = vres.RawExtract
 					slog.Info("registered variable", "hostname", ctx.hostname, "step", stepName, "variable", step.Register, "metadata", outputMetadata(vres.RawExtract))
 					break

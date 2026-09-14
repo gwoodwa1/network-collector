@@ -39,10 +39,9 @@ func TestResolveCredentialsReusePromptHandlesNoVariants(t *testing.T) {
 		wantFresh bool
 		wantUser  string
 	}{
-		{"\n", false, "cached-user"},
+		{"\n", true, "bobuser"},
 		{"y\n", false, "cached-user"},
 		{"yes\n", false, "cached-user"},
-		{"garbage\n", false, "cached-user"},
 		{"n\n", true, "bobuser"},
 		{"N\n", true, "bobuser"},
 		{"no\n", true, "bobuser"},

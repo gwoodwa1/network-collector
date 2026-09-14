@@ -68,6 +68,12 @@ CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 | `--logo-folder`, `--header-logo`, `--footer-logo` | *(none)* | Optional PNG report branding. |
 | `--version` | | Print the build version and exit. |
 
+### TACACS session reminders
+
+The combined devices YAML may include `tacacs_timeout_reminder: [1500, 5000,
+8000]` at its top level. Earlier entries warn the operator; the final entry
+proactively reconnects every affected SSH session with fresh RSA credentials.
+
 Unlike the two standalone tools, there is **no `--type` flag** — each device's platform
 is already known from which section of the YAML file it's listed under, so the correct
 scrapligo platform name (`cisco_iosxr`/`juniper_junos`) is always used automatically.

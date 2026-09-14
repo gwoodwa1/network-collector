@@ -150,7 +150,7 @@ func (executor boundedFactsExecutor) Execute(command string) (string, error) {
 	return output, nil
 }
 
-func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepConfig, stepName string) error {
+func collectFactsOutput(ctx *stepExecutionContext, client **ssh.Client, step StepConfig) (string, error) {
 	format := strings.TrimSpace(step.Facts.Format)
 	if format == "" {
 		format = strings.TrimSpace(ctx.factsDefaults.DefaultFormat)
@@ -166,7 +166,7 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 	config := internalfacts.Config{Format: internalfacts.Format(strings.ToLower(format)), Subsets: subsets, Transports: transports}
 	outputLimit, err := deviceOutputLimit(step.MaxOutputBytes)
 	if err != nil {
-		return err
+		return "", err
 	}
 	collector := internalfacts.Collector{
 		Platform: ctx.deviceType,
@@ -179,26 +179,14 @@ func executeFactsStep(ctx *stepExecutionContext, client **ssh.Client, step StepC
 	}
 	result, err := collector.Collect(config)
 	if err != nil {
-		return fmt.Errorf("facts collection failed: %w", err)
+		return "", fmt.Errorf("facts collection failed: %w", err)
 	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode facts: %w", err)
+		return "", fmt.Errorf("encode facts: %w", err)
 	}
 	if err := enforceDeviceOutputLimit(string(encoded), outputLimit); err != nil {
-		return fmt.Errorf("encode facts: %w", err)
+		return "", fmt.Errorf("encode facts: %w", err)
 	}
-	writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] facts output:", stepName), string(encoded))
-	if register := strings.TrimSpace(step.Register); register != "" {
-		ctx.variables[register] = string(encoded)
-	}
-	if err := saveStepArtifact(ctx, step, stepName, 1, "parsed", string(encoded)); err != nil {
-		return fmt.Errorf("save facts artifact: %w", err)
-	}
-	if step.Drift != nil {
-		if err := applyDriftCheck(ctx, step, stepName, string(encoded)); err != nil {
-			return fmt.Errorf("facts drift check: %w", err)
-		}
-	}
-	return nil
+	return string(encoded), nil
 }

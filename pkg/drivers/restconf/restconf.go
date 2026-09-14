@@ -105,6 +105,9 @@ func (r *RESTCONFClient) Connect(baseURL, username, password string, opts ...Opt
 	r.client = &http.Client{
 		Transport: transport,
 		Timeout:   r.requestTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("RESTCONF redirects are disabled")
+		},
 	}
 	return nil
 }
@@ -173,5 +176,8 @@ func (r *RESTCONFClient) Execute(method, endpoint string) (string, error) {
 }
 
 func (r *RESTCONFClient) Close() error {
+	if r != nil && r.client != nil {
+		r.client.CloseIdleConnections()
+	}
 	return nil
 }

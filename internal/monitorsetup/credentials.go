@@ -52,12 +52,24 @@ func (c *CredentialCache) valid() bool {
 func ResolveCredentials(reader *bufio.Reader, cache *CredentialCache) (username, password string, fresh bool, err error) {
 	if cache.valid() {
 		remaining := cache.Window - time.Since(cache.capturedAt)
-		fmt.Fprintf(os.Stderr, "Reuse cached passcode for %s (~%s left in the cache window)? [Y/n]: ", cache.username, remaining.Round(time.Second))
-		answer, _ := reader.ReadString('\n')
-		declined := strings.EqualFold(strings.TrimSpace(answer), "n") || strings.EqualFold(strings.TrimSpace(answer), "no")
-		if !declined {
-			return cache.username, cache.password, false, nil
+		fmt.Fprintf(os.Stderr, "Reuse cached passcode for %s (~%s left in the cache window)? [y/N]: ", cache.username, remaining.Round(time.Second))
+		answer, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			cache.RecordFailure()
+			return "", "", false, fmt.Errorf("read passcode reuse consent: %w", readErr)
 		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+			if cache.valid() {
+				return cache.username, cache.password, false, nil
+			}
+			fmt.Fprintln(os.Stderr, "Cached passcode expired while awaiting consent; enter a fresh passcode.")
+		case "", "n", "no":
+		default:
+			cache.RecordFailure()
+			return "", "", false, fmt.Errorf("passcode reuse requires yes or no")
+		}
+		cache.RecordFailure()
 	}
 	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr, cache.defaultUsername())
 	if err == nil {

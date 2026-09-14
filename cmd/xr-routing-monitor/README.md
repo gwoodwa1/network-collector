@@ -78,6 +78,14 @@ files are required.
 | `--diff-before-config`, `--diff-after-config` | *(none)* | Paths to a captured before/after running-config `.txt` pair. When both are set, prints a unified line diff and exits instead of connecting to any device. See [below](#running-config-optional). |
 | `--version` | `false` | Print the build version and exit, instead of connecting to any device. |
 
+### TACACS session reminders
+
+Set an optional top-level YAML schedule such as
+`tacacs_timeout_reminder: [1500, 5000, 8000]`. It warns at the earlier
+stages and, at the final stage, asks for fresh RSA credentials and reconnects
+before TACACS command authorization expires. A detected authorization failure
+still closes the SSH session and immediately prompts for a reconnect.
+
 ### Onboarding (once at startup)
 
 If `--devices` was given, the tool connects to each listed device first
