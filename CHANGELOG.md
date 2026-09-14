@@ -4,6 +4,11 @@ All notable changes to Network Collector are documented here.
 
 ## [Unreleased]
 
+- Added operator-confirmed credential retries to IOS-XR, Junos, and
+  mixed-fleet monitor onboarding and TACACS reauthentication. Each failed
+  SSH attempt clears cached passcodes and prompts again with a default of
+  no; confirmed retries preserve onboarding context and the username default.
+
 - Added TACACS command-authorization failure detection and interactive SSH
   reauthentication to IOS-XR, Junos, and mixed-fleet routing monitors. Fleet
   `commands.authz_failure_pattern` overrides are validated Go regexes with

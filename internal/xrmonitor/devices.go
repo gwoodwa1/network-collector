@@ -238,8 +238,9 @@ func LoadDeviceSpecs(path string) (specs []DeviceSpec, interval time.Duration, g
 
 // OnboardDevicesFromSpecs connects to each device from a --devices file in
 // order, prompting for credentials only (all other fields come from the
-// spec). A connection failure is reported (no retry, per ConnectDevice) and
-// does not stop the remaining devices in the file from being tried. A
+// spec). A connection failure — after any operator-confirmed retries inside
+// ConnectDevice — is reported and does not stop the remaining devices in
+// the file from being tried. A
 // hostname already claimed in registry (e.g. duplicated within the file, or
 // present more than once for any other reason) is skipped without
 // attempting to connect again. gatewayPrefix is the document's top-level

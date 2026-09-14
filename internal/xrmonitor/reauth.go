@@ -50,10 +50,14 @@ func NewReauthCoordinator(sem chan struct{}, reader *bufio.Reader, cache *monito
 }
 
 // Reconnect opens a fresh SSH session for hostname, reusing ConnectDevice's
-// existing credential-prompt flow (cached-passcode reuse offer, username
-// defaulted to the last one entered, exactly one connection attempt with no
-// retry — see ConnectDevice's doc comment; a reauth path must not loop, for
-// the same RSA/ISE lockout reason ConnectDevice itself never retries).
+// existing credential-prompt-and-retry flow as-is (cached-passcode reuse
+// offer, username defaulted to the last one entered, and — on a failed
+// attempt — an operator-confirmed "retry? [y/N]" prompt that can repeat for
+// as many attempts as the operator keeps confirming; see ConnectDevice's
+// doc comment). Reconnect itself is only ever invoked once per detected
+// authorization failure — reauthenticate (poll.go) never loops around it —
+// but any retries ConnectDevice runs internally happen inside this single
+// call, with sem held for their entire duration (see below).
 //
 // It acquires sem for the whole prompt-and-connect sequence so a concurrent
 // reconnect from another device's polling goroutine can never interleave

@@ -21,7 +21,7 @@ type sessionExecutor interface {
 
 // connectFunc abstracts ConnectDevice so onboarding's claim-after-success,
 // no-claim-on-failure sequencing (see monitorsetup.HostnameRegistry and
-// ConnectDevice's no-retry docs) can be tested end-to-end without a real SSH
+// ConnectDevice's retry docs) can be tested end-to-end without a real SSH
 // connection.
 type connectFunc func(reader *bufio.Reader, host, deviceType string, cache *monitorsetup.CredentialCache) (sessionExecutor, error)
 
@@ -147,25 +147,62 @@ func promptAutoDetectVRF(reader *bufio.Reader, host, defaultGatewayPrefix string
 }
 
 // ConnectDevice prompts for credentials (offering passcode reuse via cache
-// first) and makes exactly one connection attempt. It deliberately does not
-// retry on failure: RSA/ISE commonly locks the account after 3 consecutive
-// bad attempts, so an easy inline "retry?" prompt is a real way to lock
-// yourself out under pressure during a change window. A failed attempt
-// invalidates the cache (a rejected passcode is never trustworthy to reuse)
-// and returns the error immediately — trying again for this host requires a
-// fresh, deliberate onboarding attempt.
+// first), attempts a connection, and — on failure — asks the operator
+// whether to retry with a fresh prompt before giving up (see
+// promptRetryConnection). This question is asked again after every failed
+// attempt, so confirming it repeatedly does let the operator retry more
+// than once — it is deliberately not an automatic retry (nothing loops
+// without a human confirming each time), but it is also not capped at a
+// single retry. RSA/ISE commonly locks the account after 3 consecutive bad
+// attempts, so repeatedly confirming this prompt against a genuinely
+// rejected passcode is a real way to lock yourself out under pressure
+// during a change window — the explicit, default-"no" confirmation exists
+// to recover a client-side mistake — e.g. typing the passcode into the
+// username prompt, or a transient/fixable failure like an untrusted host
+// key — without losing this device's already-gathered onboarding context
+// (VRF, interfaces, neighbors) and having to restart onboarding for it from
+// scratch, not to make repeatedly retrying a genuinely rejected passcode
+// any safer. Decline it once you suspect the credential itself, not just
+// the prompt, was wrong. Each failed attempt still invalidates the cache (a
+// rejected passcode is never trustworthy to reuse) before the retry
+// question is asked.
 func ConnectDevice(reader *bufio.Reader, host, deviceType string, cache *monitorsetup.CredentialCache) (sessionExecutor, error) {
-	username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache)
-	if err != nil {
-		return nil, fmt.Errorf("read credentials: %w", err)
+	return connectWithRetry(reader, host, deviceType, cache, ConnectXRDevice)
+}
+
+// connectWithRetry implements ConnectDevice's credential-prompt / connect /
+// retry-prompt loop against dial, so it can be exercised in tests without a
+// real SSH connection — ConnectDevice wires in the real ConnectXRDevice.
+func connectWithRetry(reader *bufio.Reader, host, deviceType string, cache *monitorsetup.CredentialCache, dial func(host, username, password, deviceType string) (sessionExecutor, error)) (sessionExecutor, error) {
+	for {
+		username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache)
+		if err != nil {
+			return nil, fmt.Errorf("read credentials: %w", err)
+		}
+		client, err := dial(host, username, password, deviceType)
+		if err != nil {
+			cache.RecordFailure()
+			if promptRetryConnection(reader, host, err) {
+				continue
+			}
+			return nil, err
+		}
+		if fresh {
+			cache.RecordSuccess(username, password)
+		}
+		return client, nil
 	}
-	client, err := ConnectXRDevice(host, username, password, deviceType)
-	if err != nil {
-		cache.RecordFailure()
-		return nil, err
-	}
-	if fresh {
-		cache.RecordSuccess(username, password)
-	}
-	return client, nil
+}
+
+// promptRetryConnection reports a failed connection attempt and asks the
+// operator whether to retry — called again after each subsequent failed
+// attempt, so it can be confirmed more than once in a row (see
+// ConnectDevice's doc comment for why this is a per-attempt human decision
+// rather than an automatic loop). Defaults to "no" so holding Enter under
+// pressure never triggers a retry.
+func promptRetryConnection(reader *bufio.Reader, host string, connectErr error) bool {
+	fmt.Fprintf(os.Stderr, "connection to %s failed: %v\nRetry credentials for %s? [y/N]: ", host, connectErr, host)
+	answer, _ := reader.ReadString('\n')
+	trimmed := strings.TrimSpace(answer)
+	return strings.EqualFold(trimmed, "y") || strings.EqualFold(trimmed, "yes")
 }
