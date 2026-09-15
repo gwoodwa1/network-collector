@@ -19,6 +19,7 @@ import (
 // commands: key with different, incompatible sub-shapes, so flattening
 // would collide. At least one of the two sections must be present.
 type mixedFleetDocument struct {
+	TACACSTimeoutReminder []int `yaml:"tacacs_timeout_reminder"`
 	// Interval sets the default polling interval for every device in this
 	// run, across both platforms, when a section doesn't set its own —
 	// the -interval CLI flag takes precedence over both when passed

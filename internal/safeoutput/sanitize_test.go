@@ -2,9 +2,32 @@ package safeoutput
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestStructuredAndVendorSecretRedaction(t *testing.T) {
+	inputs := []string{
+		`{"password":"SYNTHETIC_CANARY with spaces","nested":[{"api_key":"SYNTHETIC_CANARY"}],"count":9007199254740993}`,
+		`device returned {"password":"SYNTHETIC_CANARY"}`,
+		`encrypted-password "SYNTHETIC_CANARY with spaces";`,
+		`key-string 7 SYNTHETIC_CANARY`,
+		`authentication-key SYNTHETIC_CANARY`,
+	}
+	for _, input := range inputs {
+		var output bytes.Buffer
+		if _, err := NewWriter(&output).Write([]byte(input)); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(output.String(), "SYNTHETIC_CANARY") {
+			t.Fatalf("secret reached output: %q", output.String())
+		}
+		if json.Valid([]byte(input)) && (!json.Valid(output.Bytes()) || !strings.Contains(output.String(), "9007199254740993")) {
+			t.Fatal("structured redaction damaged JSON or numeric precision")
+		}
+	}
+}
 
 func TestSanitizeRedactsSecretsAndNeutralisesTerminalControls(t *testing.T) {
 	input := "password=NC_SECRET_CANARY\x1b]2;hostile-title\x07\n" +

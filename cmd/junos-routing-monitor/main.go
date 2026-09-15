@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/junosmonitor"
+	"github.com/gwoodwa1/network-collector/internal/monitoring"
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
 	"github.com/gwoodwa1/network-collector/internal/reporting"
@@ -48,6 +49,7 @@ func main() {
 	var showVersion bool
 	var reportOutput, reportTitle, changeReference string
 	var logoFolder, headerLogo, footerLogo string
+	monitorConfig := monitoring.RegisterFlags(flag.CommandLine)
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "directory to write one <hostname>.jsonl file per device")
 	flag.StringVar(&parsersFile, "parsers", "", "path to an external parser module file; defaults to this binary's embedded parser definitions")
@@ -164,16 +166,42 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	reminders, err := monitorsetup.LoadTACACSTimeoutReminders(devicesFile)
+	if err != nil {
+		slog.Error("failed to load TACACS reminder schedule", "error", err)
+		os.Exit(1)
+	}
+	ctx, err = monitoring.WithTACACSTimeoutReminders(ctx, reminders)
+	if err != nil {
+		slog.Error("invalid TACACS reminder schedule", "error", err)
+		os.Exit(1)
+	}
+	runtime, err := monitoring.NewRuntime(run.OutputDir, *monitorConfig)
+	if err != nil {
+		slog.Error("invalid monitor configuration", "error", err)
+		os.Exit(1)
+	}
+	defer runtime.Close()
+	ctx = monitoring.WithRuntime(ctx, runtime)
 
 	var wg sync.WaitGroup
+	pollErrors := make(chan error, len(sessions))
 	for _, session := range sessions {
 		wg.Add(1)
 		go func(s *junosmonitor.DeviceSession) {
 			defer wg.Done()
-			junosmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled, reauth)
+			pollErrors <- junosmonitor.PollDevice(ctx, s, interval, run.OutputDir, parsers, statusOut, run.SnapshotOut, run.RunLabel, spec, captureRunningConfigEnabled, reauth)
 		}(session)
 	}
 	wg.Wait()
+	close(pollErrors)
+	failed := false
+	for pollErr := range pollErrors {
+		if pollErr != nil {
+			failed = true
+			slog.Error("monitor device ended incompletely", "error", pollErr)
+		}
+	}
 	reportPath, reportErr := monitorreport.GenerateProfessionalInterfaceReport(run.OutputDir, startedAt, monitorreport.ProfessionalReportConfig{
 		Output: reportOutput, Title: reportTitle, ChangeReference: changeReference,
 		LogoFolder: logoFolder, HeaderLogo: headerLogo, FooterLogo: footerLogo, CompletedAt: time.Now(),
@@ -185,4 +213,11 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")
+	if err := runtime.Close(); err != nil {
+		failed = true
+		slog.Error("monitor runtime close failed", "error", err)
+	}
+	if failed {
+		os.Exit(1)
+	}
 }

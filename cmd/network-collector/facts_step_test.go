@@ -31,7 +31,7 @@ func TestFactsReuseConfiguredNETCONFExecutor(t *testing.T) {
 	step := StepConfig{Facts: &FactsConfig{
 		Format: "native", Subsets: []string{"system"}, Transports: []string{"netconf"},
 	}}
-	if err := executeFactsStep(ctx, nil, step, "facts"); err != nil {
+	if _, err := collectFactsOutput(ctx, nil, step); err != nil {
 		t.Fatal(err)
 	}
 	if len(executor.filters) != 1 || !strings.Contains(executor.filters[0], "openconfig.net/yang/system") {

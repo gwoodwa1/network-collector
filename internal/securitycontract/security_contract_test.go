@@ -47,6 +47,9 @@ func TestContinuousIntegrationEnforcesSecurityPolicyGates(t *testing.T) {
 		"pull-request execution":                     "pull_request:",
 		"scheduled execution":                        "schedule:",
 		"dependency-file consistency":                "git diff --exit-code -- go.mod go.sum",
+		"verified dependency download retries":       "Download verified dependencies with retries",
+		"HTTP/2 transport fallback":                  "GODEBUG: http2client=0",
+		"dependency integrity verification":          "go mod download && go mod verify",
 		"normal tests":                               "go test ./...",
 		"static correctness checks":                  "go vet ./...",
 		"race and coverage tests":                    "go test -race -covermode=atomic -coverprofile=coverage.out ./...",
@@ -73,6 +76,23 @@ func TestContinuousIntegrationEnforcesSecurityPolicyGates(t *testing.T) {
 	assertImmutableActionPins(t, ".github/workflows/test.yml", workflow)
 }
 
+func TestEveryWorkflowUsesImmutableActionPins(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(repositoryRoot(t), ".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no workflows found")
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertImmutableActionPins(t, path, string(content))
+	}
+}
+
 func TestReleaseScansEveryConfiguredBinaryBeforePublication(t *testing.T) {
 	workflow := readRepositoryFile(t, ".github/workflows/release.yml")
 	requireContains(t, ".github/workflows/release.yml", workflow, map[string]string{
@@ -88,6 +108,14 @@ func TestReleaseScansEveryConfiguredBinaryBeforePublication(t *testing.T) {
 	if scanIndex < 0 || publishIndex < 0 || scanIndex >= publishIndex {
 		t.Fatal("release publication is not ordered after draft-binary scanning")
 	}
+	attestIndex := strings.Index(workflow, "uses: actions/attest@")
+	if attestIndex <= scanIndex || attestIndex >= publishIndex {
+		t.Fatal("release artifacts must be attested after scanning and before publication")
+	}
+	requireContains(t, ".github/workflows/release.yml", workflow, map[string]string{
+		"OIDC signing": "id-token: write", "attestation upload": "attestations: write",
+		"all checksummed release artifacts": "subject-checksums: dist/checksums.txt",
+	})
 	assertImmutableActionPins(t, ".github/workflows/release.yml", workflow)
 
 	var releaseConfig struct {
@@ -112,6 +140,7 @@ func TestReleaseScansEveryConfiguredBinaryBeforePublication(t *testing.T) {
 		"toolchain metadata inspection":  `go version -m "$binary"`,
 		"binary vulnerability scanning":  `"$scanner" -mode binary "$binary"`,
 		"failure when no binaries exist": "no release binaries found",
+		"static Linux release binaries": `grep -q 'statically linked'`,
 	})
 }
 

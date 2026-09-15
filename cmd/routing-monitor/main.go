@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/junosmonitor"
+	"github.com/gwoodwa1/network-collector/internal/monitoring"
 	"github.com/gwoodwa1/network-collector/internal/monitorreport"
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
 	"github.com/gwoodwa1/network-collector/internal/reporting"
@@ -54,6 +55,7 @@ func main() {
 	var sinceFlag string
 	var reportOutput, reportTitle, changeReference string
 	var logoFolder, headerLogo, footerLogo string
+	monitorConfig := monitoring.RegisterFlags(flag.CommandLine)
 	flag.DurationVar(&interval, "interval", 60*time.Second, "polling interval between collection ticks per device, both platforms")
 	flag.StringVar(&outputDir, "output-dir", "artifacts", "parent directory for this run's shared output folder")
 	flag.StringVar(&devicesFile, "devices", "", "required: combined YAML file with cisco_iosxr and/or juniper_junos sections (see README)")
@@ -213,23 +215,49 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	reminders, err := monitorsetup.LoadTACACSTimeoutReminders(devicesFile)
+	if err != nil {
+		slog.Error("failed to load TACACS reminder schedule", "error", err)
+		os.Exit(1)
+	}
+	ctx, err = monitoring.WithTACACSTimeoutReminders(ctx, reminders)
+	if err != nil {
+		slog.Error("invalid TACACS reminder schedule", "error", err)
+		os.Exit(1)
+	}
+	runtime, err := monitoring.NewRuntime(run.OutputDir, *monitorConfig)
+	if err != nil {
+		slog.Error("invalid monitor configuration", "error", err)
+		os.Exit(1)
+	}
+	defer runtime.Close()
+	ctx = monitoring.WithRuntime(ctx, runtime)
 
 	var wg sync.WaitGroup
+	pollErrors := make(chan error, len(xrSessions)+len(junosSessions))
 	for _, session := range xrSessions {
 		wg.Add(1)
 		go func(s *xrmonitor.DeviceSession) {
 			defer wg.Done()
-			xrmonitor.PollDevice(ctx, s, xrInterval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled, xrReauth)
+			pollErrors <- xrmonitor.PollDevice(ctx, s, xrInterval, run.OutputDir, xrParsers, xrStatusOut, run.SnapshotOut, run.RunLabel, xrSpec, captureRunningConfigEnabled, xrReauth)
 		}(session)
 	}
 	for _, session := range junosSessions {
 		wg.Add(1)
 		go func(s *junosmonitor.DeviceSession) {
 			defer wg.Done()
-			junosmonitor.PollDevice(ctx, s, junosInterval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled, junosReauth)
+			pollErrors <- junosmonitor.PollDevice(ctx, s, junosInterval, run.OutputDir, junosParsers, junosStatusOut, run.SnapshotOut, run.RunLabel, junosSpec, captureRunningConfigEnabled, junosReauth)
 		}(session)
 	}
 	wg.Wait()
+	close(pollErrors)
+	failed := false
+	for pollErr := range pollErrors {
+		if pollErr != nil {
+			failed = true
+			slog.Error("monitor device ended incompletely", "error", pollErr)
+		}
+	}
 
 	// A single call: internal/monitorreport globs *.jsonl in OutputDir and
 	// reads only fields (hostname, interfaces, default_route_next_hops)
@@ -246,6 +274,13 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr, "all device sessions stopped, exiting")
 	slog.Info("all device sessions stopped")
+	if err := runtime.Close(); err != nil {
+		failed = true
+		slog.Error("monitor runtime close failed", "error", err)
+	}
+	if failed {
+		os.Exit(1)
+	}
 }
 
 func reportOnlyRunFolder(outputDir, devicesFile string) string {

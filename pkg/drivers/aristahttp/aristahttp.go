@@ -91,6 +91,9 @@ func (a *AristaHTTP) Connect(ip string, username string, password string, opts .
 	a.session = &http.Client{
 		Transport: transport,
 		Timeout:   a.requestTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("Arista HTTP redirects are disabled")
+		},
 	}
 
 	return nil

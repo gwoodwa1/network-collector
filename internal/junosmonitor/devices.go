@@ -91,6 +91,7 @@ type CommandOverrides struct {
 }
 
 type DevicesDocument struct {
+	TACACSTimeoutReminder []int `yaml:"tacacs_timeout_reminder"`
 	// Interval sets the default polling interval for this run, e.g. "30s".
 	// The -interval CLI flag takes precedence when passed explicitly; this
 	// exists so the interval can be checked into the same file as the

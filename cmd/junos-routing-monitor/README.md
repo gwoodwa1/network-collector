@@ -81,6 +81,13 @@ files are required.
 | `--netconf-snapshot` | `false` | Also dial NETCONF (static credentials only — not RSA-passcode fleets) alongside SSH, and use it for extra before/after snapshot sections (route info, BGP neighbor detail, ISIS/LDP/MPLS, interface/chassis/system health). Fleet-wide default, overridable per device via `--devices`. See [below](#netconf-snapshot-capture-optional). |
 | `--version` | `false` | Print the build version and exit, instead of connecting to any device. |
 
+### TACACS session reminders
+
+An optional top-level `tacacs_timeout_reminder: [1500, 5000, 8000]` schedule
+warns before the likely authorization timeout. Its final stage proactively
+reconnects and prompts for fresh RSA credentials; detected authorization
+failures remain an immediate, fail-closed reconnect.
+
 ### Onboarding (once at startup)
 
 If `--devices` was given, the tool connects to each listed device first

@@ -1,20 +1,18 @@
 package junosmonitor
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/gwoodwa1/network-collector/internal/secureartifact"
+	"github.com/gwoodwa1/network-collector/internal/monitoring"
 )
 
 // CollectionSpec maps each data point to the Junos command and parser
@@ -135,15 +133,7 @@ func ResolveCollectionSpec(overrides CommandOverrides) CollectionSpec {
 	return spec
 }
 
-type tickResult struct {
-	Timestamp            string                     `json:"timestamp"`
-	Hostname             string                     `json:"hostname"`
-	BGP                  json.RawMessage            `json:"bgp,omitempty"`
-	Tables               map[string]json.RawMessage `json:"tables,omitempty"`
-	DefaultRouteNextHops map[string]json.RawMessage `json:"default_route_next_hops,omitempty"`
-	Interfaces           map[string]json.RawMessage `json:"interfaces,omitempty"`
-	Errors               []string                   `json:"errors,omitempty"`
-}
+type tickResult = monitoring.Tick
 
 // PollDevice runs one collection tick immediately, then one per interval,
 // against the device's already-open session, until ctx is cancelled or the
@@ -157,7 +147,7 @@ type tickResult struct {
 // NETCONF connection (session.netconfClient, if any) is never touched by
 // reauth — it uses static credentials unrelated to the polled SSH session's
 // TACACS command authorization (see DeviceSession's doc comment).
-func PollDevice(ctx context.Context, session *DeviceSession, interval time.Duration, outputDir string, parsers map[string]ParserModule, statusOut *TickStatusPrinter, snapshotOut io.Writer, runLabel string, spec CollectionSpec, captureRunningConfigEnabled bool, reauth *ReauthCoordinator) {
+func PollDevice(ctx context.Context, session *DeviceSession, interval time.Duration, outputDir string, parsers map[string]ParserModule, statusOut *TickStatusPrinter, snapshotOut io.Writer, runLabel string, spec CollectionSpec, captureRunningConfigEnabled bool, reauth *ReauthCoordinator) (pollErr error) {
 	defer func() {
 		if err := session.client.Close(); err != nil {
 			slog.Warn("error closing session", "hostname", session.hostname, "error", err)
@@ -169,33 +159,38 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 		}
 	}()
 
-	outputPath := filepath.Join(outputDir, sanitizeFilename(session.hostname)+".jsonl")
-	file, err := secureartifact.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+	recorder, err := monitoring.OpenRecorder(ctx, outputDir, session.hostname, sanitizeFilename(session.hostname), interval)
 	if err != nil {
-		slog.Error("failed to open output file", "hostname", session.hostname, "path", outputPath, "error", err)
-		return
+		return err
 	}
-	defer file.Close()
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
+	complete, failedSamples := false, false
+	defer func() {
+		if failedSamples {
+			pollErr = errors.Join(pollErr, errors.New("one or more collection samples were incomplete"))
+		}
+		issues := []string{}
+		if pollErr != nil {
+			issues = append(issues, pollErr.Error())
+		}
+		pollErr = errors.Join(pollErr, recorder.Close(complete, issues...))
+	}()
 
 	tick := func() bool {
 		result, sessionAlive, needsReauth := collectTick(session, parsers, spec)
+		failedSamples = failedSamples || len(result.Errors) > 0
+		// Persist the authentication-wait state BEFORE an interactive prompt.
+		if err := recorder.WriteTick(ctx, result, sessionAlive, needsReauth); err != nil {
+			pollErr = errors.Join(pollErr, err)
+			return false
+		}
 		if needsReauth {
 			sessionAlive = reauthenticate(ctx, session, reauth)
 		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			slog.Error("failed to encode tick result", "hostname", session.hostname, "error", err)
-			return sessionAlive
-		}
-		if _, err := writer.Write(append(encoded, '\n')); err != nil {
-			slog.Error("failed to write tick result", "hostname", session.hostname, "error", err)
-		}
-		writer.Flush()
 		statusOut.printTick(result, sessionAlive)
 		if !sessionAlive {
 			slog.Error("session appears to have dropped; stopping polling for this device", "hostname", session.hostname)
+			pollErr = errors.Join(pollErr, errors.New("device disconnected; after-change snapshots are missing"))
+			pollErr = errors.Join(pollErr, recorder.Status("disconnected", "after-change snapshots are missing"))
 		}
 		return sessionAlive
 	}
@@ -204,12 +199,14 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 	beforeSnapshotOK := true
 	if err := captureSnapshot(session, "before", outputDir, runLabel, beforeCapturedAt, parsers, snapshotOut); err != nil {
 		slog.Error("failed to write before-change snapshot", "hostname", session.hostname, "error", err)
+		pollErr = errors.Join(pollErr, err, recorder.Status("degraded", "before-change snapshot incomplete: "+err.Error()))
 		beforeSnapshotOK = false
 	}
 	beforeConfigOK := true
 	if captureRunningConfigEnabled {
 		if err := CaptureRunningConfig(session, "before", outputDir, runLabel, beforeCapturedAt, snapshotOut); err != nil {
 			slog.Error("failed to capture before-change running-config", "hostname", session.hostname, "error", err)
+			pollErr = errors.Join(pollErr, err, recorder.Status("degraded", "before-change running config incomplete: "+err.Error()))
 			beforeConfigOK = false
 		}
 	}
@@ -220,6 +217,15 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	reminders := monitoring.TACACSTimeoutReminders(ctx)
+	reminderIndex := 0
+	var reminderTimer *time.Timer
+	var reminderC <-chan time.Time
+	if len(reminders) > 0 {
+		reminderTimer = time.NewTimer(reminders[0])
+		reminderC = reminderTimer.C
+		defer reminderTimer.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -227,21 +233,48 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 			afterSnapshotOK := true
 			if err := captureSnapshot(session, "after", outputDir, runLabel, afterCapturedAt, parsers, snapshotOut); err != nil {
 				slog.Error("failed to write after-change snapshot", "hostname", session.hostname, "error", err)
+				pollErr = errors.Join(pollErr, err)
 				afterSnapshotOK = false
 			}
 			afterConfigOK := true
 			if captureRunningConfigEnabled {
 				if err := CaptureRunningConfig(session, "after", outputDir, runLabel, afterCapturedAt, snapshotOut); err != nil {
 					slog.Error("failed to capture after-change running-config", "hostname", session.hostname, "error", err)
+					pollErr = errors.Join(pollErr, err)
 					afterConfigOK = false
 				}
 			}
 			printAutoDiffAfterChange(session, outputDir, runLabel, beforeCapturedAt, afterCapturedAt, captureRunningConfigEnabled, beforeSnapshotOK && afterSnapshotOK, beforeConfigOK && afterConfigOK, snapshotOut)
+			complete = beforeSnapshotOK && afterSnapshotOK && beforeConfigOK && afterConfigOK
 			return
 		case <-ticker.C:
 			if !tick() {
 				return
 			}
+		case <-reminderC:
+			seconds := int(reminders[reminderIndex].Seconds())
+			fmt.Fprintf(snapshotOut, "TACACS reminder for %s: %ds into this SSH session; have a fresh RSA passcode ready.\n", session.hostname, seconds)
+			slog.Warn("TACACS session-age reminder", "hostname", session.hostname, "seconds", seconds)
+			// Early reminders are deliberately non-disruptive. The final configured
+			// stage refreshes the SSH session before command authorization times out.
+			if reminderIndex == len(reminders)-1 {
+				fmt.Fprintf(snapshotOut, "Refreshing TACACS SSH session for %s; re-enter RSA credentials now.\n", session.hostname)
+				if err := recorder.Status("authentication-wait", "proactive TACACS refresh at configured reminder"); err != nil {
+					pollErr = errors.Join(pollErr, err)
+					return
+				}
+				if !reauthenticate(ctx, session, reauth) {
+					pollErr = errors.Join(pollErr, errors.New("proactive TACACS reauthentication failed"))
+					return
+				}
+				reminderIndex = 0
+				reminderTimer.Reset(reminders[0])
+				reminderC = reminderTimer.C
+				continue
+			}
+			reminderIndex++
+			reminderTimer.Reset(reminders[reminderIndex] - reminders[reminderIndex-1])
+			reminderC = reminderTimer.C
 		}
 	}
 }

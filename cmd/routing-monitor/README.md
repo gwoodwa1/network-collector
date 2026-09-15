@@ -44,6 +44,14 @@ the username too. Type a different username at any prompt to switch accounts.
 CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 ```
 
+**`CGO_ENABLED=0` is required.** A plain native build can dynamically link
+libc and fail on an older jumphost with `GLIBC_2.34 not found`. Verify the
+Linux artifact before copying it:
+
+```sh
+file routing-monitor # expected: statically linked
+```
+
 ## Run
 
 ```bash
@@ -67,6 +75,12 @@ CGO_ENABLED=0 go build -trimpath -o routing-monitor ./cmd/routing-monitor
 | `--change-reference` | *(none)* | Change/ticket reference shown in the report. |
 | `--logo-folder`, `--header-logo`, `--footer-logo` | *(none)* | Optional PNG report branding. |
 | `--version` | | Print the build version and exit. |
+
+### TACACS session reminders
+
+The combined devices YAML may include `tacacs_timeout_reminder: [1500, 5000,
+8000]` at its top level. Earlier entries warn the operator; the final entry
+proactively reconnects every affected SSH session with fresh RSA credentials.
 
 Unlike the two standalone tools, there is **no `--type` flag** — each device's platform
 is already known from which section of the YAML file it's listed under, so the correct

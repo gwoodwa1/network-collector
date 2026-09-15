@@ -271,7 +271,10 @@ func TestPollDeviceReconnectsAfterAuthorizationFailure(t *testing.T) {
 	}
 	reauth := NewReauthCoordinator(make(chan struct{}, 1), bufio.NewReader(strings.NewReader("")), monitorsetup.NewCredentialCache(0), connect, "cisco_iosxr")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	// Each durable tick now fsyncs its JSONL evidence before it is reported as
+	// collected. Give slower CI disks enough time for several healthy samples;
+	// the point of this test is isolation between devices, not a disk benchmark.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})
