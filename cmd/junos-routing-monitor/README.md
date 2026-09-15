@@ -114,9 +114,10 @@ and start polling:
    change — comma-separated — blank skips the snapshot for this device.
 5. **Username / passcode** — standard interactive prompt, unless a still-valid
    passcode is available to reuse (see [Passcode reuse](#passcode-reuse)).
-   **A failed connection is not retried** — see below — the device is
-   skipped and reported, and you'd need a fresh onboarding attempt
-   (re-enter its hostname) to try it again.
+   **A failed connection prompts to retry** (default: no, and it asks
+   again after each further failure) — see below — declining skips the
+   device, and you'd need a fresh onboarding attempt (re-enter its
+   hostname) to try it again.
 
 A hostname already connected (whether from `--devices` or entered
 interactively, case-insensitively) is refused a second time — two sessions
@@ -206,17 +207,20 @@ tick it starts happening rather than being recorded silently as garbage
 data.
 
 When detected, the tool prints a notice and reuses the same
-username/passcode prompt flow as onboarding to restart *that one device's*
-SSH session — other devices keep polling uninterrupted, and prompts from
-different devices are serialized so they never interleave on your terminal.
-Exactly one reconnect attempt is made per failure (no retry loop, for the
-same reason a fresh onboarding attempt is never retried automatically); if
-it fails, polling stops for that device only. Pressing Ctrl+C while a reauth
-prompt is sitting unanswered stops that device immediately too, rather than
-hanging the shutdown on a prompt no one is going to answer — the rest of the
-run's report generation still proceeds normally. The optional NETCONF
-connection used for snapshot capture (see `--netconf-snapshot`) is separate
-from the polled SSH session and is never touched by this reconnect.
+username/passcode prompt-and-retry flow as onboarding to restart *that one
+device's* SSH session — other devices keep polling uninterrupted, and
+prompts from different devices are serialized so they never interleave on
+your terminal. If the reconnect fails, you're asked whether to retry, and
+that question repeats after each subsequent failure — see the "Retry can
+repeat, defaults to no" note under [Onboarding](#onboarding-once-at-startup)
+above for why this is never automatic even though it can repeat. Declining
+stops polling for that
+device only. Pressing Ctrl+C while a reauth prompt is sitting unanswered
+stops that device immediately too, rather than hanging the shutdown on a
+prompt no one is going to answer — the rest of the run's report generation
+still proceeds normally. The optional NETCONF connection used for snapshot
+capture (see `--netconf-snapshot`) is separate from the polled SSH session
+and is never touched by this reconnect.
 
 The prompt offers cached-passcode reuse within the configured window. A successful
 replacement connection is opened before the stale SSH session is closed. Ctrl+C
@@ -258,11 +262,20 @@ remembered: the prompt shows it as a default you can keep with Enter, e.g.
 a retyped passcode, not the username too. Type a different username at that
 prompt at any point to switch accounts.
 
-**No automatic retry.** A failed connection (bad passcode, network issue,
-anything) is never retried inline — the tool reports it and moves on. If a
-device fails, take a breath, confirm your credentials, and deliberately
-re-enter that hostname at the next onboarding prompt (or re-run the tool)
-rather than immediately hammering it again.
+**Retry can repeat, defaults to no.** A failed connection (bad passcode,
+network issue, anything) prompts `Retry credentials for <host>? [y/N]`
+before giving up — never automatic (nothing loops without you confirming
+"y" each time), but not capped at one retry either: a second failure asks
+again, and so on. Leaving it blank (just Enter) declines. This exists to
+recover a client-side mistake, like typing the passcode into the username
+prompt, without losing the device's already-gathered tables/interfaces/
+neighbors and having to redo onboarding for it from scratch — it is *not* a
+safety net for a genuinely rejected passcode, which can still lock the
+account after a handful of consecutive bad attempts if you keep confirming
+the retry. If you're not confident the mistake was yours rather than the
+device's, decline the retry, take a breath, confirm your credentials, and
+deliberately re-enter that hostname at the next onboarding prompt (or
+re-run the tool) rather than retrying blind.
 
 ## What gets collected
 

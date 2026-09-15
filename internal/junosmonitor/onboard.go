@@ -21,7 +21,7 @@ type sessionExecutor interface {
 
 // connectFunc abstracts ConnectDevice so onboarding's claim-after-success,
 // no-claim-on-failure sequencing (see monitorsetup.HostnameRegistry and
-// ConnectDevice's no-retry docs) can be tested end-to-end without a real SSH
+// ConnectDevice's retry docs) can be tested end-to-end without a real SSH
 // connection. netconfSnapshot requests a second, NETCONF connection
 // alongside the always-required SSH one (see ConnectDevice); netconfClient
 // is nil when netconfSnapshot was false, or when the NETCONF dial itself
@@ -110,45 +110,82 @@ func OnboardDevices(reader *bufio.Reader, deviceType string, netconfSnapshot boo
 }
 
 // ConnectDevice prompts for credentials (offering passcode reuse via cache
-// first) and makes exactly one SSH connection attempt. It deliberately does
-// not retry on failure: a one-time-passcode backend commonly locks the
-// account after a handful of consecutive bad attempts, so an easy inline
-// "retry?" prompt is a real way to lock yourself out under pressure during a
-// change window. A failed SSH attempt invalidates the cache (a rejected
-// passcode is never trustworthy to reuse) and returns the error immediately
-// — trying again for this host requires a fresh, deliberate onboarding
-// attempt.
+// first), attempts an SSH connection, and — on failure — asks the operator
+// whether to retry with a fresh prompt before giving up (see
+// promptRetryConnection). This question is asked again after every failed
+// attempt, so confirming it repeatedly does let the operator retry more
+// than once — it is deliberately not an automatic retry (nothing loops
+// without a human confirming each time), but it is also not capped at a
+// single retry. A one-time-passcode backend commonly locks the account
+// after a handful of consecutive bad attempts, so repeatedly confirming
+// this prompt against a genuinely rejected passcode is a real way to lock
+// yourself out under pressure during a change window — the explicit,
+// default-"no" confirmation exists to recover a client-side mistake — e.g.
+// typing the passcode into the username prompt, or a transient/fixable
+// failure like an untrusted host key — without losing this device's
+// already-gathered onboarding context (tables, interfaces, neighbors) and
+// having to restart onboarding for it from scratch, not to make repeatedly
+// retrying a genuinely rejected passcode any safer. Decline it once you
+// suspect the credential itself, not just the prompt, was wrong. Each
+// failed SSH attempt still invalidates the cache (a rejected passcode is
+// never trustworthy to reuse) before the retry question is asked.
 //
 // When netconfSnapshot is true, a second connection is dialed immediately
-// afterward via ConnectJunosNetconfDevice, using the exact same
-// username/password that just authenticated the SSH session — no
-// additional prompt, and safe for a one-time passcode specifically because
-// it's reused within the same moment it was accepted, not later (see
-// ConnectJunosNetconfDevice's doc comment). Unlike the SSH connection, a
-// failed NETCONF dial does not fail the device's onboarding: it's an
+// after a successful SSH connect via ConnectJunosNetconfDevice, using the
+// exact same username/password that just authenticated the SSH session —
+// no additional prompt, and safe for a one-time passcode specifically
+// because it's reused within the same moment it was accepted, not later
+// (see ConnectJunosNetconfDevice's doc comment). Unlike the SSH connection,
+// a failed NETCONF dial does not fail the device's onboarding: it's an
 // opt-in, additive capability, so a warning is logged and the device
 // proceeds with netconfClient == nil — its snapshot capture falls back to
 // SSH-only sections for that one device (see captureSnapshot).
 func ConnectDevice(reader *bufio.Reader, host, deviceType string, netconfSnapshot bool, cache *monitorsetup.CredentialCache) (client sessionExecutor, netconfClient sessionExecutor, err error) {
-	username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read credentials: %w", err)
-	}
-	client, err = ConnectJunosDevice(host, username, password, deviceType)
-	if err != nil {
-		cache.RecordFailure()
-		return nil, nil, err
-	}
-	if fresh {
-		cache.RecordSuccess(username, password)
-	}
-	if netconfSnapshot {
-		nc, ncErr := ConnectJunosNetconfDevice(host, username, password)
-		if ncErr != nil {
-			slog.Warn("failed to establish NETCONF connection for snapshot capture; falling back to SSH-only snapshots for this device", "hostname", host, "error", ncErr)
-		} else {
-			netconfClient = nc
+	return connectWithRetry(reader, host, deviceType, netconfSnapshot, cache, ConnectJunosDevice, ConnectJunosNetconfDevice)
+}
+
+// connectWithRetry implements ConnectDevice's credential-prompt / connect /
+// retry-prompt / optional-NETCONF-dial loop against dial and dialNetconf,
+// so it can be exercised in tests without a real SSH connection —
+// ConnectDevice wires in the real ConnectJunosDevice/ConnectJunosNetconfDevice.
+func connectWithRetry(reader *bufio.Reader, host, deviceType string, netconfSnapshot bool, cache *monitorsetup.CredentialCache, dial func(host, username, password, deviceType string) (sessionExecutor, error), dialNetconf func(host, username, password string) (sessionExecutor, error)) (client sessionExecutor, netconfClient sessionExecutor, err error) {
+	for {
+		username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read credentials: %w", err)
 		}
+		client, err = dial(host, username, password, deviceType)
+		if err != nil {
+			cache.RecordFailure()
+			if promptRetryConnection(reader, host, err) {
+				continue
+			}
+			return nil, nil, err
+		}
+		if fresh {
+			cache.RecordSuccess(username, password)
+		}
+		if netconfSnapshot {
+			nc, ncErr := dialNetconf(host, username, password)
+			if ncErr != nil {
+				slog.Warn("failed to establish NETCONF connection for snapshot capture; falling back to SSH-only snapshots for this device", "hostname", host, "error", ncErr)
+			} else {
+				netconfClient = nc
+			}
+		}
+		return client, netconfClient, nil
 	}
-	return client, netconfClient, nil
+}
+
+// promptRetryConnection reports a failed connection attempt and asks the
+// operator whether to retry — called again after each subsequent failed
+// attempt, so it can be confirmed more than once in a row (see
+// ConnectDevice's doc comment for why this is a per-attempt human decision
+// rather than an automatic loop). Defaults to "no" so holding Enter under
+// pressure never triggers a retry.
+func promptRetryConnection(reader *bufio.Reader, host string, connectErr error) bool {
+	fmt.Fprintf(os.Stderr, "connection to %s failed: %v\nRetry credentials for %s? [y/N]: ", host, connectErr, host)
+	answer, _ := reader.ReadString('\n')
+	trimmed := strings.TrimSpace(answer)
+	return strings.EqualFold(trimmed, "y") || strings.EqualFold(trimmed, "yes")
 }

@@ -4,6 +4,11 @@ All notable changes to Network Collector are documented here.
 
 ## [Unreleased]
 
+- Added operator-confirmed credential retries to IOS-XR, Junos, and
+  mixed-fleet monitor onboarding and TACACS reauthentication. Each failed
+  SSH attempt clears cached passcodes and prompts again with a default of
+  no; confirmed retries preserve onboarding context and the username default.
+
 ## [2.0.2]
 
 - Added optional `tacacs_timeout_reminder: [1500, 5000, 8000]` YAML schedules

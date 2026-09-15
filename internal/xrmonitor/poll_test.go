@@ -303,10 +303,9 @@ func TestPollDeviceReconnectsAfterAuthorizationFailure(t *testing.T) {
 	}
 }
 
-// TestPollDeviceStopsWhenReconnectFails proves a failed reconnect attempt
-// (e.g. a rejected passcode) stops polling for that device only, rather than
-// looping — ConnectDevice's own no-retry stance (avoiding RSA/ISE lockout)
-// must hold for the reauth path too.
+// TestPollDeviceStopsWhenReconnectFails proves a reconnect that returns an
+// error stops polling for that device only. Any operator-confirmed retries
+// happen inside ConnectDevice; polling must not start another reconnect.
 func TestPollDeviceStopsWhenReconnectFails(t *testing.T) {
 	dir := t.TempDir()
 	stale := &fakeExecutor{authzFailBGP: true}

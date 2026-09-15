@@ -146,8 +146,13 @@ If a periodic polling command returns text matching `authorization failed`
 (case-insensitive), the monitor prompts to reconnect that device using the
 onboarding credential flow, including cached-passcode reuse when available.
 Both platforms share one prompt semaphore and credential cache. Other devices
-continue polling; a failed connection attempt stops only the affected device.
-Dropped SSH connections still stop polling without a reconnect attempt.
+continue polling. If the reconnect attempt fails, you're asked whether to
+retry — that question repeats after each subsequent failure, so it isn't
+capped at one retry, but it's also never automatic (see [TACACS
+reauthorization](../xr-routing-monitor/README.md#tacacs-reauthorization) in
+the xr-routing-monitor README for the lockout-risk caveat that applies here
+too). Declining stops polling for that device only. Dropped SSH connections
+still stop polling without a reconnect attempt.
 
 Override denial wording separately in each platform section:
 
