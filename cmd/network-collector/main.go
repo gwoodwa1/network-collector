@@ -28,6 +28,9 @@ func main() {
 	var prettyOut bool
 	var approveAll bool
 	var checkMode bool
+	var planMode bool
+	var lintMode bool
+	var schemaMode bool
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -53,6 +56,9 @@ func main() {
 	flag.BoolVar(&approveAll, "approve-all", false, "approve all manual workflow gates non-interactively")
 	flag.BoolVar(&checkMode, "check", false, "preview changes without applying them")
 	flag.BoolVar(&checkMode, "dry-run", false, "alias for --check")
+	flag.BoolVar(&planMode, "plan", false, "resolve configuration offline and print a conditional device/step execution graph without connecting")
+	flag.BoolVar(&lintMode, "lint", false, "validate configuration, imports, inventory, selectors, and variable flow without connecting")
+	flag.BoolVar(&schemaMode, "schema", false, "print the JSON Schema for network-collector configuration and exit")
 	flag.Parse()
 	if jsonOut {
 		prettyOut = false
@@ -60,6 +66,23 @@ func main() {
 	if showVersion {
 		fmt.Printf("network-collector %s\n", version)
 		return
+	}
+	if schemaMode {
+		if planMode || lintMode {
+			slog.Error("--schema cannot be combined with --plan or --lint")
+			os.Exit(1)
+		}
+		encoded, err := json.MarshalIndent(networkCollectorSchema(), "", "  ")
+		if err != nil {
+			slog.Error("error generating JSON Schema", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(encoded))
+		return
+	}
+	if planMode && lintMode {
+		slog.Error("--plan and --lint cannot be combined; --plan includes lint validation")
+		os.Exit(1)
 	}
 
 	config, failOnFail, err := loadConfig(configFile)
@@ -200,6 +223,36 @@ func main() {
 			slog.Error("variable preflight failed", "hostname", device.Hostname, "error", variableErr)
 			os.Exit(1)
 		}
+	}
+	if planMode || lintMode {
+		// Keep offline modes genuinely offline: all configuration, imports,
+		// inventory, selector and variable-flow validation above has completed,
+		// but credential providers, transports, event sinks and output files are
+		// deliberately not initialized.
+		if _, err := loadOptionalParsers(config.ParsersFile, configFile); err != nil {
+			slog.Error("error reading parser modules", "parsers_file", config.ParsersFile, "error", err)
+			os.Exit(1)
+		}
+		if lintMode {
+			if jsonOut {
+				fmt.Println(`{"valid":true,"mode":"lint","connections_opened":0}`)
+			} else {
+				fmt.Printf("lint passed: %d selected device(s); no credentials, connections, event sinks, or artifacts were opened\n", len(devices))
+			}
+			return
+		}
+		plan := buildOfflinePlan(config, devices)
+		if jsonOut {
+			encoded, marshalErr := json.MarshalIndent(plan, "", "  ")
+			if marshalErr != nil {
+				slog.Error("error encoding offline plan", "error", marshalErr)
+				os.Exit(1)
+			}
+			fmt.Println(string(encoded))
+		} else {
+			fmt.Print(renderOfflinePlan(plan))
+		}
+		return
 	}
 	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth

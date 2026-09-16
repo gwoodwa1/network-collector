@@ -239,6 +239,9 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--creds_input`: securely prompt for credentials instead of using `NET_USER` and `NET_PASSWORD`
 - `--rsa-token`: recognize RSA `PASSCODE:` challenges, cache the startup token across devices, and require fresh human input before reconnecting
 - `--check` / `--dry-run`: discover declarative state and preview changes without applying configuration
+- `--lint`: validate playbook imports, inventory, selectors, parser modules, and variable flow entirely offline
+- `--plan`: run the same offline validation and print the selected device/step graph; branches that depend on runtime output are labelled `conditional`
+- `--schema`: print the JSON Schema for playbook editor completion and basic shape validation
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
@@ -259,6 +262,46 @@ Example: preview a workbook without applying changes
 ```bash
 ./network-collector --config change.yaml --check
 ```
+
+Example: validate a playbook before a change window, without resolving
+credentials or connecting to any device
+
+```bash
+./network-collector --config change.yaml --lint
+```
+
+Example: inspect the structural execution plan. This is intentionally not a
+claim that every branch will run: `when`, validation actions, block recovery,
+loops, and gNMI triggers are shown as conditional because their outcome is
+only known at runtime.
+
+```bash
+./network-collector --config change.yaml --plan
+./network-collector --config change.yaml --plan --json
+```
+
+Both modes open zero connections and do not initialize credential providers,
+event sinks, reports, baselines, or other output artifacts. `--plan` omits
+command text and variable values, so it can be shared for review without
+revealing those values. Its `resolution_digest` identifies the resolved
+device/step graph.
+
+Generate the schema for an editor or CI validation step:
+
+```bash
+./network-collector --schema > network-collector.schema.json
+```
+
+For YAML Language Server-compatible editors, place the generated file beside
+the playbook and add this first line to the playbook:
+
+```yaml
+# yaml-language-server: $schema=./network-collector.schema.json
+```
+
+The schema checks structure and offers completion; `--lint` remains the
+authoritative semantic check for imports, variable flow, selectors, and safety
+rules.
 
 Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
