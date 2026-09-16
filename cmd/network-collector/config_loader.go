@@ -610,6 +610,9 @@ func validateExecutionConfig(cfg ExecutionConfig) error {
 	if cfg.FailureThreshold < 0 {
 		return fmt.Errorf("execution.failure_threshold must be greater than or equal to 0")
 	}
+	if serialBy := strings.ToLower(strings.TrimSpace(cfg.SerialBy)); serialBy != "" && serialBy != "failure_domain" && serialBy != "ha_pair" && serialBy != "site" {
+		return fmt.Errorf("execution.serial_by must be failure_domain, ha_pair, or site")
+	}
 	return nil
 }
 

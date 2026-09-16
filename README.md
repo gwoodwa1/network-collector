@@ -239,6 +239,10 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--creds_input`: securely prompt for credentials instead of using `NET_USER` and `NET_PASSWORD`
 - `--rsa-token`: recognize RSA `PASSCODE:` challenges, cache the startup token across devices, and require fresh human input before reconnecting
 - `--check` / `--dry-run`: discover declarative state and preview changes without applying configuration
+- `--lint`: validate playbook imports, inventory, selectors, parser modules, and variable flow entirely offline
+- `--plan`: run the same offline validation and print the selected device/step graph; branches that depend on runtime output are labelled `conditional`
+- `--schema`: print the JSON Schema for playbook editor completion and basic shape validation
+- `--resume <run-directory>`: continue a verified interrupted run using its immutable manifest and write-ahead journal
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
@@ -259,6 +263,101 @@ Example: preview a workbook without applying changes
 ```bash
 ./network-collector --config change.yaml --check
 ```
+
+Example: validate a playbook before a change window, without resolving
+credentials or connecting to any device
+
+```bash
+./network-collector --config change.yaml --lint
+```
+
+Example: inspect the structural execution plan. This is intentionally not a
+claim that every branch will run: `when`, validation actions, block recovery,
+loops, and gNMI triggers are shown as conditional because their outcome is
+only known at runtime.
+
+```bash
+./network-collector --config change.yaml --plan
+./network-collector --config change.yaml --plan --json
+```
+
+Both modes open zero connections and do not initialize credential providers,
+event sinks, reports, baselines, or other output artifacts. `--plan` omits
+command text and variable values, so it can be shared for review without
+revealing those values. Its `resolution_digest` identifies the resolved
+device/step graph.
+
+Generate the schema for an editor or CI validation step:
+
+```bash
+./network-collector --schema > network-collector.schema.json
+```
+
+For YAML Language Server-compatible editors, place the generated file beside
+the playbook and add this first line to the playbook:
+
+```yaml
+# yaml-language-server: $schema=./network-collector.schema.json
+```
+
+The schema checks structure and offers completion; `--lint` remains the
+authoritative semantic check for imports, variable flow, selectors, and safety
+rules.
+
+## Safe interruption and resume
+
+Every normal run with structured output now writes a private immutable
+`run-manifest.json` and append-only `run-journal.jsonl`. The manifest binds the
+run to the exact config, inventory, and resolved plan digests. Before looking
+up credentials or connecting to a device, resume verifies those digests:
+
+```bash
+./network-collector --config change.yaml --resume artifacts/run-20260916T070000.000000000
+```
+
+SIGINT and SIGTERM stop scheduling new devices. The active bounded operation is
+allowed to return, then the journal, evidence, and terminal summary are
+flushed. A write-ahead `intent` record means a power or transport loss cannot
+be mistaken for a failed mutation. Resume never guesses: interrupted
+imperative SSH or mutating NETCONF operations are refused pending an audited
+operator decision. An interrupted declarative `ensure` is safely resumed by
+running its normal read-before-apply reconciliation; if the desired state is
+already present it makes no change. Completed imperative steps are skipped
+only after manifest verification.
+
+## Redundancy-aware scheduling
+
+Declare topology ownership in inventory; network-collector does not infer it
+from hostnames, LLDP, or live discovery. Use `execution.serial_by` to allow at
+most one active device sharing a declared failure domain, HA pair, or site:
+
+```yaml
+execution:
+  max_parallel: 10
+  serial_by: failure_domain
+
+# inventory.yaml
+hosts:
+  - name: ios-01a
+    ip: 192.0.2.11
+    failure_domain: pair-01
+    ha_pair: ios-01
+    site: london-a
+  - name: ios-01b
+    ip: 192.0.2.12
+    failure_domain: pair-01
+    ha_pair: ios-01
+    site: london-a
+```
+
+Allowed values are `failure_domain`, `ha_pair`, and `site`. When configured,
+every selected device must declare that field or validation fails before any
+connection is made. Different domains can still run concurrently up to
+`max_parallel`.
+
+For a commented two-pair IOS upgrade wave, see
+[`59-redundancy-aware-ios-upgrade.yaml`](examples/workflow-operations/iosxr/59-redundancy-aware-ios-upgrade.yaml)
+and its [inventory](examples/workflow-operations/inventory/redundancy-aware-ios-upgrade.yaml).
 
 Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF

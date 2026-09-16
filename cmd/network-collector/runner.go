@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
@@ -25,7 +26,11 @@ func effectiveNETCONFPolicy(global SSHSecurityConfig, device DeviceConfig) netco
 	}
 }
 
-func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, rsaAuth *rsaTokenAuth, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) (result deviceRunResult) {
+func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, username, password string, rsaAuth *rsaTokenAuth, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher) deviceRunResult {
+	return runSSHDeviceContext(context.Background(), index, occurrence, device, config, username, password, rsaAuth, jsonOut, pretty, approveAll, approvals, approvalWriter, parsers, variables, runDir, events, nil, nil)
+}
+
+func runSSHDeviceContext(runContext context.Context, index, occurrence int, device DeviceConfig, config Config, username, password string, rsaAuth *rsaTokenAuth, jsonOut, pretty, approveAll bool, approvals *approvalInput, approvalWriter io.Writer, parsers map[string]ParserModuleConfig, variables map[string]string, runDir string, events *eventDispatcher, journal *runJournal, resumeCompleted map[string]bool) (result deviceRunResult) {
 	startedAt := time.Now()
 	hostname := strings.TrimSpace(device.Hostname)
 	ip := strings.TrimSpace(device.IP)
@@ -115,7 +120,8 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 	netconfPolicy := effectiveNETCONFPolicy(config.SSHSecurity, device)
 	netconfExecutor := newLazyNETCONFExecutor(ip, username, password, netconfPolicy)
 	ctx := stepExecutionContext{
-		hostname: hostname, ip: ip, deviceType: deviceType, username: username, password: password,
+		runContext: runContext,
+		hostname:   hostname, ip: ip, deviceType: deviceType, username: username, password: password,
 		opts: opts, jsonOut: jsonOut, consoleOutput: config.Output.ConsoleOutput,
 		sessionOutput: config.Output.SessionTranscript, sessionLog: sessionLog, failureLog: failureLogPath(),
 		variables: variables, aggregated: &result.aggregated, runFailed: &result.failed, parsers: parsers, workflows: config.Workflows,
@@ -131,6 +137,9 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 		checkMode:        config.checkMode,
 		reportEnabled:    config.Report.Enabled,
 		gnmiActionBudget: &gnmiDeviceActionBudget{},
+		journal:          journal,
+		occurrence:       occurrence,
+		resumeCompleted:  resumeCompleted,
 	}
 	if rsaAuth != nil {
 		ctx.reauthenticate = rsaAuth.prompt
@@ -166,12 +175,39 @@ func runSSHDevice(index, occurrence int, device DeviceConfig, config Config, use
 }
 
 func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, bool) {
-	outcomes, stopped := orchestrator.Run(context.Background(), devices, orchestrator.Policy{
+	return runScheduledDevicesContext(context.Background(), devices, cfg, runner)
+}
+
+func runScheduledDevicesContext(runContext context.Context, devices []DeviceConfig, cfg ExecutionConfig, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, bool) {
+	serialBy := strings.ToLower(strings.TrimSpace(cfg.SerialBy))
+	var serialMu sync.Mutex
+	serialLocks := map[string]*sync.Mutex{}
+	serialLockFor := func(device DeviceConfig) *sync.Mutex {
+		if serialBy == "" {
+			return nil
+		}
+		key := serialDomainKey(device, serialBy)
+		if key == "" {
+			return nil
+		}
+		serialMu.Lock()
+		defer serialMu.Unlock()
+		if serialLocks[key] == nil {
+			serialLocks[key] = &sync.Mutex{}
+		}
+		return serialLocks[key]
+	}
+	outcomes, stopped := orchestrator.Run(runContext, devices, orchestrator.Policy{
 		MaxParallel:      cfg.MaxParallel,
 		StartInterval:    time.Duration(cfg.StartIntervalSeconds) * time.Second,
 		CanaryCount:      cfg.CanaryCount,
 		FailureThreshold: cfg.FailureThreshold,
 	}, func(ctx context.Context, index int, device DeviceConfig) orchestrator.Outcome[deviceRunResult] {
+		lock := serialLockFor(device)
+		if lock != nil {
+			lock.Lock()
+			defer lock.Unlock()
+		}
 		result := runner(index, device)
 		return orchestrator.Outcome[deviceRunResult]{Index: index, Value: result, Failed: result.failed}
 	})
@@ -185,7 +221,45 @@ func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner fun
 	return results, stopped
 }
 
+func serialDomainKey(device DeviceConfig, serialBy string) string {
+	var value string
+	switch serialBy {
+	case "failure_domain":
+		value = device.FailureDomain
+	case "ha_pair":
+		value = device.HAPair
+	case "site":
+		value = device.Site
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return serialBy + ":" + strings.ToLower(value)
+}
+
+func validateSerialDomains(devices []DeviceConfig, serialBy string) error {
+	serialBy = strings.ToLower(strings.TrimSpace(serialBy))
+	if serialBy == "" {
+		return nil
+	}
+	for _, device := range devices {
+		if serialDomainKey(device, serialBy) == "" {
+			name := strings.TrimSpace(device.Hostname)
+			if name == "" {
+				name = strings.TrimSpace(device.IP)
+			}
+			return fmt.Errorf("device %q is missing inventory %s required by execution.serial_by", name, serialBy)
+		}
+	}
+	return nil
+}
+
 func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, schedule ScheduleConfig, runner func(int, int, DeviceConfig) deviceRunResult, sleep func(time.Duration)) ([]deviceRunResult, bool) {
+	return runRecurringScheduleContext(context.Background(), devices, execution, schedule, runner, sleep)
+}
+
+func runRecurringScheduleContext(runContext context.Context, devices []DeviceConfig, execution ExecutionConfig, schedule ScheduleConfig, runner func(int, int, DeviceConfig) deviceRunResult, sleep func(time.Duration)) ([]deviceRunResult, bool) {
 	count := schedule.Count
 	if count == 0 {
 		count = 1
@@ -193,7 +267,11 @@ func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, sch
 	all := make([]deviceRunResult, 0, len(devices)*count)
 	stopped := false
 	for occurrence := 0; occurrence < count; occurrence++ {
-		results, occurrenceStopped := runScheduledDevices(devices, execution, func(index int, device DeviceConfig) deviceRunResult { return runner(occurrence, index, device) })
+		if runContext.Err() != nil {
+			stopped = true
+			break
+		}
+		results, occurrenceStopped := runScheduledDevicesContext(runContext, devices, execution, func(index int, device DeviceConfig) deviceRunResult { return runner(occurrence, index, device) })
 		for index := range results {
 			results[index].index += occurrence * len(devices)
 		}
@@ -203,7 +281,28 @@ func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, sch
 			break
 		}
 		if occurrence+1 < count {
-			sleep(time.Duration(schedule.IntervalSeconds) * time.Second)
+			wait := time.Duration(schedule.IntervalSeconds) * time.Second
+			if runContext == context.Background() {
+				if sleep != nil {
+					sleep(wait)
+				}
+				continue
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-runContext.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				stopped = true
+			}
+			if stopped {
+				break
+			}
 		}
 	}
 	return all, stopped

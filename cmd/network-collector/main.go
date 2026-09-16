@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/reporting"
@@ -28,6 +30,10 @@ func main() {
 	var prettyOut bool
 	var approveAll bool
 	var checkMode bool
+	var planMode bool
+	var lintMode bool
+	var schemaMode bool
+	var resumeDir string
 	var configFile string
 	var cliInventoryFile string
 	var cliParsersFile string
@@ -53,6 +59,10 @@ func main() {
 	flag.BoolVar(&approveAll, "approve-all", false, "approve all manual workflow gates non-interactively")
 	flag.BoolVar(&checkMode, "check", false, "preview changes without applying them")
 	flag.BoolVar(&checkMode, "dry-run", false, "alias for --check")
+	flag.BoolVar(&planMode, "plan", false, "resolve configuration offline and print a conditional device/step execution graph without connecting")
+	flag.BoolVar(&lintMode, "lint", false, "validate configuration, imports, inventory, selectors, and variable flow without connecting")
+	flag.BoolVar(&schemaMode, "schema", false, "print the JSON Schema for network-collector configuration and exit")
+	flag.StringVar(&resumeDir, "resume", "", "resume a prior run directory after verifying its immutable manifest")
 	flag.Parse()
 	if jsonOut {
 		prettyOut = false
@@ -60,6 +70,27 @@ func main() {
 	if showVersion {
 		fmt.Printf("network-collector %s\n", version)
 		return
+	}
+	if schemaMode {
+		if planMode || lintMode {
+			slog.Error("--schema cannot be combined with --plan or --lint")
+			os.Exit(1)
+		}
+		encoded, err := json.MarshalIndent(networkCollectorSchema(), "", "  ")
+		if err != nil {
+			slog.Error("error generating JSON Schema", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(encoded))
+		return
+	}
+	if planMode && lintMode {
+		slog.Error("--plan and --lint cannot be combined; --plan includes lint validation")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(resumeDir) != "" && (planMode || lintMode || schemaMode || checkMode) {
+		slog.Error("--resume cannot be combined with offline modes or --check")
+		os.Exit(1)
 	}
 
 	config, failOnFail, err := loadConfig(configFile)
@@ -201,6 +232,72 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if planMode || lintMode {
+		// Keep offline modes genuinely offline: all configuration, imports,
+		// inventory, selector and variable-flow validation above has completed,
+		// but credential providers, transports, event sinks and output files are
+		// deliberately not initialized.
+		if _, err := loadOptionalParsers(config.ParsersFile, configFile); err != nil {
+			slog.Error("error reading parser modules", "parsers_file", config.ParsersFile, "error", err)
+			os.Exit(1)
+		}
+		if lintMode {
+			if jsonOut {
+				fmt.Println(`{"valid":true,"mode":"lint","connections_opened":0}`)
+			} else {
+				fmt.Printf("lint passed: %d selected device(s); no credentials, connections, event sinks, or artifacts were opened\n", len(devices))
+			}
+			return
+		}
+		plan := buildOfflinePlan(config, devices)
+		if jsonOut {
+			encoded, marshalErr := json.MarshalIndent(plan, "", "  ")
+			if marshalErr != nil {
+				slog.Error("error encoding offline plan", "error", marshalErr)
+				os.Exit(1)
+			}
+			fmt.Println(string(encoded))
+		} else {
+			fmt.Print(renderOfflinePlan(plan))
+		}
+		return
+	}
+	// Validate a resume request before credential providers are initialized.
+	// A changed scope or an uncertain mutation must never trigger a new secret
+	// lookup or a device connection.
+	resumeDir = strings.TrimSpace(resumeDir)
+	var resumeManifest runManifest
+	var resumeCompleted map[string]bool
+	if resumeDir != "" {
+		resolved, resolveErr := filepath.Abs(resumeDir)
+		if resolveErr != nil {
+			slog.Error("error resolving resume directory", "error", resolveErr)
+			os.Exit(1)
+		}
+		manifest, verifyErr := verifyResumeManifest(resolved, configFile, config, devices)
+		if verifyErr != nil {
+			slog.Error("resume refused", "error", verifyErr)
+			os.Exit(1)
+		}
+		uncertain, journalErr := uncertainJournalEntries(resolved)
+		if journalErr != nil {
+			slog.Error("error reading resume journal", "error", journalErr)
+			os.Exit(1)
+		}
+		for _, entry := range uncertain {
+			if entry.Kind != "ensure" {
+				slog.Error("resume refused: an imperative mutation intent is uncertain and requires an audited operator decision", "hostname", entry.Hostname, "step", entry.Step, "kind", entry.Kind)
+				os.Exit(1)
+			}
+			slog.Warn("resuming uncertain declarative ensure step; it will reconcile read-only state before deciding whether to apply", "hostname", entry.Hostname, "step", entry.Step)
+		}
+		resumeCompleted, journalErr = completedJournalEntries(resolved)
+		if journalErr != nil {
+			slog.Error("error reading completed resume entries", "error", journalErr)
+			os.Exit(1)
+		}
+		resumeDir, resumeManifest = resolved, manifest
+	}
 	deviceCredentials := make([]credentials.Credentials, len(devices))
 	var rsaAuth *rsaTokenAuth
 	if len(devices) > 0 {
@@ -278,19 +375,38 @@ func main() {
 	}
 
 	runStarted := time.Now()
+	runContext, stopRun := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopRun()
 	if err := pruneSessionLogs(config.Output.RetentionDays, runStarted); err != nil {
 		slog.Error("error pruning expired session logs", "error", err)
 		os.Exit(1)
 	}
 	runID := "run-" + runStarted.Format("20060102T150405.000000000")
 	runDir := ""
-	if outputEnabled(config, devices) {
+	if resumeDir != "" {
+		runDir = resumeDir
+		runID = resumeManifest.RunID
+		slog.Info("resuming verified run", "run_id", runID, "directory", runDir)
+	} else if outputEnabled(config, devices) {
 		runDir, err = prepareRunOutput(config.Output, runID)
 		if err != nil {
 			slog.Error("error preparing structured output", "error", err)
 			os.Exit(1)
 		}
 		slog.Info("recording structured output", "run_id", runID, "directory", runDir)
+	}
+	var journal *runJournal
+	if runDir != "" {
+		if resumeDir == "" {
+			if _, manifestErr := writeRunManifest(runDir, runID, configFile, config, devices); manifestErr != nil {
+				slog.Error("error writing immutable run manifest", "error", manifestErr)
+				os.Exit(1)
+			}
+		}
+		if journal, err = newRunJournal(runDir); err != nil {
+			slog.Error("error opening run journal", "error", err)
+			os.Exit(1)
+		}
 	}
 	events := &eventDispatcher{runID: runID}
 	eventPath := ""
@@ -323,6 +439,10 @@ func main() {
 		slog.Error("invalid execution configuration", "error", err)
 		os.Exit(1)
 	}
+	if err := validateSerialDomains(devices, config.Execution.SerialBy); err != nil {
+		slog.Error("invalid redundancy scheduling configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := validateScheduleConfig(config.Schedule); err != nil {
 		slog.Error("invalid schedule configuration", "error", err)
 		os.Exit(1)
@@ -342,13 +462,13 @@ func main() {
 			state.cond.Wait()
 		}
 		credential := deviceCredentials[index]
-		result := runSSHDevice(index, occurrence, device, config, credential.Username, credential.Password, rsaAuth, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events)
+		result := runSSHDeviceContext(runContext, index, occurrence, device, config, credential.Username, credential.Password, rsaAuth, jsonOut, prettyOut, approveAll, approvals, approvalWriter, parsers, state.variables, runDir, events, journal, resumeCompleted)
 		state.next++
 		state.cond.Broadcast()
 		state.mu.Unlock()
 		return result
 	}
-	deviceResults, schedulingStopped := runRecurringSchedule(devices, config.Execution, config.Schedule, runner, time.Sleep)
+	deviceResults, schedulingStopped := runRecurringScheduleContext(runContext, devices, config.Execution, config.Schedule, runner, time.Sleep)
 	occurrences := config.Schedule.Count
 	if occurrences == 0 {
 		occurrences = 1
@@ -386,7 +506,11 @@ func main() {
 		}
 	}
 	failed := runFailed
-	events.emit(lifecycleEvent{Type: "run.completed", Failed: &failed, Data: map[string]interface{}{"duration_ns": time.Since(runStarted).Nanoseconds(), "device_results": len(deviceResults)}})
+	eventData := map[string]interface{}{"duration_ns": time.Since(runStarted).Nanoseconds(), "device_results": len(deviceResults)}
+	if runContext.Err() != nil {
+		eventData["interrupted"] = true
+	}
+	events.emit(lifecycleEvent{Type: "run.completed", Failed: &failed, Data: eventData})
 	events.close()
 	reportFailed := false
 	if config.Report.Enabled {
