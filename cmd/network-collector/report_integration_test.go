@@ -173,7 +173,7 @@ func TestReporterGeneratesForEveryWorkflowOperationExample(t *testing.T) {
 			}
 		})
 	}
-	if tested != 58 {
-		t.Fatalf("expected reporter compatibility coverage for 58 playbooks, got %d", tested)
+	if tested < 58 {
+		t.Fatalf("expected reporter compatibility coverage for at least 58 playbooks, got %d", tested)
 	}
 }

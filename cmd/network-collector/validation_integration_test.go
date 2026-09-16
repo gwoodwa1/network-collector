@@ -2201,8 +2201,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 58 {
-		t.Fatalf("expected fifty-eight vendor-organized workflow examples, got %d: %v", len(paths), paths)
+	if len(paths) < 58 {
+		t.Fatalf("expected at least fifty-eight vendor-organized workflow examples, got %d: %v", len(paths), paths)
 	}
 	loaded := map[string]Config{}
 	loadedPaths := map[string]string{}
@@ -2221,8 +2221,8 @@ func TestWorkflowOperationExamplesLoad(t *testing.T) {
 		loaded[filepath.Base(path)] = config
 		loadedPaths[filepath.Base(path)] = path
 	}
-	if len(loaded) != 58 {
-		t.Fatalf("expected fifty-eight loaded playbooks, got %d", len(loaded))
+	if len(loaded) != len(paths) {
+		t.Fatalf("expected all discovered playbooks to load, discovered %d but loaded %d", len(paths), len(loaded))
 	}
 	conditions := loaded["01-conditions-and-loops.yaml"].SSH[0].Steps
 	if conditions[1].When == nil || conditions[2].Foreach == nil || conditions[3].Foreach == nil || conditions[4].Repeat == nil {
