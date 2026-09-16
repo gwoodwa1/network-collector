@@ -242,6 +242,7 @@ The `cmd/network-collector` SSH example supports validation configured in `confi
 - `--lint`: validate playbook imports, inventory, selectors, parser modules, and variable flow entirely offline
 - `--plan`: run the same offline validation and print the selected device/step graph; branches that depend on runtime output are labelled `conditional`
 - `--schema`: print the JSON Schema for playbook editor completion and basic shape validation
+- `--resume <run-directory>`: continue a verified interrupted run using its immutable manifest and write-ahead journal
 
 `fail-on-fail` can also be configured with `fail_on_fail: true` in `config.yaml` or the `FAIL_ON_FAIL=true` environment variable. The CLI flag takes precedence when provided.
 
@@ -302,6 +303,27 @@ the playbook and add this first line to the playbook:
 The schema checks structure and offers completion; `--lint` remains the
 authoritative semantic check for imports, variable flow, selectors, and safety
 rules.
+
+## Safe interruption and resume
+
+Every normal run with structured output now writes a private immutable
+`run-manifest.json` and append-only `run-journal.jsonl`. The manifest binds the
+run to the exact config, inventory, and resolved plan digests. Before looking
+up credentials or connecting to a device, resume verifies those digests:
+
+```bash
+./network-collector --config change.yaml --resume artifacts/run-20260916T070000.000000000
+```
+
+SIGINT and SIGTERM stop scheduling new devices. The active bounded operation is
+allowed to return, then the journal, evidence, and terminal summary are
+flushed. A write-ahead `intent` record means a power or transport loss cannot
+be mistaken for a failed mutation. Resume never guesses: interrupted
+imperative SSH or mutating NETCONF operations are refused pending an audited
+operator decision. An interrupted declarative `ensure` is safely resumed by
+running its normal read-before-apply reconciliation; if the desired state is
+already present it makes no change. Completed imperative steps are skipped
+only after manifest verification.
 
 Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF

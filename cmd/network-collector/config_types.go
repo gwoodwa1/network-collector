@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"sync"
 	"time"
@@ -446,6 +447,7 @@ var failureLogMu sync.Mutex
 var version = "dev"
 
 type stepExecutionContext struct {
+	runContext       context.Context
 	hostname         string
 	ip               string
 	deviceType       string
@@ -484,6 +486,9 @@ type stepExecutionContext struct {
 	checkMode        bool
 	reportEnabled    bool
 	gnmiActionBudget *gnmiDeviceActionBudget
+	journal          *runJournal
+	occurrence       int
+	resumeCompleted  map[string]bool
 }
 
 type gnmiDeviceActionBudget struct {

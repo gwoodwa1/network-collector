@@ -875,6 +875,14 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		if stepName == "" {
 			stepName = "unnamed"
 		}
+		if kind := resumableMutationKind(step); kind != "" && kind != "ensure" && ctx.resumeCompleted[journalEntryKey(runJournalEntry{Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Occurrence: ctx.occurrence})] {
+			writeSessionf(ctx.sessionLog, "[step:%s] skipped: completed in verified prior run\n", stepName)
+			continue
+		}
+		if ctx.runContext != nil && ctx.runContext.Err() != nil {
+			writeSessionf(ctx.sessionLog, "[step:%s] not started: run interrupted\n", stepName)
+			return true
+		}
 		ctx.events.emit(lifecycleEvent{Type: "step.started", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName})
 
 		run, err := evaluateWhen(step.When, ctx.variables)
@@ -1162,6 +1170,15 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 		stepExecutionFailed := false
 		for {
 			attempt++
+			mutationKind := resumableMutationKind(step)
+			if mutationKind != "" && !ctx.checkMode {
+				entry := runJournalEntry{State: "intent", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Occurrence: ctx.occurrence, Kind: mutationKind}
+				if err := ctx.journal.append(entry); err != nil {
+					*ctx.runFailed = true
+					recordStepFailure(ctx, stepName, fmt.Sprintf("write-ahead journal error: %v", err))
+					break
+				}
+			}
 
 			sshExecutor := commandExecutor(ctx, client)
 			if step.GNMISubscribe == nil && step.NETCONF == nil && step.Ensure == nil && step.Facts == nil && sshExecutor == nil {
@@ -1220,6 +1237,13 @@ func executeStepsAtDepth(ctx *stepExecutionContext, client **ssh.Client, steps [
 				writeProtectedOutput(ctx, fmt.Sprintf("[step:%s] command error: %v", stepName, err), output)
 				recordStepFailure(ctx, stepName, fmt.Sprintf("command error: %v", err))
 				break
+			}
+			if mutationKind != "" && !ctx.checkMode {
+				if err := ctx.journal.append(runJournalEntry{State: "completed", Hostname: ctx.hostname, IP: ctx.ip, Step: stepName, Occurrence: ctx.occurrence, Kind: mutationKind}); err != nil {
+					*ctx.runFailed = true
+					recordStepFailure(ctx, stepName, fmt.Sprintf("completion journal error: %v", err))
+					break
+				}
 			}
 
 			commandKind := "device"
