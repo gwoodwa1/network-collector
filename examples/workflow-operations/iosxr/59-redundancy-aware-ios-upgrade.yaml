@@ -1,0 +1,56 @@
+# Demonstrates explicit redundancy-aware scheduling for an IOS upgrade wave.
+# Addresses and image names are illustrative: review the commands and replace
+# them with your platform's approved upgrade and post-change checks.
+name_playbook: Redundancy-aware IOS upgrade wave
+inventory_file: ../inventory/redundancy-aware-ios-upgrade.yaml
+fail_on_fail: true
+
+execution:
+  # At most two devices are active globally. Because serial_by is set, those
+  # two must also belong to different declared failure domains.
+  max_parallel: 2
+  failure_threshold: 1
+  serial_by: failure_domain
+
+output:
+  directory: artifacts
+  save_raw: true
+  summary_file: results.json
+  events_file: events.jsonl
+
+ssh:
+  - group: ios-upgrade-wave-1
+    steps:
+      - name: operator-approval
+        approval:
+          message: >-
+            Begin the IOS upgrade wave? Only one member of each declared
+            failure_domain can run at a time.
+          timeout_seconds: 300
+
+      - name: precheck-version
+        cmd: show version
+
+      # This is an imperative mutation. The resume journal records intent
+      # before execution. If interrupted before completion, --resume refuses
+      # to guess and requires an audited decision or recovery workflow.
+      - name: activate-approved-image
+        cmd: request platform software package install switch all file flash:approved-image.bin on-reboot new auto-copy
+
+      - name: wait-for-reload
+        ssh_probe:
+          interval_seconds: 15
+          max_attempts: 40
+          timeout_seconds: 5
+          post_wait_seconds: 30
+
+      - name: verify-post-upgrade-version
+        cmd: show version
+        validation:
+          extractor: regex
+          pattern: '(Version 17\.12\.01)'
+          condition: eq
+          expected: Version 17.12.01
+        on_fail:
+          action: fail
+          message: Post-upgrade version check failed; stop the wave for review.

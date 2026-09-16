@@ -355,6 +355,10 @@ every selected device must declare that field or validation fails before any
 connection is made. Different domains can still run concurrently up to
 `max_parallel`.
 
+For a commented two-pair IOS upgrade wave, see
+[`59-redundancy-aware-ios-upgrade.yaml`](examples/workflow-operations/iosxr/59-redundancy-aware-ios-upgrade.yaml)
+and its [inventory](examples/workflow-operations/inventory/redundancy-aware-ios-upgrade.yaml).
+
 Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
 operations. A supported SSH `ensure` adapter may run only its predefined

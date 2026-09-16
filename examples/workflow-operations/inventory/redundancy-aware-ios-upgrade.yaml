@@ -1,0 +1,38 @@
+# This inventory owns redundancy metadata. It is intentionally explicit: do
+# not derive a failure domain from a hostname, LLDP, or a live device query.
+hosts:
+  # The two routers form an HA pair and share a failure domain. With
+  # execution.serial_by: failure_domain they will never be active together.
+  - name: ios-01a
+    ip: 192.0.2.101
+    type: cisco_iosxe
+    failure_domain: metro-a-pair-01
+    ha_pair: metro-a-01
+    site: london-a
+
+  - name: ios-01b
+    ip: 192.0.2.102
+    type: cisco_iosxe
+    failure_domain: metro-a-pair-01
+    ha_pair: metro-a-01
+    site: london-a
+
+  # This independent pair may run at the same time as pair 01, subject to the
+  # global max_parallel limit in the playbook.
+  - name: ios-02a
+    ip: 192.0.2.103
+    type: cisco_iosxe
+    failure_domain: metro-a-pair-02
+    ha_pair: metro-a-02
+    site: london-a
+
+  - name: ios-02b
+    ip: 192.0.2.104
+    type: cisco_iosxe
+    failure_domain: metro-a-pair-02
+    ha_pair: metro-a-02
+    site: london-a
+
+groups:
+  ios-upgrade-wave-1:
+    hosts: [ios-01a, ios-01b, ios-02a, ios-02b]
