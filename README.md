@@ -325,6 +325,36 @@ running its normal read-before-apply reconciliation; if the desired state is
 already present it makes no change. Completed imperative steps are skipped
 only after manifest verification.
 
+## Redundancy-aware scheduling
+
+Declare topology ownership in inventory; network-collector does not infer it
+from hostnames, LLDP, or live discovery. Use `execution.serial_by` to allow at
+most one active device sharing a declared failure domain, HA pair, or site:
+
+```yaml
+execution:
+  max_parallel: 10
+  serial_by: failure_domain
+
+# inventory.yaml
+hosts:
+  - name: ios-01a
+    ip: 192.0.2.11
+    failure_domain: pair-01
+    ha_pair: ios-01
+    site: london-a
+  - name: ios-01b
+    ip: 192.0.2.12
+    failure_domain: pair-01
+    ha_pair: ios-01
+    site: london-a
+```
+
+Allowed values are `failure_domain`, `ha_pair`, and `site`. When configured,
+every selected device must declare that field or validation fails before any
+connection is made. Different domains can still run concurrently up to
+`max_parallel`.
+
 Check mode never sends generic SSH commands, gNMI subscriptions,
 SSH probes, approval gates, waits, facts collection, or mutating NETCONF
 operations. A supported SSH `ensure` adapter may run only its predefined

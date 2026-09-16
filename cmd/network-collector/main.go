@@ -439,6 +439,10 @@ func main() {
 		slog.Error("invalid execution configuration", "error", err)
 		os.Exit(1)
 	}
+	if err := validateSerialDomains(devices, config.Execution.SerialBy); err != nil {
+		slog.Error("invalid redundancy scheduling configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := validateScheduleConfig(config.Schedule); err != nil {
 		slog.Error("invalid schedule configuration", "error", err)
 		os.Exit(1)

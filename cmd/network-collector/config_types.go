@@ -238,6 +238,9 @@ type DeviceConfig struct {
 	GNMI              *GNMIConnectionConfig  `mapstructure:"gnmi" yaml:"gnmi"`
 	Labels            map[string]string      `mapstructure:"labels" yaml:"labels"`
 	CredentialProfile string                 `mapstructure:"credential_profile" yaml:"credential_profile"`
+	FailureDomain     string                 `mapstructure:"failure_domain" yaml:"failure_domain"`
+	HAPair            string                 `mapstructure:"ha_pair" yaml:"ha_pair"`
+	Site              string                 `mapstructure:"site" yaml:"site"`
 	InventoryVars     map[string]interface{} `mapstructure:"-" yaml:"-"`
 }
 
@@ -343,10 +346,11 @@ type StepOutputConfig struct {
 }
 
 type ExecutionConfig struct {
-	MaxParallel          int `mapstructure:"max_parallel" yaml:"max_parallel"`
-	StartIntervalSeconds int `mapstructure:"start_interval_seconds" yaml:"start_interval_seconds"`
-	CanaryCount          int `mapstructure:"canary_count" yaml:"canary_count"`
-	FailureThreshold     int `mapstructure:"failure_threshold" yaml:"failure_threshold"`
+	MaxParallel          int    `mapstructure:"max_parallel" yaml:"max_parallel"`
+	StartIntervalSeconds int    `mapstructure:"start_interval_seconds" yaml:"start_interval_seconds"`
+	CanaryCount          int    `mapstructure:"canary_count" yaml:"canary_count"`
+	FailureThreshold     int    `mapstructure:"failure_threshold" yaml:"failure_threshold"`
+	SerialBy             string `mapstructure:"serial_by" yaml:"serial_by"`
 }
 
 type InventoryHostConfig struct {
@@ -361,6 +365,9 @@ type InventoryHostConfig struct {
 	GNMI              *GNMIConnectionConfig  `yaml:"gnmi"`
 	Labels            map[string]string      `yaml:"labels"`
 	CredentialProfile string                 `yaml:"credential_profile"`
+	FailureDomain     string                 `yaml:"failure_domain"`
+	HAPair            string                 `yaml:"ha_pair"`
+	Site              string                 `yaml:"site"`
 	Vars              map[string]interface{} `yaml:"vars"`
 }
 

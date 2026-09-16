@@ -70,6 +70,15 @@ func applyInventoryHost(device DeviceConfig, host InventoryHostConfig) DeviceCon
 		resolved.CredentialProfile = strings.TrimSpace(host.CredentialProfile)
 	}
 	resolved.InventoryVars = cloneInterfaceMap(host.Vars)
+	if strings.TrimSpace(resolved.FailureDomain) == "" {
+		resolved.FailureDomain = strings.TrimSpace(host.FailureDomain)
+	}
+	if strings.TrimSpace(resolved.HAPair) == "" {
+		resolved.HAPair = strings.TrimSpace(host.HAPair)
+	}
+	if strings.TrimSpace(resolved.Site) == "" {
+		resolved.Site = strings.TrimSpace(host.Site)
+	}
 	resolved.Labels = cloneLabels(host.Labels)
 	for key, value := range device.Labels {
 		resolved.Labels[key] = value

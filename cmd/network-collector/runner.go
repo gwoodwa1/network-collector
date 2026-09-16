@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/drivers/ssh"
@@ -178,12 +179,35 @@ func runScheduledDevices(devices []DeviceConfig, cfg ExecutionConfig, runner fun
 }
 
 func runScheduledDevicesContext(runContext context.Context, devices []DeviceConfig, cfg ExecutionConfig, runner func(int, DeviceConfig) deviceRunResult) ([]deviceRunResult, bool) {
+	serialBy := strings.ToLower(strings.TrimSpace(cfg.SerialBy))
+	var serialMu sync.Mutex
+	serialLocks := map[string]*sync.Mutex{}
+	serialLockFor := func(device DeviceConfig) *sync.Mutex {
+		if serialBy == "" {
+			return nil
+		}
+		key := serialDomainKey(device, serialBy)
+		if key == "" {
+			return nil
+		}
+		serialMu.Lock()
+		defer serialMu.Unlock()
+		if serialLocks[key] == nil {
+			serialLocks[key] = &sync.Mutex{}
+		}
+		return serialLocks[key]
+	}
 	outcomes, stopped := orchestrator.Run(runContext, devices, orchestrator.Policy{
 		MaxParallel:      cfg.MaxParallel,
 		StartInterval:    time.Duration(cfg.StartIntervalSeconds) * time.Second,
 		CanaryCount:      cfg.CanaryCount,
 		FailureThreshold: cfg.FailureThreshold,
 	}, func(ctx context.Context, index int, device DeviceConfig) orchestrator.Outcome[deviceRunResult] {
+		lock := serialLockFor(device)
+		if lock != nil {
+			lock.Lock()
+			defer lock.Unlock()
+		}
 		result := runner(index, device)
 		return orchestrator.Outcome[deviceRunResult]{Index: index, Value: result, Failed: result.failed}
 	})
@@ -195,6 +219,40 @@ func runScheduledDevicesContext(runContext context.Context, devices []DeviceConf
 		slog.Error("scheduled execution stopped before all devices completed", "failure_threshold", cfg.FailureThreshold, "canary_count", cfg.CanaryCount)
 	}
 	return results, stopped
+}
+
+func serialDomainKey(device DeviceConfig, serialBy string) string {
+	var value string
+	switch serialBy {
+	case "failure_domain":
+		value = device.FailureDomain
+	case "ha_pair":
+		value = device.HAPair
+	case "site":
+		value = device.Site
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return serialBy + ":" + strings.ToLower(value)
+}
+
+func validateSerialDomains(devices []DeviceConfig, serialBy string) error {
+	serialBy = strings.ToLower(strings.TrimSpace(serialBy))
+	if serialBy == "" {
+		return nil
+	}
+	for _, device := range devices {
+		if serialDomainKey(device, serialBy) == "" {
+			name := strings.TrimSpace(device.Hostname)
+			if name == "" {
+				name = strings.TrimSpace(device.IP)
+			}
+			return fmt.Errorf("device %q is missing inventory %s required by execution.serial_by", name, serialBy)
+		}
+	}
+	return nil
 }
 
 func runRecurringSchedule(devices []DeviceConfig, execution ExecutionConfig, schedule ScheduleConfig, runner func(int, int, DeviceConfig) deviceRunResult, sleep func(time.Duration)) ([]deviceRunResult, bool) {
