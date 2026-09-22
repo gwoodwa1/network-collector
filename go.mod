@@ -6,7 +6,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/itchyny/gojq v0.12.19
 	github.com/openconfig/gnmi v0.14.1
-	github.com/openconfig/gnmic v0.48.0
+	github.com/openconfig/gnmic v0.49.0
 	github.com/openconfig/gnmic/pkg/api v0.1.11
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/scrapli/scrapligo v1.4.1
@@ -15,7 +15,7 @@ require (
 	github.com/tidwall/gjson v1.19.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -34,6 +34,7 @@ require (
 	github.com/fullstorydev/grpcurl v1.9.4 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
@@ -68,6 +69,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260917231906-eeb232e0883d // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
