@@ -15,9 +15,31 @@ import (
 	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/hostkey"
+	scrapliutil "github.com/scrapli/scrapligo/util"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+// realisticHostKeyVerificationError builds an error shaped exactly like what
+// connectWithRetry's real dial path produces in production (see
+// pkg/drivers/hostkey.ClassifyConnectError's doc comment): scrapligo's
+// "system" transport surfaces a host-key failure as a fixed
+// "host key verification failed" message wrapping util.ErrConnectionError,
+// itself wrapped by pkg/drivers/ssh.Client.connectWithProfile.
+func realisticHostKeyVerificationError() error {
+	inner := fmt.Errorf("%w: encountered error output during in channel ssh authentication, error: 'host key verification failed'", scrapliutil.ErrConnectionError)
+	return fmt.Errorf("failed to open driver: %w", inner)
+}
+
+// stubKnownHostsFileResolver points hostkey.KnownHostsFilesResolver at file
+// for the duration of the calling test, restoring the original on cleanup.
+func stubKnownHostsFileResolver(t *testing.T, file string) {
+	t.Helper()
+	original := hostkey.KnownHostsFilesResolver
+	hostkey.KnownHostsFilesResolver = func() ([]string, error) { return []string{file}, nil }
+	t.Cleanup(func() { hostkey.KnownHostsFilesResolver = original })
+}
 
 // fakeSessionExecutor is a no-op sessionExecutor for onboarding tests that
 // don't care about command execution, only connection outcome.
@@ -665,11 +687,17 @@ func startFakeSSHServer(t *testing.T) (addr string) {
 // unrelated "Retry credentials?" prompt.
 func TestConnectWithRetryDeclinesHostKeyMismatchWithoutTouchingCredentialCache(t *testing.T) {
 	_, staleKey := generateHostKeyTestKey(t)
+	dir := t.TempDir()
+	knownHostsFile := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(knownHostsFile, []byte(knownhosts.Line([]string{"host1"}, staleKey)+"\n"), 0o600); err != nil {
+		t.Fatalf("write known_hosts fixture: %v", err)
+	}
+	stubKnownHostsFileResolver(t, knownHostsFile)
+
 	dialCalls := 0
 	dial := func(host, username, password, deviceType string) (sessionExecutor, error) {
 		dialCalls++
-		keyErr := &knownhosts.KeyError{Want: []knownhosts.KnownKey{{Key: staleKey, Filename: "/home/op/.ssh/known_hosts", Line: 3}}}
-		return nil, fmt.Errorf("failed to open driver: %w", fmt.Errorf("ssh: handshake failed: %w", keyErr))
+		return nil, realisticHostKeyVerificationError()
 	}
 
 	cache := monitorsetup.NewCredentialCache(45 * time.Second)
@@ -728,13 +756,13 @@ func TestConnectWithRetryRefreshesHostKeyAndRetriesWithSameCredentials(t *testin
 	if err := os.WriteFile(knownHostsFile, []byte(content), 0o600); err != nil {
 		t.Fatalf("write known_hosts fixture: %v", err)
 	}
+	stubKnownHostsFileResolver(t, knownHostsFile)
 
 	var dialUsers []string
 	dial := func(host, username, password, deviceType string) (sessionExecutor, error) {
 		dialUsers = append(dialUsers, username+"/"+password)
 		if len(dialUsers) == 1 {
-			keyErr := &knownhosts.KeyError{Want: []knownhosts.KnownKey{{Key: staleKey, Filename: knownHostsFile, Line: 1}}}
-			return nil, fmt.Errorf("failed to open driver: %w", fmt.Errorf("ssh: handshake failed: %w", keyErr))
+			return nil, realisticHostKeyVerificationError()
 		}
 		return fakeSessionExecutor{}, nil
 	}

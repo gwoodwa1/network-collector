@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	scrapliutil "github.com/scrapli/scrapligo/util"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -40,28 +41,130 @@ type Mismatch struct {
 	OldKeys []ssh.PublicKey
 }
 
-// ClassifyConnectError inspects a failed connection's error for a
-// *knownhosts.KeyError with a non-empty Want (a real mismatch, per its own
-// doc comment: "If Want is empty, the host is unknown. If Want is
-// non-empty, there was a mismatch"). Returns nil for every other failure,
-// including an unknown-host-key error (Want empty) and non-host-key
-// failures (auth, network, etc.) — those are left to the caller's normal
-// failure handling.
+// KnownHostsFilesResolver locates every known_hosts file the real OS ssh
+// subprocess actually consults for a connection, in the order it checks
+// them. scrapligo's "system" transport (this repo's default, and the only
+// one xrmonitor/junosmonitor ever use) resolves a single file via
+// options.WithSSHKnownHostsFileSystem() and passes it as
+// "-o UserKnownHostsFile=<that file>" — but that only overrides the *user*
+// known_hosts directive. It never touches GlobalKnownHostsFile, so ssh's
+// own default global files (/etc/ssh/ssh_known_hosts,
+// /etc/ssh/ssh_known_hosts2 — confirmed locally via `ssh -G`) stay active
+// and are checked in addition to the resolved user file. A stale entry that
+// exists only in a global file must still be detected as a mismatch, not
+// missed because only the user file was inspected. Exported so tests can
+// point it at throwaway fixtures; production code must never reassign it.
+var KnownHostsFilesResolver = resolveKnownHostsFiles
+
+func resolveKnownHostsFiles() ([]string, error) {
+	var files []string
+	seen := make(map[string]bool)
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		if _, err := os.Stat(path); err != nil {
+			return
+		}
+		seen[path] = true
+		files = append(files, path)
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		add(filepath.Join(home, ".ssh", "known_hosts"))
+	}
+	add("/etc/ssh/ssh_known_hosts")
+	add("/etc/ssh/ssh_known_hosts2")
+
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no known_hosts file found (checked ~/.ssh/known_hosts, /etc/ssh/ssh_known_hosts, /etc/ssh/ssh_known_hosts2)")
+	}
+	return files, nil
+}
+
+// ClassifyConnectError inspects a failed connection's error for a real SSH
+// host-key mismatch. The connect path in this repo always uses scrapligo's
+// default "system" transport, which shells out to the real OS ssh binary —
+// host-key verification is done entirely by that OpenSSH client, so a
+// failure never surfaces as a *knownhosts.KeyError (that type is only ever
+// constructed by scrapligo's alternate, unused "standard"/native-Go-crypto
+// transport). Instead it surfaces as a plain wrapped error whose text
+// contains "host key verification failed" — which by itself can't
+// distinguish an unknown host from a genuine mismatch, since OpenSSH prints
+// that same final line for both. So this independently re-derives the
+// distinction by reading the real known_hosts files (via
+// KnownHostsFilesResolver, every file the real ssh subprocess actually
+// consults — user and global) and checking whether any line in any of them
+// currently binds host to a key: zero bound entries anywhere means the host
+// was never trusted in the first place (an unknown host, not a mismatch —
+// left to the caller's normal failure handling), one or more bound entries
+// in a single file means a mismatch, built from the first file (in
+// resolver-order: user file, then global files) that has any.
 func ClassifyConnectError(host string, err error) *Mismatch {
-	var keyErr *knownhosts.KeyError
-	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+	if !looksLikeHostKeyVerificationFailure(err) {
 		return nil
 	}
 
-	m := &Mismatch{Host: host, File: keyErr.Want[0].Filename}
-	for _, want := range keyErr.Want {
-		m.StaleLines = append(m.StaleLines, want.Line)
-		m.OldKeys = append(m.OldKeys, want.Key)
+	files, ferr := KnownHostsFilesResolver()
+	if ferr != nil {
+		return nil // can't independently verify; fall through to generic handling
 	}
-	// Descending order so ReplaceEntry can delete by line number without
-	// earlier deletions shifting the position of later ones.
-	sort.Sort(sort.Reverse(byStaleLine(*m)))
-	return m
+
+	for _, file := range files {
+		lines, keys, ferr := findBoundEntries(file, host)
+		if ferr != nil || len(lines) == 0 {
+			continue
+		}
+		m := &Mismatch{Host: host, File: file, StaleLines: lines, OldKeys: keys}
+		// Descending order so ReplaceEntry can delete by line number
+		// without earlier deletions shifting the position of later ones.
+		sort.Sort(sort.Reverse(byStaleLine(*m)))
+		return m
+	}
+	return nil
+}
+
+// looksLikeHostKeyVerificationFailure reports whether err is the specific
+// scrapligo error produced when the OS ssh subprocess prints "Host key
+// verification failed." — checking both errors.Is (scrapliutil.ErrConnectionError
+// also covers unrelated failures like timeouts or no-route-to-host, so the
+// substring check is required too) and a case-insensitive substring match,
+// tolerant of this repo's actual double-wrap chain
+// ("failed to open driver: %w" wrapping scrapligo's own wrap).
+func looksLikeHostKeyVerificationFailure(err error) bool {
+	return errors.Is(err, scrapliutil.ErrConnectionError) &&
+		strings.Contains(strings.ToLower(err.Error()), "host key verification failed")
+}
+
+// findBoundEntries scans file for every line currently bound to host,
+// regardless of what key it holds — reusing lineBindsHostToKey by testing
+// each line against its own parsed key. Deliberately does not duplicate
+// ReplaceEntry's marker/wildcard/shared-host safety checks: a bound
+// wildcard or @cert-authority line still correctly signals "an entry
+// currently claims to trust this host" (reported as a genuine mismatch),
+// and ReplaceEntry's existing, unchanged revalidation will still correctly
+// refuse to auto-rewrite that specific line, forcing a manual edit.
+func findBoundEntries(file, host string) (lines []int, keys []ssh.PublicKey, err error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, raw := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		_, _, key, _, _, perr := ssh.ParseKnownHosts([]byte(raw + "\n"))
+		if perr != nil {
+			continue // comment/malformed — not a candidate entry
+		}
+		bound, berr := lineBindsHostToKey(raw, host, key)
+		if berr != nil || !bound {
+			continue
+		}
+		lines = append(lines, i+1)
+		keys = append(keys, key)
+	}
+	return lines, keys, nil
 }
 
 type byStaleLine Mismatch

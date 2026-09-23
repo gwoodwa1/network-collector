@@ -12,9 +12,21 @@ import (
 	"testing"
 	"time"
 
+	scrapliutil "github.com/scrapli/scrapligo/util"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+// realisticHostKeyVerificationError builds an error shaped exactly like what
+// this repo's connect path actually produces in production: scrapligo's
+// "system" transport (shelling out to the real OS ssh binary) surfaces a
+// host-key failure as util.ErrConnectionError wrapping a fixed
+// "host key verification failed" message, itself wrapped by
+// pkg/drivers/ssh.Client.connectWithProfile's "failed to open driver: %w".
+func realisticHostKeyVerificationError() error {
+	inner := fmt.Errorf("%w: encountered error output during in channel ssh authentication, error: 'host key verification failed'", scrapliutil.ErrConnectionError)
+	return fmt.Errorf("failed to open driver: %w", inner)
+}
 
 func generateTestKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 	t.Helper()
@@ -33,36 +45,105 @@ func generateTestKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 	return signer, sshPub
 }
 
+// stubKnownHostsFilesResolver points KnownHostsFilesResolver at files for
+// the duration of the calling test, restoring the original on cleanup.
+func stubKnownHostsFilesResolver(t *testing.T, files []string, err error) {
+	t.Helper()
+	original := KnownHostsFilesResolver
+	KnownHostsFilesResolver = func() ([]string, error) { return files, err }
+	t.Cleanup(func() { KnownHostsFilesResolver = original })
+}
+
 func TestClassifyConnectErrorIgnoresUnknownKeyAndOtherFailures(t *testing.T) {
 	if got := ClassifyConnectError("host1", fmt.Errorf("connection refused")); got != nil {
 		t.Fatalf("expected nil for a non-host-key error, got %+v", got)
 	}
-	// Want empty means "host is unknown", not a mismatch — see KeyError's own doc comment.
-	unknown := fmt.Errorf("failed to open driver: %w", &knownhosts.KeyError{})
-	if got := ClassifyConnectError("host1", unknown); got != nil {
-		t.Fatalf("expected nil for an unknown-key (Want empty) error, got %+v", got)
+
+	// A real host-key-verification-failed error, but known_hosts has no
+	// entry at all for the host — a genuinely unknown host, not a mismatch.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "known_hosts")
+	_, otherKey := generateTestKey(t)
+	if err := os.WriteFile(file, []byte(knownhosts.Line([]string{"some-other-host"}, otherKey)+"\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	stubKnownHostsFilesResolver(t, []string{file}, nil)
+	if got := ClassifyConnectError("host1", realisticHostKeyVerificationError()); got != nil {
+		t.Fatalf("expected nil when known_hosts has no entry for the host, got %+v", got)
+	}
+}
+
+func TestClassifyConnectErrorReturnsNilWhenKnownHostsFilesResolverFails(t *testing.T) {
+	stubKnownHostsFilesResolver(t, nil, fmt.Errorf("simulated resolver failure"))
+	if got := ClassifyConnectError("host1", realisticHostKeyVerificationError()); got != nil {
+		t.Fatalf("expected nil when the known_hosts files can't be resolved, got %+v", got)
+	}
+}
+
+// TestClassifyConnectErrorFindsAMismatchInAGlobalKnownHostsFile is the
+// regression test for the case scrapligo's "system" transport creates: it
+// only ever overrides UserKnownHostsFile via -o (see
+// KnownHostsFilesResolver's doc comment), so a stale entry that exists only
+// in a global known_hosts file (e.g. /etc/ssh/ssh_known_hosts) — not the
+// user's own ~/.ssh/known_hosts — is still something the real ssh
+// subprocess would flag, and classification must not miss it just because
+// the user file (checked first) has no entry for the host at all.
+func TestClassifyConnectErrorFindsAMismatchInAGlobalKnownHostsFile(t *testing.T) {
+	dir := t.TempDir()
+	userFile := filepath.Join(dir, "known_hosts")
+	globalFile := filepath.Join(dir, "ssh_known_hosts")
+
+	_, unrelatedKey := generateTestKey(t)
+	if err := os.WriteFile(userFile, []byte(knownhosts.Line([]string{"some-other-host"}, unrelatedKey)+"\n"), 0o600); err != nil {
+		t.Fatalf("write user known_hosts fixture: %v", err)
+	}
+	_, staleKey := generateTestKey(t)
+	if err := os.WriteFile(globalFile, []byte(knownhosts.Line([]string{"router1"}, staleKey)+"\n"), 0o644); err != nil {
+		t.Fatalf("write global known_hosts fixture: %v", err)
+	}
+	stubKnownHostsFilesResolver(t, []string{userFile, globalFile}, nil)
+
+	m := ClassifyConnectError("router1", realisticHostKeyVerificationError())
+	if m == nil {
+		t.Fatal("expected a mismatch to be found in the global known_hosts file")
+	}
+	if m.File != globalFile {
+		t.Fatalf("expected the mismatch to point at the global file %s, got %s", globalFile, m.File)
+	}
+	if len(m.StaleLines) != 1 || m.StaleLines[0] != 1 {
+		t.Fatalf("expected a single stale line 1, got %v", m.StaleLines)
+	}
+	if !bytes.Equal(m.OldKeys[0].Marshal(), staleKey.Marshal()) {
+		t.Fatal("expected OldKeys to hold the global file's stale key")
 	}
 }
 
 func TestClassifyConnectErrorExtractsAMismatch(t *testing.T) {
 	_, key1 := generateTestKey(t)
 	_, key2 := generateTestKey(t)
-	keyErr := &knownhosts.KeyError{Want: []knownhosts.KnownKey{
-		{Key: key1, Filename: "/home/op/.ssh/known_hosts", Line: 3},
-		{Key: key2, Filename: "/home/op/.ssh/known_hosts", Line: 7},
-	}}
-	// Wrapped the same way the real chain wraps it: driver.Open -> "ssh: handshake failed" -> KeyError.
-	wrapped := fmt.Errorf("failed to open driver: %w", fmt.Errorf("ssh: handshake failed: %w", keyErr))
 
-	m := ClassifyConnectError("router1", wrapped)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "known_hosts")
+	// Line 1 (kept), line 2 (stale, key1), line 3 (kept), line 4 (stale, key2).
+	_, keepKey := generateTestKey(t)
+	content := knownhosts.Line([]string{"unrelated-host"}, keepKey) + "\n" +
+		knownhosts.Line([]string{"router1"}, key1) + "\n" +
+		knownhosts.Line([]string{"unrelated-host-2"}, keepKey) + "\n" +
+		knownhosts.Line([]string{"router1"}, key2) + "\n"
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	stubKnownHostsFilesResolver(t, []string{file}, nil)
+
+	m := ClassifyConnectError("router1", realisticHostKeyVerificationError())
 	if m == nil {
 		t.Fatal("expected a non-nil Mismatch")
 	}
-	if m.Host != "router1" || m.File != "/home/op/.ssh/known_hosts" {
+	if m.Host != "router1" || m.File != file {
 		t.Fatalf("unexpected Host/File: %+v", m)
 	}
-	if len(m.StaleLines) != 2 || m.StaleLines[0] != 7 || m.StaleLines[1] != 3 {
-		t.Fatalf("expected stale lines in descending order [7 3], got %v", m.StaleLines)
+	if len(m.StaleLines) != 2 || m.StaleLines[0] != 4 || m.StaleLines[1] != 2 {
+		t.Fatalf("expected stale lines in descending order [4 2], got %v", m.StaleLines)
 	}
 	if !bytes.Equal(m.OldKeys[0].Marshal(), key2.Marshal()) || !bytes.Equal(m.OldKeys[1].Marshal(), key1.Marshal()) {
 		t.Fatal("expected OldKeys to stay paired with their StaleLines entry after the descending sort")

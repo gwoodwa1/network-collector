@@ -1,12 +1,14 @@
 package ssh
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gwoodwa1/network-collector/pkg/drivers/hostkey"
@@ -26,6 +28,7 @@ type Client struct {
 	channelLog      io.Writer
 	socketTimeout   time.Duration
 	opsTimeout      time.Duration
+	port            int
 	securityProfile string
 	hostKeyPolicy   string
 	knownHostsFile  string
@@ -155,6 +158,21 @@ func WithConnectionTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithPort overrides the SSH port scrapligo's transport connects to
+// (default: 22). Only needed for a non-standard port — e.g. a test SSH
+// server bound to an ephemeral port, since the real endpoints this client
+// normally connects to are always on their fleet's standard port.
+func WithPort(port int) Option {
+	return func(c *Client) {
+		if c == nil {
+			return
+		}
+		if port > 0 {
+			c.port = port
+		}
+	}
+}
+
 func WithOperationTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
 		if c == nil {
@@ -264,16 +282,117 @@ func closeAfterFailedOpen(driver *network.Driver) {
 	_ = driver.Close()
 }
 
+// maxCaptureBytes bounds how much connect-setup output
+// channelDiagnosticCapture retains while active. It only ever needs to hold
+// a short diagnostic line (see recoverRacedChannelDiagnostic) — this is
+// generous headroom for that, not a tight fit — but without a bound, a
+// device with an unusually large pre-auth banner/MOTD, or one that simply
+// floods output before authentication, could otherwise grow this without
+// limit during the setup window even though growth after setup (stop()) is
+// already capped at zero.
+const maxCaptureBytes = 64 * 1024
+
+// channelDiagnosticCapture mirrors every byte scrapligo's channel reader
+// logs during a single connect attempt, independent of whatever destination
+// the caller configured via WithChannelLog (which may be io.Discard). It
+// exists to recover a specific scrapligo race, documented on
+// connectWithProfile's diagnostic-recovery step below: the channel log
+// write happens synchronously as each chunk is read, strictly before that
+// chunk could ever be lost to the race, so this capture is a reliable
+// independent source of truth even when scrapligo's own returned error text
+// isn't.
+//
+// The io.Writer wiring it's installed under (options.WithChannelLog) stays
+// attached to the driver's channel for the life of the whole SSH session,
+// not just the connect attempt — scrapligo has no "log this only during
+// Open()" mode. Without stop(), every command response for a long-running
+// monitor session would keep accumulating in here forever, an unbounded
+// buffer for the process's entire lifetime. stop() is called once Open()
+// returns (success or failure) and makes every write after that a no-op, so
+// growth stops there while the caller's own channel log — wired in
+// alongside this one via io.MultiWriter, never through it — keeps receiving
+// output for as long as the session lasts, exactly as before. Safe for
+// concurrent use: scrapligo's channel reader writes from its own goroutine,
+// which can still be mid-write when connectWithProfile calls stop() the
+// moment Open() returns.
+type channelDiagnosticCapture struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	active bool
+}
+
+func newChannelDiagnosticCapture() *channelDiagnosticCapture {
+	return &channelDiagnosticCapture{active: true}
+}
+
+func (c *channelDiagnosticCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.active {
+		c.buf.Write(p)
+		if excess := c.buf.Len() - maxCaptureBytes; excess > 0 {
+			// Rebuild into a fresh buffer holding only the most recent
+			// maxCaptureBytes, rather than trimming c.buf in place: the
+			// diagnostic this capture exists to recover is always the last
+			// thing written before the connection dies (see
+			// recoverRacedChannelDiagnostic), so keeping the tail preserves
+			// it even behind an oversized banner/MOTD, where keeping the
+			// head would risk losing exactly the part that matters. A
+			// rebuild is also what actually keeps Cap() bounded, not just
+			// Len(): bytes.Buffer's own growth strategy doesn't shrink its
+			// backing array back down after trimming from the front
+			// (Buffer.Next), so that alone would still leave the array
+			// sized to whatever the largest single write happened to be —
+			// a multiple of maxCaptureBytes, not maxCaptureBytes itself.
+			tail := append([]byte(nil), c.buf.Bytes()[excess:]...)
+			c.buf = bytes.Buffer{}
+			c.buf.Write(tail)
+		}
+	}
+	return len(p), nil
+}
+
+// stop detaches the capture: every write after this becomes a no-op, and
+// whatever was already buffered is released. Assigning a zero-value Buffer
+// (rather than calling Reset, which only zeroes length and keeps the
+// existing backing array allocated) drops the reference to that array so
+// its memory — up to maxCaptureBytes, for the life of a session that could
+// otherwise run for days — is actually reclaimable instead of sitting
+// pinned, unused, for as long as the driver this capture is wired into
+// stays open. Idempotent.
+func (c *channelDiagnosticCapture) stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.active = false
+	c.buf = bytes.Buffer{}
+}
+
+func (c *channelDiagnosticCapture) bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.buf.Bytes()...)
+}
+
 func (c *Client) connectWithProfile(host, username, password, driverName, profile, hostKeyPolicy string) error {
+	callerChannelLog := c.channelLog
+	if callerChannelLog == nil {
+		callerChannelLog = io.Discard
+	}
+	capture := newChannelDiagnosticCapture()
+	defer capture.stop()
+
 	platformOptions := []util.Option{
 		options.WithAuthUsername(username),
 		options.WithAuthPassword(password),
 		options.WithTimeoutSocket(c.socketTimeout),
 		options.WithTimeoutOps(c.opsTimeout),
-		options.WithChannelLog(c.channelLog),
+		options.WithChannelLog(io.MultiWriter(callerChannelLog, capture)),
 	}
 	if c.passwordPattern != nil {
 		platformOptions = append(platformOptions, options.WithPasswordPattern(c.passwordPattern))
+	}
+	if c.port > 0 {
+		platformOptions = append(platformOptions, options.WithPort(c.port))
 	}
 	hostPolicy, err := hostkey.New(hostKeyPolicy, c.knownHostsFile)
 	if err != nil {
@@ -308,7 +427,7 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 
 	if err := driver.Open(); err != nil {
 		closeAfterFailedOpen(driver)
-		return fmt.Errorf("failed to open driver: %w", err)
+		return fmt.Errorf("failed to open driver: %w", recoverRacedChannelDiagnostic(err, capture.bytes()))
 	}
 
 	c.driverName = driverName
@@ -317,6 +436,42 @@ func (c *Client) connectWithProfile(host, username, password, driverName, profil
 	c.network = &scrapligoSSHSession{driver: driver}
 	c.selectedProfile = profile
 	return nil
+}
+
+// recoverRacedChannelDiagnostic works around a race in scrapligo v1.4.1's
+// channel reader (channel/read.go's Read/ReadAll): both check whether the
+// read loop has already exited (readDone closed, e.g. because the real ssh
+// subprocess exited right after printing its final diagnostic line and its
+// pty closed) *before* draining whatever is still sitting in the queue from
+// that same final read — so a message like "Host key verification failed."
+// can be enqueued and logged, and then never handed to scrapligo's own
+// sshMessageHandler, which instead returns a bare, textless
+// util.ErrConnectionError. Downstream classification (see
+// pkg/drivers/hostkey.ClassifyConnectError) depends on that text to tell a
+// genuine host-key mismatch apart from an unrelated connection failure, so
+// losing it silently sends every raced mismatch down the generic
+// credential-retry path instead of the mismatch-confirmation flow.
+//
+// captured is the same bytes scrapligo's channel logger wrote, captured
+// synchronously as each chunk was read — strictly before the specific
+// iteration that can close readDone and trigger the race above — so it
+// still has the diagnostic even when err's own text has lost it. This only
+// ever *adds* text recovered verbatim from that capture; it never invents a
+// diagnosis err doesn't already carry independent evidence for elsewhere,
+// so a genuinely unrelated connection error (timeout, refused, no route)
+// is never reclassified as a host-key failure.
+func recoverRacedChannelDiagnostic(err error, captured []byte) error {
+	if err == nil {
+		return nil
+	}
+	const marker = "host key verification failed"
+	if strings.Contains(strings.ToLower(err.Error()), marker) {
+		return err // scrapligo's own error already carries the diagnostic
+	}
+	if !strings.Contains(strings.ToLower(string(captured)), marker) {
+		return err // nothing to recover
+	}
+	return fmt.Errorf("%w: host key verification failed (recovered from channel output after a race dropped it from the driver error)", err)
 }
 
 func (c *Client) Execute(cmd string) (string, error) {
