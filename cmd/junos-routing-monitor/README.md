@@ -166,6 +166,19 @@ reuse](#passcode-reuse)) regardless of `--devices`. After the file is
 processed you're dropped into the normal interactive prompt to add any
 further ad hoc devices, or just hit Enter immediately to start polling.
 
+**A device checklist is printed before onboarding starts** — every hostname
+from the file, all pending — and reprinted in full after each device's
+outcome (connected, failed, or skipped as a duplicate), so on a long device
+list you always see progress against the whole fleet, not just whichever
+device is connecting right now:
+
+```
+--- Device checklist (3 total, 2 connected, 1 failed, 0 skipped, 0 pending) ---
+  [x] pe-router-1  connected
+  [x] pe-router-2  connected
+  [!] pe-router-3  failed: dial tcp: i/o timeout
+```
+
 The document's optional top-level `interval` field sets the default polling
 interval for the run (same duration syntax as `--interval`), so it can live
 alongside the device list instead of being retyped on the command line each
@@ -276,6 +289,44 @@ the retry. If you're not confident the mistake was yours rather than the
 device's, decline the retry, take a breath, confirm your credentials, and
 deliberately re-enter that hostname at the next onboarding prompt (or
 re-run the tool) rather than retrying blind.
+
+### SSH host key mismatches
+
+Unlike an *unknown* host key (the device just isn't in `known_hosts` yet —
+see [Things to know before a live change window](#things-to-know-before-a-live-change-window)),
+a genuine *mismatch* means the key saved in `known_hosts` no longer matches
+what the device presents — it could mean the box was reimaged or replaced,
+or it could mean something is intercepting the connection. This tool
+recognizes the difference and never treats a mismatch as an ordinary
+connection failure or offers it through the routine `Retry credentials?`
+prompt — it always shows its own explicit warning first:
+
+```
+*** SSH HOST KEY MISMATCH for pe-router-1 ***
+The key saved in /home/you/.ssh/known_hosts no longer matches what pe-router-1 just presented.
+This can mean the device was reimaged or replaced — or it can mean someone is intercepting this connection. Verify the device's real key out-of-band (console, vendor docs, change record) before continuing.
+  saved key:     SHA256:...
+Type REPLACE to fetch the key it's presenting right now and compare, or press Enter to abort:
+```
+
+Pressing Enter aborts without touching anything. Typing the literal word
+`REPLACE` (not just `y`) independently fetches the key the device is
+presenting *right now* — the same way `ssh-keyscan` does, a separate dial
+that never authenticates — and shows its fingerprint too:
+
+```
+  presented key: SHA256:...
+Trust this key and update /home/you/.ssh/known_hosts? [y/N]:
+```
+
+Only on that second, separate confirmation does it rewrite the one stale
+line in `known_hosts` and immediately retry the connection with the exact
+same credentials you already entered — no re-prompt. Compare both
+fingerprints against an out-of-band source (console access, vendor docs, a
+change record) before typing `y`; this tool has no way to know on its own
+whether a changed key is a legitimate device replacement or something
+worse. Declining either step leaves `known_hosts` untouched and skips the
+device, same as any other failed connection.
 
 ## What gets collected
 
@@ -537,6 +588,15 @@ credentials are never written to it. The filename is
 
 ## Things to know before a live change window
 
+- **Pre-populate `known_hosts` for every device.** SSH host-key checking is
+  strict by default (no auto-trust-on-first-connect): a device this tool
+  has never connected to from this account will fail with `knownhosts: key
+  is unknown` unless its key is already in `~/.ssh/known_hosts`. Before the
+  window, either `ssh` to each device once manually, or run
+  `ssh-keyscan <hostname> >> ~/.ssh/known_hosts` for the whole device list —
+  don't find this out for the first time mid-window. See [SSH host key
+  mismatches](#ssh-host-key-mismatches) for what happens if a key
+  genuinely changes.
 - **CLI session timeout**: if `--interval` is set longer than the device's
   configured idle-timeout, the router — not this tool — will drop the
   session for inactivity between ticks. Keep the interval comfortably below

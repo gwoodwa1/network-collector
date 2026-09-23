@@ -2,11 +2,21 @@ package xrmonitor
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // fakeSessionExecutor is a no-op sessionExecutor for onboarding tests that
@@ -289,6 +299,64 @@ func TestOnboardDevicesFromSpecsClaimsHostnameOnSuccessfulConnect(t *testing.T) 
 	}
 }
 
+// captureStderr temporarily redirects the real os.Stderr to a pipe for the
+// duration of fn, returning everything written to it. OnboardDevicesFromSpecs
+// (like the rest of onboarding) writes straight to os.Stderr rather than an
+// injectable io.Writer, so this is the only way to assert on that output.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	real := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = real }()
+
+	fn()
+
+	w.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read captured stderr: %v", err)
+	}
+	return buf.String()
+}
+
+// TestOnboardDevicesFromSpecsPrintsALiveUpdatingChecklist proves the full
+// device checklist (from the --devices file, before any connection is
+// attempted) is printed up front, and reprinted with each device's real
+// outcome as onboarding proceeds — so an operator watching a long run
+// always sees progress against the whole fleet, not just whichever device
+// is connecting right now.
+func TestOnboardDevicesFromSpecsPrintsALiveUpdatingChecklist(t *testing.T) {
+	registry := monitorsetup.NewHostnameRegistry()
+	connect := func(reader *bufio.Reader, host, deviceType string, cache *monitorsetup.CredentialCache) (sessionExecutor, error) {
+		if host == "router-bad" {
+			return nil, fmt.Errorf("simulated connect failure")
+		}
+		return fakeSessionExecutor{}, nil
+	}
+	specs := []DeviceSpec{{Hostname: "router-good"}, {Hostname: "router-bad"}}
+
+	output := captureStderr(t, func() {
+		OnboardDevicesFromSpecs(bufio.NewReader(strings.NewReader("")), specs, "cisco_iosxr", monitorsetup.NewCredentialCache(0), registry, connect, map[string]ParserModule{}, "", defaultExcludeInterfacePrefixes, defaultSpec, defaultHubTopInterfaces)
+	})
+
+	if !strings.Contains(output, "2 total, 0 connected, 0 failed, 0 skipped, 2 pending") {
+		t.Fatalf("expected an initial all-pending checklist printed up front, got:\n%s", output)
+	}
+	if !strings.Contains(output, "2 total, 1 connected, 1 failed, 0 skipped, 0 pending") {
+		t.Fatalf("expected a final checklist reprint summarizing both outcomes, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[x] router-good") {
+		t.Fatalf("expected router-good marked connected in a later checklist reprint, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[!] router-bad") || !strings.Contains(output, "failed: simulated connect failure") {
+		t.Fatalf("expected router-bad marked failed with its error in a later checklist reprint, got:\n%s", output)
+	}
+}
+
 // TestOnboardDevicesFromSpecsSkipsHostnameAlreadyClaimedElsewhere covers a
 // different case than the within-file duplicate test above: a hostname
 // claimed by a prior pass entirely (e.g. OnboardDevices ran first and
@@ -478,6 +546,218 @@ func TestConnectWithRetryDefaultsToNoOnBlankAnswer(t *testing.T) {
 	}
 	if dialCalls != 1 {
 		t.Fatalf("expected exactly 1 dial attempt when the retry prompt defaults to no, got %d", dialCalls)
+	}
+}
+
+// TestOnboardingRecoversFromFatFingeredUsernameAcrossDevices is a regression
+// test for a real incident: mid-run, an operator fat-fingered a fresh RSA
+// passcode into the username prompt for one device (entrcn-bpe-1a in the
+// real transcript), declined the retry, and the very next device then
+// offered that garbage value ("91896774") as its username default — one
+// mistake cascading forward instead of staying confined to the device it
+// happened on. This walks through the exact three-device shape of that
+// incident (good device, fat-fingered device, next device) using the real
+// connectWithRetry + CredentialCache, the same objects
+// OnboardDevicesFromSpecs shares across every device in a --devices run.
+func TestOnboardingRecoversFromFatFingeredUsernameAcrossDevices(t *testing.T) {
+	cache := monitorsetup.NewCredentialCache(0) // isolate from the separate passcode-reuse-window feature
+
+	// Device 1: entered correctly, connects successfully.
+	dial1 := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		if username != "mretz1" || password != "goodpasscode1" {
+			t.Fatalf("device 1: unexpected credentials %q/%q", username, password)
+		}
+		return fakeSessionExecutor{}, nil
+	}
+	reader1 := bufio.NewReader(strings.NewReader("mretz1\ngoodpasscode1\n"))
+	if _, err := connectWithRetry(reader1, "entell-bpe-1a", "cisco_iosxr", cache, dial1); err != nil {
+		t.Fatalf("device 1: unexpected error: %v", err)
+	}
+
+	// Device 2: the operator fat-fingers a fresh RSA passcode into the
+	// username prompt (instead of pressing Enter to keep "mretz1"), the
+	// connection fails, and they decline the retry ("n").
+	dial2 := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		return nil, fmt.Errorf("errAuthError: password prompt seen multiple times, assuming authentication failed")
+	}
+	reader2 := bufio.NewReader(strings.NewReader("91896774\n\nn\n"))
+	if _, err := connectWithRetry(reader2, "entrcn-bpe-1a", "cisco_iosxr", cache, dial2); err == nil {
+		t.Fatal("device 2: expected an error (operator declined the retry)")
+	}
+
+	// Device 3: must default to "mretz1" (the last username that actually
+	// authenticated), never "91896774" (the fat-fingered value from device
+	// 2, which never connected).
+	var device3User string
+	dial3 := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		device3User = username
+		return fakeSessionExecutor{}, nil
+	}
+	// Blank line accepts the offered default.
+	reader3 := bufio.NewReader(strings.NewReader("\ngoodpasscode3\n"))
+	if _, err := connectWithRetry(reader3, "entsov-bpe-1a", "cisco_iosxr", cache, dial3); err != nil {
+		t.Fatalf("device 3: unexpected error: %v", err)
+	}
+	if device3User != "mretz1" {
+		t.Fatalf("device 3: expected the default username to stay %q, got poisoned value %q", "mretz1", device3User)
+	}
+}
+
+func generateHostKeyTestKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer from key: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("public key: %v", err)
+	}
+	return signer, sshPub
+}
+
+// startFakeSSHServer spins up a minimal local SSH server presenting
+// hostKey, purely so hostkey.FetchPresentedKey (called for real by
+// connectWithRetry, not injected) has something real to dial during the
+// key-refresh flow below. It never completes authentication.
+func startFakeSSHServer(t *testing.T) (addr string) {
+	t.Helper()
+	signer, pub := generateHostKeyTestKey(t)
+	_ = pub
+
+	config := &ssh.ServerConfig{
+		PasswordCallback: func(_ ssh.ConnMetadata, _ []byte) (*ssh.Permissions, error) {
+			return nil, fmt.Errorf("password auth not supported by this test server")
+		},
+	}
+	config.AddHostKey(signer)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _, _, _ = ssh.NewServerConn(c, config)
+			}(conn)
+		}
+	}()
+	return listener.Addr().String()
+}
+
+// TestConnectWithRetryDeclinesHostKeyMismatchWithoutTouchingCredentialCache
+// proves a host-key mismatch never reaches promptRetryConnection/
+// cache.RecordFailure — it's routed to its own confirmation flow (see
+// PromptHostKeyMismatch), and declining it (not typing REPLACE, so no real
+// network dial ever happens) ends the attempt cleanly, leaving a
+// pre-existing valid cached credential untouched and never printing the
+// unrelated "Retry credentials?" prompt.
+func TestConnectWithRetryDeclinesHostKeyMismatchWithoutTouchingCredentialCache(t *testing.T) {
+	_, staleKey := generateHostKeyTestKey(t)
+	dialCalls := 0
+	dial := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		dialCalls++
+		keyErr := &knownhosts.KeyError{Want: []knownhosts.KnownKey{{Key: staleKey, Filename: "/home/op/.ssh/known_hosts", Line: 3}}}
+		return nil, fmt.Errorf("failed to open driver: %w", fmt.Errorf("ssh: handshake failed: %w", keyErr))
+	}
+
+	cache := monitorsetup.NewCredentialCache(45 * time.Second)
+	cache.RecordSuccess("mretz1", "goodpass") // pre-existing valid cache entry
+
+	// Accept the reuse offer ("y") — declining it invalidates the cache on
+	// its own (existing, unrelated behavior), which would make this test
+	// unable to isolate whether the *mismatch* decline path is the thing
+	// leaving the cache untouched. Then decline the mismatch's REPLACE
+	// prompt (blank line).
+	reader := bufio.NewReader(strings.NewReader("y\n\n"))
+	var connErr error
+	output := captureStderr(t, func() {
+		_, connErr = connectWithRetry(reader, "host1", "cisco_iosxr", cache, dial)
+	})
+	if connErr == nil {
+		t.Fatal("expected an error when the operator declines to refresh the mismatched host key")
+	}
+	if dialCalls != 1 {
+		t.Fatalf("expected exactly 1 dial attempt (no retry after declining), got %d", dialCalls)
+	}
+	if strings.Contains(output, "Retry credentials") {
+		t.Fatalf("expected the unrelated credential-retry prompt to never be shown for a host-key mismatch, got:\n%s", output)
+	}
+
+	// cache.valid() is unexported, so prove the passcode-reuse cache
+	// survived behaviorally instead: a second device sharing this cache
+	// must still be offered reuse (only possible while capturedAt is still
+	// set and within Window — RecordFailure would have zeroed it).
+	succeedDial := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		return fakeSessionExecutor{}, nil
+	}
+	reader2 := bufio.NewReader(strings.NewReader("y\n"))
+	output2 := captureStderr(t, func() {
+		_, _ = connectWithRetry(reader2, "host2", "cisco_iosxr", cache, succeedDial)
+	})
+	if !strings.Contains(output2, "Reuse cached passcode") {
+		t.Fatalf("expected the cache to still offer reuse for the next device, got:\n%s", output2)
+	}
+}
+
+// TestConnectWithRetryRefreshesHostKeyAndRetriesWithSameCredentials is the
+// full end-to-end happy path through the real (non-injected) wiring in
+// connectWithRetry: a mismatch is detected, the operator confirms REPLACE
+// and y, hostkey.FetchPresentedKey dials a real (fake) SSH server to fetch
+// its current key, known_hosts is rewritten, and the connection is retried
+// with the exact same credentials that were typed once — no second
+// credential prompt.
+func TestConnectWithRetryRefreshesHostKeyAndRetriesWithSameCredentials(t *testing.T) {
+	addr := startFakeSSHServer(t)
+	_, staleKey := generateHostKeyTestKey(t)
+
+	dir := t.TempDir()
+	knownHostsFile := filepath.Join(dir, "known_hosts")
+	content := knownhosts.Line([]string{addr}, staleKey) + "\n"
+	if err := os.WriteFile(knownHostsFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write known_hosts fixture: %v", err)
+	}
+
+	var dialUsers []string
+	dial := func(host, username, password, deviceType string) (sessionExecutor, error) {
+		dialUsers = append(dialUsers, username+"/"+password)
+		if len(dialUsers) == 1 {
+			keyErr := &knownhosts.KeyError{Want: []knownhosts.KnownKey{{Key: staleKey, Filename: knownHostsFile, Line: 1}}}
+			return nil, fmt.Errorf("failed to open driver: %w", fmt.Errorf("ssh: handshake failed: %w", keyErr))
+		}
+		return fakeSessionExecutor{}, nil
+	}
+
+	cache := monitorsetup.NewCredentialCache(0)
+	reader := bufio.NewReader(strings.NewReader("mretz1\ngoodpass\nREPLACE\ny\n"))
+	client, err := connectWithRetry(reader, addr, "cisco_iosxr", cache, dial)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected a non-nil client after the key refresh succeeds")
+	}
+	if len(dialUsers) != 2 || dialUsers[0] != "mretz1/goodpass" || dialUsers[1] != "mretz1/goodpass" {
+		t.Fatalf("expected both dial attempts to use the same credentials with no re-prompt, got %v", dialUsers)
+	}
+
+	got, err := os.ReadFile(knownHostsFile)
+	if err != nil {
+		t.Fatalf("read known_hosts: %v", err)
+	}
+	if strings.Contains(string(got), knownhosts.Line([]string{addr}, staleKey)) {
+		t.Fatal("expected the stale entry to be replaced")
 	}
 }
 

@@ -4,9 +4,20 @@ All notable changes to Network Collector are documented here.
 
 ## [Unreleased]
 
+- Keep cross-device username defaults tied to successful monitor connections;
+  failed attempts retain their username only for retries on the same device.
+- Add a separate SSH host-key mismatch confirmation flow during monitor
+  onboarding, with fingerprint display, explicit replacement consent, and
+  atomic known_hosts updates that revalidate the stale host/key binding and
+  refuse shared, wildcard, or marked entries. Declined refreshes preserve
+  cached credentials; confirmed refreshes retry with the same credentials.
+- Show an append-only device checklist throughout YAML-driven onboarding,
+  with independent outcomes for duplicate device-list entries.
+
 - Added operator-confirmed credential retries to IOS-XR, Junos, and
   mixed-fleet monitor onboarding and TACACS reauthentication. Each failed
-  SSH attempt clears cached passcodes and prompts again with a default of
+  SSH attempt other than an onboarding host-key mismatch clears cached
+  passcodes and prompts again with a default of
   no; confirmed retries preserve onboarding context and the username default.
 
 ## [2.0.2]

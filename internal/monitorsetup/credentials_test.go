@@ -52,7 +52,7 @@ func TestResolveCredentialsReusePromptHandlesNoVariants(t *testing.T) {
 		t.Run(tc.answer, func(t *testing.T) {
 			cache := &CredentialCache{username: "cached-user", password: "cached-pass", capturedAt: time.Now(), Window: 45 * time.Second}
 			reader := bufio.NewReader(strings.NewReader(tc.answer + "bobuser\nbobpass\n"))
-			username, _, fresh, err := ResolveCredentials(reader, cache)
+			username, _, fresh, err := ResolveCredentials(reader, cache, "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -91,33 +91,64 @@ func TestCredentialCacheRecordSuccessOnNilIsNoop(t *testing.T) {
 	cache.RecordFailure()                  // must not panic
 }
 
-// TestResolveCredentialsKeepsUsernameAcrossAnExpiredPasscode covers the
-// actual multi-device scenario this is for: an RSA passcode expires or gets
-// rejected partway through a run (RecordFailure), and the operator is
-// prompted again for the next device. They should be able to keep the same
-// username by pressing Enter and only have to type a fresh passcode —
-// disabling reuse (Window: 0) isolates this from the separate
-// full-credential-reuse prompt covered above.
-func TestResolveCredentialsKeepsUsernameAcrossAnExpiredPasscode(t *testing.T) {
+// TestResolveCredentialsKeepsUsernameAfterASuccessfulConnection covers the
+// actual multi-device scenario this is for: device 1 connects successfully,
+// then device 2's passcode is rejected or has expired (RecordFailure). The
+// next prompt should still default to "alice" (via RecordSuccess), so the
+// operator only has to press Enter and type a fresh passcode. Window: 0
+// disables the separate full-credential-reuse prompt so this isolates just
+// the username-stickiness behavior.
+func TestResolveCredentialsKeepsUsernameAfterASuccessfulConnection(t *testing.T) {
 	cache := NewCredentialCache(0)
 
 	reader := bufio.NewReader(strings.NewReader("alice\nfirstpasscode\n"))
-	username, password, fresh, err := ResolveCredentials(reader, cache)
+	username, password, fresh, err := ResolveCredentials(reader, cache, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !fresh || username != "alice" || password != "firstpasscode" {
 		t.Fatalf("unexpected first prompt result: fresh=%v username=%q password=%q", fresh, username, password)
 	}
-	cache.RecordFailure() // e.g. the passcode was rejected as expired
+	cache.RecordSuccess(username, password) // device 1 actually connected
+	cache.RecordFailure()                   // device 2's passcode was rejected as expired
 
-	// The operator presses Enter to keep "alice" and types a new passcode.
+	// A blank line accepts the offered default ("alice"); only the passcode
+	// needs to be typed for real.
 	reader2 := bufio.NewReader(strings.NewReader("\nnewpasscode\n"))
-	username2, password2, fresh2, err := ResolveCredentials(reader2, cache)
+	username2, password2, fresh2, err := ResolveCredentials(reader2, cache, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !fresh2 || username2 != "alice" || password2 != "newpasscode" {
 		t.Fatalf("unexpected second prompt result: fresh=%v username=%q password=%q", fresh2, username2, password2)
+	}
+}
+
+// TestResolveCredentialsDoesNotStickAUsernameThatNeverConnected guards the
+// regression this was written for: an operator mistakenly types a passcode
+// into the username field (the read succeeds — it's just text — but the
+// device connection then fails). That bad value must never be offered as
+// the default on the next device; only a username that actually
+// authenticated (RecordSuccess) gets remembered.
+func TestResolveCredentialsDoesNotStickAUsernameThatNeverConnected(t *testing.T) {
+	cache := NewCredentialCache(0)
+
+	reader := bufio.NewReader(strings.NewReader("91896774\n\n"))
+	username, _, fresh, err := ResolveCredentials(reader, cache, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fresh || username != "91896774" {
+		t.Fatalf("unexpected first prompt result: fresh=%v username=%q", fresh, username)
+	}
+	cache.RecordFailure() // the device connection failed with that bad username
+
+	reader2 := bufio.NewReader(strings.NewReader("mretz1\ngoodpasscode\n"))
+	username2, _, _, err := ResolveCredentials(reader2, cache, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if username2 != "mretz1" {
+		t.Fatalf("expected a fresh username prompt with no poisoned default, got %q", username2)
 	}
 }

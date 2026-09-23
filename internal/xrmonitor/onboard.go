@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
+	"github.com/gwoodwa1/network-collector/pkg/drivers/hostkey"
 )
 
 // sessionExecutor is the subset of *xrSSHClient that polling and onboarding
@@ -174,13 +175,24 @@ func ConnectDevice(reader *bufio.Reader, host, deviceType string, cache *monitor
 // retry-prompt loop against dial, so it can be exercised in tests without a
 // real SSH connection — ConnectDevice wires in the real ConnectXRDevice.
 func connectWithRetry(reader *bufio.Reader, host, deviceType string, cache *monitorsetup.CredentialCache, dial func(host, username, password, deviceType string) (sessionExecutor, error)) (sessionExecutor, error) {
+	var retryUsername string
 	for {
-		username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache)
+		username, password, fresh, err := monitorsetup.ResolveCredentials(reader, cache, retryUsername)
 		if err != nil {
 			return nil, fmt.Errorf("read credentials: %w", err)
 		}
-		client, err := dial(host, username, password, deviceType)
+		retryUsername = username
+		client, err := dialRetryingHostKeyMismatch(reader, host, username, password, deviceType, dial)
 		if err != nil {
+			if hostkey.ClassifyConnectError(host, err) != nil {
+				// Still a host-key mismatch: the operator declined to
+				// refresh it inside dialRetryingHostKeyMismatch. That was
+				// never a credential problem (see that function's doc
+				// comment), so — unlike every other failure below — this
+				// must not invalidate the cache or offer the unrelated
+				// "Retry credentials?" prompt.
+				return nil, err
+			}
 			cache.RecordFailure()
 			if promptRetryConnection(reader, host, err) {
 				continue
@@ -191,6 +203,36 @@ func connectWithRetry(reader *bufio.Reader, host, deviceType string, cache *moni
 			cache.RecordSuccess(username, password)
 		}
 		return client, nil
+	}
+}
+
+// dialRetryingHostKeyMismatch calls dial, and — only when it fails
+// specifically because of a genuine SSH host-key mismatch (see
+// hostkey.ClassifyConnectError) — offers PromptHostKeyMismatch's
+// high-friction refresh flow. A mismatch happens during the transport
+// handshake, before authentication, so it says nothing about the
+// username/password just entered: on a confirmed refresh, dial is retried
+// right here with those exact same credentials, never by looping back to
+// connectWithRetry's credential prompt (which would needlessly re-prompt).
+// A non-mismatch failure is returned as-is, to be handled by
+// connectWithRetry's normal RecordFailure/promptRetryConnection path. A
+// declined mismatch is also returned as-is, but connectWithRetry
+// re-classifies it and must route it away from that same credential path —
+// see the check there — since it's still not a credential problem either.
+func dialRetryingHostKeyMismatch(reader *bufio.Reader, host, username, password, deviceType string, dial func(host, username, password, deviceType string) (sessionExecutor, error)) (sessionExecutor, error) {
+	for {
+		client, err := dial(host, username, password, deviceType)
+		if err == nil {
+			return client, nil
+		}
+		mismatch := hostkey.ClassifyConnectError(host, err)
+		if mismatch == nil {
+			return nil, err
+		}
+		if !monitorsetup.PromptHostKeyMismatch(reader, mismatch, hostkey.FetchPresentedKey) {
+			return nil, err
+		}
+		// known_hosts was just rewritten; retry with the same credentials.
 	}
 }
 

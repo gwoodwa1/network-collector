@@ -38,6 +38,24 @@ next prompt shows `Username [your-username]:` as a default you can keep with Ent
 switching to a Junos device — or just needing a fresh RSA code — never means retyping
 the username too. Type a different username at any prompt to switch accounts.
 
+**Pre-populate `known_hosts` for every device before the window** (both platforms) —
+`ssh-keyscan <hostname> >> ~/.ssh/known_hosts`, or a manual `ssh` login once per device.
+SSH host-key checking is strict by default, so a device never connected to from this
+account fails with `knownhosts: key is unknown`. If a key ever genuinely *changes*
+(device reimaged/replaced, or worse), onboarding stops with an explicit `*** SSH HOST
+KEY MISMATCH ***` warning and a separate, deliberate `REPLACE` confirmation before
+touching `known_hosts` — see `xr-routing-monitor`'s [SSH host key
+mismatches](../xr-routing-monitor/README.md#ssh-host-key-mismatches) section for the
+full flow (identical here, shared code).
+
+**A device checklist is printed before onboarding starts for each platform section**
+(all hostnames pending) and reprinted in full after each device's outcome — see
+`xr-routing-monitor`'s [Providing devices via a YAML
+file](../xr-routing-monitor/README.md#providing-devices-via-a-yaml-file-optional)
+section for an example; the mixed-fleet run just prints one checklist for the
+`cisco_iosxr:` devices, then a separate one for the `juniper_junos:` devices, matching
+the sequential per-platform onboarding described above.
+
 ## Build
 
 ```bash

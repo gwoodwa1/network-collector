@@ -249,9 +249,17 @@ func LoadDeviceSpecs(path string) (specs []DeviceSpec, interval time.Duration, c
 // spec's own resolvedNetconfSnapshot overrides it per device.
 func OnboardDevicesFromSpecs(reader *bufio.Reader, specs []DeviceSpec, deviceType string, netconfSnapshotDefault bool, cache *monitorsetup.CredentialCache, registry *monitorsetup.HostnameRegistry, connect connectFunc) []*DeviceSession {
 	var sessions []*DeviceSession
-	for _, spec := range specs {
+	hostnames := make([]string, len(specs))
+	for i, spec := range specs {
+		hostnames[i] = spec.Hostname
+	}
+	checklist := monitorsetup.NewDeviceChecklist(hostnames)
+	checklist.Print(os.Stderr)
+	for i, spec := range specs {
 		if exists, existing := registry.Has(spec.Hostname); exists {
 			fmt.Fprintf(os.Stderr, "already connected to %s (as %q), skipping duplicate\n\n", spec.Hostname, existing)
+			checklist.SetAt(i, monitorsetup.ChecklistSkipped, "duplicate of "+existing)
+			checklist.Print(os.Stderr)
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "Connecting to %s (tables=%v interfaces=%v neighbors=%v)\n", spec.Hostname, spec.tables(), spec.Interfaces, spec.Neighbors)
@@ -259,11 +267,15 @@ func OnboardDevicesFromSpecs(reader *bufio.Reader, specs []DeviceSpec, deviceTyp
 		client, netconfClient, err := connect(reader, spec.Hostname, deviceType, netconfSnapshot, cache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "skipping %s: %v\n\n", spec.Hostname, err)
+			checklist.SetAt(i, monitorsetup.ChecklistFailed, err.Error())
+			checklist.Print(os.Stderr)
 			continue
 		}
 		registry.Claim(spec.Hostname)
 
 		fmt.Fprintf(os.Stderr, "connected to %s\n\n", spec.Hostname)
+		checklist.SetAt(i, monitorsetup.ChecklistConnected, "")
+		checklist.Print(os.Stderr)
 		sessions = append(sessions, &DeviceSession{
 			hostname:      spec.Hostname,
 			tables:        spec.tables(),

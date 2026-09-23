@@ -26,11 +26,20 @@ type CredentialCache struct {
 	capturedAt time.Time
 	Window     time.Duration
 
-	// lastUsername is the most recently entered username, offered as the
-	// default at every subsequent prompt for the rest of the run. Unlike
-	// username/password above, it survives RecordFailure: a rejected or
-	// expired one-time passcode says nothing about whether the username was
-	// wrong, so there's no reason to make the operator retype it too.
+	// lastUsername is the username from the most recent successful
+	// connection, offered as the default at every later prompt in the run —
+	// see ResolveCredentials. Only RecordSuccess sets it, deliberately: it
+	// must reflect a username that actually authenticated, not merely
+	// whatever was typed. Earlier this eagerly captured whatever was just
+	// typed regardless of outcome, which meant a passcode fat-fingered into
+	// the username field (a real fat-finger case: typing a fresh RSA code
+	// where the prompt still expected the username) got offered as the
+	// default on every subsequent device too, cascading one mistake across
+	// the rest of the run instead of confining it to the device it happened
+	// on. Unlike username/password above, it survives RecordFailure: a
+	// rejected or expired one-time passcode says nothing about whether the
+	// previously-successful username is now wrong, so there's no reason to
+	// make the operator retype it too.
 	lastUsername string
 }
 
@@ -49,7 +58,16 @@ func (c *CredentialCache) valid() bool {
 // valid cached passcode first. fresh reports whether a new prompt happened
 // (as opposed to reuse), which the caller uses to decide whether to update
 // the cache's capture time — reuse never extends the original window.
-func ResolveCredentials(reader *bufio.Reader, cache *CredentialCache) (username, password string, fresh bool, err error) {
+//
+// retryUsername, when non-empty, is offered as the username prompt's default
+// instead of the cache's own cross-device default (see knownUsername) —
+// callers retrying the same device after a failed attempt (see
+// xrmonitor/junosmonitor's connectWithRetry) pass the username from that
+// immediately-preceding attempt, since it reflects this specific device's
+// most recent attempt, not merely the last device that fully succeeded. It's
+// still just a default: pressing Enter keeps it, typing a different
+// username overrides it, exactly like the cache's own default.
+func ResolveCredentials(reader *bufio.Reader, cache *CredentialCache, retryUsername string) (username, password string, fresh bool, err error) {
 	if cache.valid() {
 		remaining := cache.Window - time.Since(cache.capturedAt)
 		fmt.Fprintf(os.Stderr, "Reuse cached passcode for %s (~%s left in the cache window)? [y/N]: ", cache.username, remaining.Round(time.Second))
@@ -71,27 +89,22 @@ func ResolveCredentials(reader *bufio.Reader, cache *CredentialCache) (username,
 		}
 		cache.RecordFailure()
 	}
-	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr, cache.defaultUsername())
-	if err == nil {
-		cache.setLastUsername(username)
+	defaultUsername := retryUsername
+	if defaultUsername == "" {
+		defaultUsername = cache.knownUsername()
 	}
+	username, password, err = credentials.ResolveCredentialsWithTerminal(true, reader, os.Stdin, os.Stderr, defaultUsername)
 	return username, password, true, err
 }
 
-// defaultUsername returns the username to offer at the next prompt, or ""
-// on a nil cache or before any username has ever been entered.
-func (c *CredentialCache) defaultUsername() string {
+// knownUsername returns the username to offer as the prompt's default, or
+// "" on a nil cache or before any device has ever been successfully
+// authenticated against in this run.
+func (c *CredentialCache) knownUsername() string {
 	if c == nil {
 		return ""
 	}
 	return c.lastUsername
-}
-
-func (c *CredentialCache) setLastUsername(username string) {
-	if c == nil || username == "" {
-		return
-	}
-	c.lastUsername = username
 }
 
 // RecordFailure invalidates the cache after a failed connection attempt (a
