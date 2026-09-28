@@ -603,7 +603,7 @@ func TestPollDeviceWritesJSONLAndStopsOnContextCancel(t *testing.T) {
 	exec := &fakeExecutor{}
 	session := &DeviceSession{hostname: "xr1", client: exec}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan struct{})
@@ -611,6 +611,33 @@ func TestPollDeviceWritesJSONLAndStopsOnContextCancel(t *testing.T) {
 		PollDevice(ctx, session, 30*time.Millisecond, dir, map[string]ParserModule{}, NewTickStatusPrinter(io.Discard), io.Discard, "", defaultSpec, false, nil)
 		close(done)
 	}()
+
+	// Cancel only after the immediate tick and an interval tick are written.
+	// A fixed context deadline can expire before the interval tick on a busy
+	// runner, especially with race detection and coverage enabled.
+	outputPath := filepath.Join(dir, "xr1.jsonl")
+	check := time.NewTicker(5 * time.Millisecond)
+	defer check.Stop()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+waitForTicks:
+	for {
+		select {
+		case <-check.C:
+			data, err := os.ReadFile(outputPath)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to read output file: %v", err)
+			}
+			if strings.Count(string(data), "\n") >= 2 {
+				break waitForTicks
+			}
+		case <-done:
+			t.Fatal("PollDevice returned before context cancellation")
+		case <-deadline.C:
+			t.Fatal("PollDevice did not write the immediate and interval ticks")
+		}
+	}
+	cancel()
 
 	select {
 	case <-done:
@@ -625,7 +652,7 @@ func TestPollDeviceWritesJSONLAndStopsOnContextCancel(t *testing.T) {
 		t.Fatal("expected session to be closed when polling stops")
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "xr1.jsonl"))
+	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatalf("failed to read output file: %v", err)
 	}
