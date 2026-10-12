@@ -57,7 +57,7 @@ func TestContinuousIntegrationEnforcesSecurityPolicyGates(t *testing.T) {
 		"source vulnerability scanning":              "govulncheck -show verbose ./...",
 		"test vulnerability scanning":                "govulncheck -test -show verbose ./...",
 		"all-command binary scanning":                `scripts/scan-go-binaries.sh "${RUNNER_TEMP}/security-scan"`,
-		"high-severity static security analysis":     "gosec@v2.25.0 -exclude-generated -severity high ./...",
+		"high-severity static security analysis":     "gosec@v2.29.1-0.20261009120814-7b1b5cebe007 -exclude-generated -severity high ./...",
 		"the exact container binary":                 `docker cp "${container_id}:/usr/local/bin/network-collector"`,
 		"container binary toolchain inspection":      `go version -m "${RUNNER_TEMP}/network-collector"`,
 		"container binary vulnerability scanning":    `govulncheck -mode binary "${RUNNER_TEMP}/network-collector"`,
