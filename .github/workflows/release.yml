@@ -11,7 +11,7 @@ permissions:
   attestations: write
 
 env:
-  EXPECTED_GO_VERSION: go1.26.6
+  EXPECTED_GO_VERSION: go1.27.2
   GOVULNCHECK_VERSION: v1.7.0
 
 jobs:
