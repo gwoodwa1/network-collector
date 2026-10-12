@@ -10,12 +10,12 @@ require (
 	// Match gnmic v0.49.0's release commit: API v0.1.11 lacks RedactedDeepCopy.
 	github.com/openconfig/gnmic/pkg/api v0.1.12-0.20260916192211-ce0d4173630a
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
-	github.com/scrapli/scrapligo v1.4.1
+	github.com/scrapli/scrapligo v1.4.2
 	github.com/sirikothe/gotextfsm v1.2.0
 	github.com/spf13/viper v1.21.0
-	github.com/tidwall/gjson v1.19.0
+	github.com/tidwall/gjson v1.20.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.46.0
 	// Pin the HTTP/2 server security fix until it is available in a stable release.
 	google.golang.org/grpc v1.86.0-dev
