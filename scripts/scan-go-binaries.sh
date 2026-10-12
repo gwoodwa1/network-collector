@@ -2,7 +2,7 @@
 
 set -eu
 
-expected_go_version="${EXPECTED_GO_VERSION:-go1.26.6}"
+expected_go_version="${EXPECTED_GO_VERSION:-go1.27.2}"
 scanner="${GOVULNCHECK:-govulncheck}"
 scan_root="${1:-}"
 temporary_root=""

@@ -1,6 +1,6 @@
 module github.com/gwoodwa1/network-collector
 
-go 1.26.6
+go 1.27.2
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -14,6 +14,7 @@ require (
 	github.com/sirikothe/gotextfsm v1.2.0
 	github.com/spf13/viper v1.21.0
 	github.com/tidwall/gjson v1.19.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	// Pin the HTTP/2 server security fix until it is available in a stable release.
@@ -21,8 +22,6 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-require golang.org/x/crypto v0.56.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
@@ -69,10 +68,10 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/zestor-dev/zestor v0.0.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260917231906-eeb232e0883d // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
