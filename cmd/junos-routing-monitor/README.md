@@ -154,7 +154,28 @@ devices:
 Only `hostname` is required. `tables`/`interfaces`/`neighbors` are each
 optional exactly like their interactive-prompt equivalents (`table:` —
 singular — also works as an alias for a one-item `tables:` list; both may
-be set and are merged). The top-level `netconf_snapshot` sets the
+be set and are merged). `vrf:`/`vrfs:` are also accepted as aliases for
+`table:`/`tables:` — the equivalent field on the `cisco_iosxr:` side of a
+combined `routing-monitor` `--devices` file is named `vrf:`/`vrfs:`
+([cmd/routing-monitor](../routing-monitor)), so either name works here too
+rather than silently dropping a device's routing table (and with it,
+default-route tracking) because the wrong one was used; either may be
+written as a single value or a list.
+
+When a device's table/VRF list and its `interfaces:` list are the same
+length, they're paired positionally — the first table with the first
+interface, the second with the second, and so on — e.g. `vrf: [RI-A, RI-B]`
+with `interfaces: [irb.100, ae0.200]` associates `RI-A` with `irb.100` and
+`RI-B` with `ae0.200`. This is the only way the schema has to express that
+relationship, and it's used solely to decide which interface's HTML report
+chart a default-route (0/0) next-hop change gets marked on; everything else
+about polling is unaffected. Order the two lists to match the real
+VRF-to-interface relationship on the device. One table and one interface
+also form a valid pair. When the counts don't match, either list contains
+a blank entry, or a repeated table is paired with different interfaces, no
+association is made and a next-hop change is marked on every one of that
+device's interface charts instead, exactly as before. The top-level
+`netconf_snapshot` sets the
 fleet-wide default (same as `--netconf-snapshot`); a device's own
 `netconf_snapshot` overrides it — e.g. leave the fleet default on but opt
 one NETCONF-incapable device back out, as in the example above. See

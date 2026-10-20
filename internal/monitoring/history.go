@@ -35,7 +35,17 @@ type Tick struct {
 	Tables               map[string]json.RawMessage `json:"tables,omitempty"`
 	DefaultRouteNextHops map[string]json.RawMessage `json:"default_route_next_hops,omitempty"`
 	Interfaces           map[string]json.RawMessage `json:"interfaces,omitempty"`
-	Errors               []string                   `json:"errors,omitempty"`
+	// TableInterfaces maps a routing table to the single interface it's
+	// positionally associated with, when the collector could establish
+	// one (see junosmonitor.DeviceSpec.tableInterfaces) — carried on every
+	// tick, rather than recorded once elsewhere, because the HTML report
+	// generator only ever reads persisted tick data, often from a
+	// completely separate process/run of cmd/monitor-report, never the
+	// original --devices file. Omitted/empty means "no known
+	// association," not "associated with nothing" — consumers must fall
+	// back accordingly rather than concluding no interface is relevant.
+	TableInterfaces map[string]string `json:"table_interfaces,omitempty"`
+	Errors          []string          `json:"errors,omitempty"`
 }
 
 type Health struct {

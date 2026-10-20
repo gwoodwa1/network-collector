@@ -10,7 +10,33 @@ import (
 
 	"github.com/gwoodwa1/network-collector/internal/monitorsetup"
 	"github.com/gwoodwa1/network-collector/internal/safeyaml"
+	"gopkg.in/yaml.v3"
 )
+
+// flexibleStringList decodes a YAML field that's conventionally singular
+// (one scalar value) but accepts a list too, for a field like vrf: where
+// real --devices files have been observed writing vrf: [A, B] — treating
+// the singular key as "one or more" rather than strictly "exactly one."
+// Without this, that exact shape fails with a hard "cannot unmarshal !!seq
+// into string" parse error instead of being accepted.
+type flexibleStringList []string
+
+func (f *flexibleStringList) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*f = flexibleStringList{s}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return fmt.Errorf("expected a string or a list of strings: %w", err)
+	}
+	*f = flexibleStringList(list)
+	return nil
+}
 
 // DeviceSpec is one entry from an optional --devices YAML file. It only
 // covers the static per-device fields gathered during interactive
@@ -22,10 +48,32 @@ type DeviceSpec struct {
 	// Table is a single-table legacy alias for Tables, kept for files
 	// written with only one routing table in mind; both may be set, and
 	// their values are merged.
-	Table      string   `yaml:"table"`
-	Tables     []string `yaml:"tables"`
-	Interfaces []string `yaml:"interfaces"`
-	Neighbors  []string `yaml:"neighbors"`
+	Table  string   `yaml:"table"`
+	Tables []string `yaml:"tables"`
+	// VRF/VRFs are accepted purely as aliases for Table/Tables, merged into
+	// the exact same list. This repo's own cisco_iosxr devices use vrf:/
+	// vrfs: for the equivalent field (internal/xrmonitor/devices.go), and a
+	// --devices file's cisco_iosxr and juniper_junos sections sit side by
+	// side in the same combined routing-monitor YAML — so reaching for
+	// vrf: while writing the juniper_junos section is a natural mistake to
+	// make, not a typo worth punishing. Plain yaml.Unmarshal silently drops
+	// unrecognized keys rather than erroring, so without this alias a
+	// device written with vrf: onboards looking fine (hostname/interfaces/
+	// neighbors all populate) while Tables stays silently empty — no VRF
+	// routing table, including the default-route (0/0) one, is ever
+	// polled, and nothing surfaces that failure. VRF and VRFs are both
+	// flexibleStringList, not string/[]string respectively, because either
+	// key's "obvious" shape can turn out to be the other in practice —
+	// vrf: [A, B] (a list under the singular key) is the real-world case
+	// that motivated this, and vrfs: A.inet.0 (a scalar under the plural
+	// key, e.g. after trimming a list down to one entry) is just as
+	// plausible a thing for an operator to write by hand. A plain
+	// string/[]string field would reject either mismatch with a YAML type
+	// error instead of accepting it.
+	VRF        flexibleStringList `yaml:"vrf"`
+	VRFs       flexibleStringList `yaml:"vrfs"`
+	Interfaces []string           `yaml:"interfaces"`
+	Neighbors  []string           `yaml:"neighbors"`
 	// NetconfSnapshot overrides the fleet-wide default (see
 	// DevicesDocument.NetconfSnapshot / -netconf-snapshot) for this one
 	// device — e.g. one device that doesn't support NETCONF can opt back
@@ -57,13 +105,75 @@ func ResolveNetconfSnapshot(configured *bool, fallback bool) bool {
 	return *configured
 }
 
-// tables returns spec's Table and Tables fields merged into one
+// tables returns spec's Table, Tables, VRF, and VRFs fields merged into one
 // deduplicated, sorted list — blank entries (a stray "" in a tables: list)
 // are dropped rather than turning into a malformed "show route summary
 // table " command.
 func (spec DeviceSpec) tables() []string {
 	all := append([]string{spec.Table}, spec.Tables...)
+	all = append(all, []string(spec.VRF)...)
+	all = append(all, spec.VRFs...)
 	return dedupeSorted(all)
+}
+
+// rawTables is spec's Table/Tables/VRF/VRFs fields concatenated in that
+// fixed order, exactly as written — unlike tables(), it is neither
+// deduplicated nor sorted. tables() alphabetically sorts its result, which
+// is fine for every other use (building commands, status-line display,
+// where declaration order is irrelevant) but would silently scramble
+// tableInterfaces' position-for-position pairing against Interfaces for
+// any file whose VRFs aren't already in alphabetical order.
+func (spec DeviceSpec) rawTables() []string {
+	var all []string
+	if spec.Table != "" {
+		all = append(all, spec.Table)
+	}
+	all = append(all, spec.Tables...)
+	all = append(all, []string(spec.VRF)...)
+	all = append(all, spec.VRFs...)
+	return all
+}
+
+// tableInterfaces returns a positional table-to-interface association —
+// table[i] paired with Interfaces[i] — when spec's (raw, as-written) table
+// list and its Interfaces list are the same non-zero length. This is an
+// explicit, opt-in convention for the common case of a device with exactly
+// one interface per VRF (e.g. RI-FEM-200034.inet.0 carried over irb.341,
+// RI-WFA-200036.inet.0 over ae72.360) — the --devices schema has no other
+// way to express that relationship. Returns nil when the counts differ or
+// either list is empty, meaning "no known association," never "associated
+// with nothing": callers (see Tick.TableInterfaces) must fall back to
+// treating every one of the device's interfaces as possibly relevant
+// rather than treating a nil map as "relevant to none of them." A blank
+// entry anywhere in either list voids the whole association for this
+// device rather than silently skipping just that one pair, since a blank
+// is a sign the positional assumption itself may not hold. A table name
+// that's repeated with a different interface each time (e.g.
+// tables: [A, A] with interfaces: [irb.100, ae0.200]) is the same kind of
+// problem: there's no way to tell which pairing is the real one, and
+// keeping just the last-seen one would silently lose A's first interface
+// from every chart it should have appeared on — so that voids the whole
+// association too, not just the conflicting entry. A table repeated with
+// the *same* interface each time isn't a conflict and doesn't void
+// anything.
+func (spec DeviceSpec) tableInterfaces() map[string]string {
+	tables := spec.rawTables()
+	if len(tables) == 0 || len(tables) != len(spec.Interfaces) {
+		return nil
+	}
+	out := make(map[string]string, len(tables))
+	for i, table := range tables {
+		table = strings.TrimSpace(table)
+		iface := strings.TrimSpace(spec.Interfaces[i])
+		if table == "" || iface == "" {
+			return nil
+		}
+		if existing, dup := out[table]; dup && existing != iface {
+			return nil
+		}
+		out[table] = iface
+	}
+	return out
 }
 
 // CommandOverrides lets a --devices file replace the default show-commands
@@ -277,12 +387,13 @@ func OnboardDevicesFromSpecs(reader *bufio.Reader, specs []DeviceSpec, deviceTyp
 		checklist.SetAt(i, monitorsetup.ChecklistConnected, "")
 		checklist.Print(os.Stderr)
 		sessions = append(sessions, &DeviceSession{
-			hostname:      spec.Hostname,
-			tables:        spec.tables(),
-			interfaces:    dedupeSorted(spec.Interfaces),
-			neighbors:     dedupeSorted(spec.Neighbors),
-			client:        client,
-			netconfClient: netconfClient,
+			hostname:        spec.Hostname,
+			tables:          spec.tables(),
+			interfaces:      dedupeSorted(spec.Interfaces),
+			tableInterfaces: spec.tableInterfaces(),
+			neighbors:       dedupeSorted(spec.Neighbors),
+			client:          client,
+			netconfClient:   netconfClient,
 		})
 	}
 	return sessions

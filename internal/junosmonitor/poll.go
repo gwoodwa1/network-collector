@@ -290,7 +290,7 @@ func PollDevice(ctx context.Context, session *DeviceSession, interval time.Durat
 // immediately on the first authorization-failure match rather than running
 // the remaining commands against a session that's already been denied.
 func collectTick(session *DeviceSession, parsers map[string]ParserModule, spec CollectionSpec) (result tickResult, sessionAlive bool, needsReauth bool) {
-	result = tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname}
+	result = tickResult{Timestamp: time.Now().UTC().Format(time.RFC3339), Hostname: session.hostname, TableInterfaces: session.tableInterfaces}
 
 	bgpOutput, err := session.client.Execute(spec.BGPCommand)
 	if err != nil {

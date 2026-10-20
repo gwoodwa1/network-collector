@@ -23,6 +23,10 @@ type tickLine struct {
 	Hostname             string                     `json:"hostname"`
 	Interfaces           map[string]json.RawMessage `json:"interfaces"`
 	DefaultRouteNextHops map[string]json.RawMessage `json:"default_route_next_hops"`
+	// TableInterfaces mirrors monitoring.Tick.TableInterfaces — see that
+	// field's doc comment. Empty/absent means "no known association,"
+	// never "associated with nothing."
+	TableInterfaces map[string]string `json:"table_interfaces"`
 }
 
 // reportEvent marks the tick at which a monitored table's/VRF's
@@ -37,6 +41,12 @@ type reportEvent struct {
 	Table     string `json:"table"`
 	From      string `json:"from"`
 	To        string `json:"to"`
+	// Interface is the one interface Table is positionally associated
+	// with (tickLine.TableInterfaces), when known — empty means "no known
+	// association," so the marker should be drawn on every one of this
+	// hostname's interface charts rather than none of them (see
+	// reporting.MonitorEvent and its chart-marker filter).
+	Interface string `json:"interface,omitempty"`
 }
 
 // FirstInterfaceStat decodes one interface's {"stats": [...]} result — the
@@ -243,6 +253,7 @@ func collectNextHopEvents(tick tickLine, lastNextHops map[string]string, events 
 			Table:     name,
 			From:      displayNextHopSignature(prev),
 			To:        displayNextHopSignature(sig),
+			Interface: tick.TableInterfaces[name],
 		})
 	}
 }

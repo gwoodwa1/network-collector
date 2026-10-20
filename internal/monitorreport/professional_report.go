@@ -51,6 +51,7 @@ func GenerateProfessionalInterfaceReport(outputDir string, since time.Time, conf
 	for _, event := range events {
 		reportEvents = append(reportEvents, reporting.MonitorEvent{
 			Timestamp: event.Timestamp, Hostname: event.Hostname, Table: event.Table, From: event.From, To: event.To,
+			Interface: event.Interface,
 		})
 	}
 	return reporting.GenerateMonitorReport(reporting.MonitorConfig{

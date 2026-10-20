@@ -44,12 +44,21 @@ type connectFunc func(reader *bufio.Reader, host, deviceType string, netconfSnap
 // opted in for this device, or when the NETCONF dial failed. The periodic
 // tick loop (poll.go) never touches it; it only ever uses client.
 type DeviceSession struct {
-	hostname      string
-	tables        []string
-	interfaces    []string
-	neighbors     []string
-	client        sessionExecutor
-	netconfClient sessionExecutor
+	hostname   string
+	tables     []string
+	interfaces []string
+	// tableInterfaces is the positional table-to-interface association
+	// from DeviceSpec.tableInterfaces, carried through onto every tick so
+	// the report generator (which only ever sees persisted tick data, not
+	// the original --devices file) can scope a default-route next-hop
+	// change's chart marker to the one interface it actually concerns
+	// instead of every interface this device has. nil when the spec's
+	// tables/interfaces counts didn't match — see tableInterfaces' own
+	// doc comment for why that must not be read as "relevant to none."
+	tableInterfaces map[string]string
+	neighbors       []string
+	client          sessionExecutor
+	netconfClient   sessionExecutor
 }
 
 func splitCommaList(line string) []string {

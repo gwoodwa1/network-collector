@@ -58,6 +58,164 @@ func TestDeviceSpecTablesMergesLegacySingularAndPlural(t *testing.T) {
 	}
 }
 
+// TestDeviceSpecTablesAcceptsVRFAliases is the regression test for a real
+// production incident: a --devices file's cisco_iosxr section genuinely
+// uses vrf:/vrfs: (internal/xrmonitor/devices.go), so writing vrf: in the
+// juniper_junos section of the same combined file is a natural mistake —
+// and because plain yaml.Unmarshal silently drops unrecognized keys, that
+// device onboarded looking fine (hostname/interfaces/neighbors all
+// populated) while its routing table — and therefore the default-route
+// (0/0) next-hop tracking — was silently never polled at all. vrf/vrfs must
+// merge into the exact same list as table/tables, from all four sources at
+// once.
+func TestDeviceSpecTablesAcceptsVRFAliases(t *testing.T) {
+	spec := DeviceSpec{
+		Table: "A.inet.0", Tables: []string{"B.inet.0"},
+		VRF: flexibleStringList{"C.inet.0"}, VRFs: []string{"B.inet.0", "D.inet.0", ""},
+	}
+	got := spec.tables()
+	want := []string{"A.inet.0", "B.inet.0", "C.inet.0", "D.inet.0"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
+// TestDeviceSpecTableInterfacesPairsPositionallyNotAlphabetically is the
+// regression test for the exact bug a naive implementation would have:
+// tables() alphabetically sorts its result (fine for every other use —
+// building commands, status-line display, where order doesn't matter), but
+// tableInterfaces must pair table[i] with Interfaces[i] in the order the
+// operator actually wrote them. "RI-WFA-200036.inet.0" sorts before
+// "Z-first.inet.0" alphabetically but is declared second here — if
+// tableInterfaces used tables()'s sorted output, it would wrongly pair
+// Z-first.inet.0 (declared first, sorts second) with the second interface
+// instead of the first.
+func TestDeviceSpecTableInterfacesPairsPositionallyNotAlphabetically(t *testing.T) {
+	spec := DeviceSpec{
+		VRFs:       []string{"Z-first.inet.0", "A-second.inet.0"},
+		Interfaces: []string{"ae0.100", "ae1.200"},
+	}
+	got := spec.tableInterfaces()
+	want := map[string]string{"Z-first.inet.0": "ae0.100", "A-second.inet.0": "ae1.200"}
+	if len(got) != len(want) || got["Z-first.inet.0"] != "ae0.100" || got["A-second.inet.0"] != "ae1.200" {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+// TestDeviceSpecTableInterfacesRealWorldShape mirrors the exact real
+// --devices entry this feature was built for: two VRFs, two interfaces,
+// one for each.
+func TestDeviceSpecTableInterfacesRealWorldShape(t *testing.T) {
+	spec := DeviceSpec{
+		VRF:        flexibleStringList{"RI-FEM-200034.inet.0", "RI-WFA-200036.inet.0"},
+		Interfaces: []string{"irb.341", "ae72.360"},
+	}
+	got := spec.tableInterfaces()
+	if got["RI-FEM-200034.inet.0"] != "irb.341" || got["RI-WFA-200036.inet.0"] != "ae72.360" {
+		t.Fatalf("expected positional pairing, got %v", got)
+	}
+}
+
+// TestDeviceSpecTableInterfacesReturnsNilWhenCountsDiffer proves a device
+// with a mismatched table/interface count gets no association at all
+// (callers must treat nil as "unknown," not "associated with nothing") —
+// disambiguating isn't possible, so this must not guess.
+func TestDeviceSpecTableInterfacesReturnsNilWhenCountsDiffer(t *testing.T) {
+	spec := DeviceSpec{Tables: []string{"A.inet.0", "B.inet.0"}, Interfaces: []string{"ae0"}}
+	if got := spec.tableInterfaces(); got != nil {
+		t.Fatalf("expected nil for mismatched counts, got %v", got)
+	}
+	empty := DeviceSpec{}
+	if got := empty.tableInterfaces(); got != nil {
+		t.Fatalf("expected nil for a device with neither tables nor interfaces, got %v", got)
+	}
+}
+
+// TestDeviceSpecTableInterfacesVoidsConflictingDuplicateTable is the
+// regression test for a table name repeated with two different
+// interfaces: tables: [A, A] with interfaces: [irb.100, ae0.200] can't be
+// disambiguated, and silently keeping only the last-seen pairing would
+// lose A's association with irb.100 entirely — a next-hop change on A
+// would then never mark irb.100's chart even though position 0 explicitly
+// paired them. The whole association must be voided (nil), not just the
+// conflicting entry.
+func TestDeviceSpecTableInterfacesVoidsConflictingDuplicateTable(t *testing.T) {
+	spec := DeviceSpec{Tables: []string{"A.inet.0", "A.inet.0"}, Interfaces: []string{"irb.100", "ae0.200"}}
+	if got := spec.tableInterfaces(); got != nil {
+		t.Fatalf("expected nil for a table repeated with conflicting interfaces, got %v", got)
+	}
+}
+
+// TestDeviceSpecTableInterfacesAllowsNonConflictingDuplicateTable proves a
+// table repeated with the *same* interface each time isn't treated as a
+// conflict — there's nothing ambiguous about it.
+func TestDeviceSpecTableInterfacesAllowsNonConflictingDuplicateTable(t *testing.T) {
+	spec := DeviceSpec{Tables: []string{"A.inet.0", "A.inet.0"}, Interfaces: []string{"irb.100", "irb.100"}}
+	got := spec.tableInterfaces()
+	if len(got) != 1 || got["A.inet.0"] != "irb.100" {
+		t.Fatalf("expected {A.inet.0: irb.100}, got %v", got)
+	}
+}
+
+// TestLoadDeviceSpecsParsesVRFAliasFromYAML proves the vrf:/vrfs: keys
+// parse correctly end-to-end through real YAML, not just via directly
+// constructed structs — covering the actual failure mode: a --devices file
+// written with vrf: must result in a non-empty tables() list, not a
+// silently-dropped field.
+func TestLoadDeviceSpecsParsesVRFAliasFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.yaml")
+	content := `devices:
+  - hostname: mcbas-hl3-1a-core
+    vrf: RI-FEM-200034.inet.0
+    interfaces: [ae53.340]
+  - hostname: mcbas-hl3-1b-core
+    vrfs: [RI-FEM-200034.inet.0, RI-WFA-200036.inet.0]
+    interfaces: [ae53.340]
+  - hostname: mcell-hl3-1a-core
+    vrf: [RI-FEM-200034.inet.0, RI-WFA-200036.inet.0]
+    interfaces: [irb.341, ae72.360]
+  - hostname: mcell-hl3-1b-core
+    vrfs: RI-FEM-200034.inet.0
+    interfaces: [irb.341]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+
+	specs, _, _, _, err := LoadDeviceSpecs(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(specs) != 4 {
+		t.Fatalf("expected 4 specs, got %d: %+v", len(specs), specs)
+	}
+	if got := specs[0].tables(); len(got) != 1 || got[0] != "RI-FEM-200034.inet.0" {
+		t.Fatalf("expected a scalar vrf: to populate tables(), got %v", got)
+	}
+	if got := specs[1].tables(); len(got) != 2 || got[0] != "RI-FEM-200034.inet.0" || got[1] != "RI-WFA-200036.inet.0" {
+		t.Fatalf("expected vrfs: to populate tables(), got %v", got)
+	}
+	// A list under the singular vrf: key — the real shape that broke
+	// outright with a YAML type error ("cannot unmarshal !!seq into
+	// string") before VRF became flexibleStringList instead of a plain
+	// string.
+	if got := specs[2].tables(); len(got) != 2 || got[0] != "RI-FEM-200034.inet.0" || got[1] != "RI-WFA-200036.inet.0" {
+		t.Fatalf("expected a list under vrf: to populate tables(), got %v", got)
+	}
+	// A scalar under the plural vrfs: key — the documentation says either
+	// alias accepts a scalar or a list; before VRFs became
+	// flexibleStringList this failed with "cannot unmarshal !!str into
+	// []string".
+	if got := specs[3].tables(); len(got) != 1 || got[0] != "RI-FEM-200034.inet.0" {
+		t.Fatalf("expected a scalar under vrfs: to populate tables(), got %v", got)
+	}
+}
+
 func TestLoadDeviceSpecsMissingHostname(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.yaml")
 	content := `devices:
