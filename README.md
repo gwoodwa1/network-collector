@@ -13,6 +13,32 @@ Network Collector is a Go-based tool designed for flexible and efficient data co
 
 <img width="1672" height="941" alt="info_graphic" src="https://github.com/user-attachments/assets/7a1fe8ff-9b94-4539-8314-24fcdc5220f7" />
 
+## When to choose Network Collector over Ansible
+
+Network Collector is a useful fit for focused **network fleet rollouts**, such
+as software upgrades and maintenance changes where pacing, device recovery,
+and evidence matter. It brings these controls together in one Go CLI:
+
+- **Controlled rollout:** start with canaries, stagger device starts, bound
+  concurrency, and stop launching new devices after a failure threshold.
+- **Protect redundancy:** serialize devices within inventory-declared HA pairs,
+  sites, or failure domains while other groups continue concurrently.
+- **Verify and recover:** combine pre/post checks, bounded reconnect probes,
+  explicit rollback blocks, per-device logs, and structured change reports.
+  Rerun failed devices or use journal-backed resume with checks for ambiguous
+  interrupted changes.
+
+For example, upgrade one canary router, verify it, then roll through the fleet
+with at most three devices active and only one member of each HA pair active
+at a time. See the [fleet scaling guide](docs/scaling.md) and
+[redundancy-aware upgrade example](examples/workflow-operations/iosxr/59-redundancy-aware-ios-upgrade.yaml).
+
+Ansible also supports [rolling upgrades](https://docs.ansible.com/projects/ansible/latest/playbook_guide/guide_rolling_upgrade.html).
+Choose Network Collector when its built-in rollout controls and evidence fit
+your operational workflow; choose Ansible when you need its broader collections
+and [network resource modules](https://docs.ansible.com/projects/ansible/latest/network/user_guide/network_resource_modules.html)
+for configuration management. The two can complement each other.
+
 ## Security
 
 See [`SECURITY.md`](SECURITY.md) to report vulnerabilities privately. Security
